@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [MVP1, main, "cursor/**"]
+    branches: [MVP1, MVP2, main, "cursor/**"]
   pull_request:
-    branches: [MVP1, main]
+    branches: [MVP1, MVP2, main]
 
 jobs:
   test:
@@ -34,6 +34,7 @@ jobs:
           styxctl version
           styxctl --help
           styxctl sysprep check --help
+          styxctl install --help
           styxctl ports list local
 
       - name: Build wheel
@@ -63,6 +64,10 @@ jobs:
           styxctl ports check local
           cp styx.yaml.example styx.yaml
           styxctl config validate
+          styxctl install plan local
+          styxctl install local --dry-run
+          styxctl install status local || true
+          styxctl install doctor local || true
 
       - name: Verify sysprep reports were written
         run: |

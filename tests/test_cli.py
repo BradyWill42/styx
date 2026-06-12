@@ -16,7 +16,7 @@ runner = CliRunner()
 def test_version():
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert result.stdout.strip() == "0.2.0"
+    assert result.stdout.strip() == "0.3.0"
 
 
 def test_help():
@@ -192,10 +192,18 @@ def test_report_show_missing(tmp_path, monkeypatch):
     assert "No saved sysprep report found" in result.stdout
 
 
-def test_future_command_placeholder():
-    result = runner.invoke(app, ["install", "soon"])
+def test_help_includes_install():
+    result = runner.invoke(app, ["install", "--help"])
     assert result.exit_code == 0
-    assert "MVP2" in result.stdout
+    assert "local" in result.stdout
+    assert "status" in result.stdout
+    assert "doctor" in result.stdout
+
+
+def test_future_command_placeholder():
+    result = runner.invoke(app, ["deploy", "soon"])
+    assert result.exit_code == 0
+    assert "MVP3" in result.stdout
 
 
 def test_completion_scripts():

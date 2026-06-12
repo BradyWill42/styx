@@ -91,6 +91,43 @@ styxctl report show --json
 
 Copy `styx.yaml.example` to `styx.yaml` when you want config validation before MVP2.
 
+## MVP2 workflow
+
+After MVP1 leaves the node `READY` or `READY_WITH_WARNINGS`:
+
+```bash
+cp styx.yaml.example styx.yaml
+styxctl config validate
+styxctl install plan local
+styxctl install local --dry-run
+styxctl install local --yes
+styxctl install status local
+styxctl install doctor local
+```
+
+MVP2 installs only the local foundation prerequisites:
+
+- k3s server with cluster/service CIDRs from `styx.yaml`
+- Styx WireGuard interface on `47800/udp` (interface name `Styx`, never `wg0`)
+- supporting packages such as `iproute2`, WireGuard tools, and `curl`
+
+Reports are saved under:
+
+```text
+./reports/styx/<hostname>/install-report.json
+./reports/styx/<hostname>/install-report.txt
+```
+
+Install is blocked when:
+
+- `styx.yaml` is missing or `INVALID`
+- sysprep status is `BLOCKED` on ports `47800-47808`
+- non-interactive sudo is unavailable for a mutating install
+
+Use `--dry-run` first. Without `--yes`, `styxctl install local` asks for confirmation before changing the host.
+
+`install status local` and `install doctor local` verify k3s, the `Styx` interface, `wg0` preservation, and critical port state. Exit code `0` means healthy enough for MVP3 deploy work.
+
 ## CLI style
 
 The CLI is command-discovery-first:
@@ -106,7 +143,7 @@ Future placeholders remain read-only:
 ```bash
 styxctl sysprep reset local   # MVP3
 styxctl sysprep nuke local    # MVP3
-styxctl install soon          # MVP2
+styxctl deploy soon           # MVP3
 ```
 
 ## Shell completion
@@ -158,7 +195,9 @@ Endpoint = pistyx.duckdns.org:47800
 
 `sysprep safe local` and `ports clear local` are bounded remediation commands. They do not perform destructive resets, delete k3s data directories, or modify preserved infrastructure.
 
-`wg0` is detected and reported as preserved. It is never removed by MVP1.
+`styxctl install local` only installs k3s and the `Styx` WireGuard interface. It never modifies `wg0`, LAN networking, SSH, BIND, Caddy, MooseFS, or unrelated services.
+
+`wg0` is detected and reported as preserved. It is never removed by MVP1 or modified by MVP2 install.
 
 ## Development checks
 
@@ -169,6 +208,7 @@ python -m styxctl.cli --help
 styxctl sysprep check local
 styxctl sysprep safe local --dry-run
 styxctl config validate
+styxctl install local --dry-run
 styxctl report show
 ```
 

@@ -19,6 +19,8 @@ from .config import (
     validate_config,
 )
 from .inventory import collect_inventory
+from .install import run_install_doctor, run_install_local, run_install_plan_preview
+from .install_report import render_install_text, save_install_report
 from .ports import PORT_BLOCKS, PORT_PLAN, check_reserved_ports, port_purpose
 from .remediation import (
     apply_port_clear,
@@ -53,6 +55,10 @@ ports_list_app = typer.Typer(help="List the Styx reserved port plan.", no_args_i
 ports_clear_app = typer.Typer(help="Clear safe Styx reserved port conflicts.", no_args_is_help=True)
 config_app = typer.Typer(help="Inspect and validate styx.yaml.", no_args_is_help=True)
 report_app = typer.Typer(help="Inspect saved sysprep reports.", no_args_is_help=True)
+install_app = typer.Typer(help="Install Styx prerequisites on local gateway nodes.", no_args_is_help=True)
+install_status_app = typer.Typer(help="Show local install status.", no_args_is_help=True)
+install_doctor_app = typer.Typer(help="Diagnose local install health.", no_args_is_help=True)
+install_plan_app = typer.Typer(help="Preview the local install plan.", no_args_is_help=True)
 completion_app = typer.Typer(help="Shell completion helpers.", no_args_is_help=True)
 
 
@@ -333,6 +339,111 @@ def completion_install() -> None:
     console.print("  styxctl completion fish")
 
 
+def _print_install_report(report: dict, *, exit_code: int) -> None:
+    text = render_install_text(report)
+    paths = save_install_report(report, text)
+    console.print(text)
+    console.print("[bold green]Reports saved[/bold green]")
+    console.print(f"  JSON: {paths['json']}")
+    console.print(f"  Text: {paths['text']}")
+    if report.get("message"):
+        console.print(report["message"])
+    if exit_code != 0:
+        raise typer.Exit(code=exit_code)
+
+
+@install_app.command("local")
+def install_local(
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show planned actions without changing the host."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Apply planned actions without confirmation."),
+    path: Path | None = typer.Option(None, "--path", help="Path to styx.yaml or styx.yml."),
+) -> None:
+    """Install k3s and the Styx WireGuard foundation on this machine."""
+    report, exit_code = run_install_local(dry_run=dry_run, yes=yes, config_path=path)
+    if report.get("status") == "CONFIRMATION_REQUIRED":
+        pending = report.get("pending_count", 0)
+        console.print(render_install_text(report))
+        if not typer.confirm(f"Apply {pending} planned install step(s)?", default=False):
+            console.print("No changes were made.")
+            raise typer.Exit(code=0)
+        report, exit_code = run_install_local(dry_run=False, yes=True, config_path=path)
+    gate = report.get("gate", {})
+    if gate.get("message"):
+        console.print(f"[red]Install blocked:[/red] {gate['message']}")
+    _print_install_report(report, exit_code=exit_code)
+
+
+@install_status_app.command("local")
+def install_status_local(
+    path: Path | None = typer.Option(None, "--path", help="Path to styx.yaml or styx.yml."),
+) -> None:
+    """Show local install status for k3s and Styx WireGuard."""
+    health = run_install_doctor(config_path=path)
+    table = Table(title="Styx Install Status")
+    table.add_column("Component")
+    table.add_column("State")
+
+    table.add_row("k3s installed", "yes" if health.k3s_installed else "no")
+    table.add_row("k3s active", "yes" if health.k3s_active else "no")
+    table.add_row("k3s version", health.k3s_version or "unknown")
+    table.add_row("kubectl", "available" if health.kubectl_available else "missing")
+    table.add_row("wg binary", "available" if health.wg_binary else "missing")
+    table.add_row("Styx interface", "up" if health.styx_interface_up else "down")
+    table.add_row("47800/udp listening", "yes" if health.styx_port_listening else "no")
+    table.add_row("wg0 preserved", "yes" if health.wg0_preserved else "no")
+    table.add_row("config", f"{health.config_path or 'not found'} ({health.config_status})")
+    table.add_row("critical ports", "clear" if health.critical_ports_clear else "conflicts")
+
+    console.print(table)
+    if health.warnings:
+        console.print("[yellow]Warnings:[/yellow]")
+        for warning in health.warnings:
+            console.print(f"  - {warning}")
+    if health.issues:
+        console.print("[red]Issues:[/red]")
+        for issue in health.issues:
+            console.print(f"  - {issue}")
+        raise typer.Exit(code=1)
+
+
+@install_doctor_app.command("local")
+def install_doctor_local(
+    path: Path | None = typer.Option(None, "--path", help="Path to styx.yaml or styx.yml."),
+) -> None:
+    """Diagnose local install health with actionable failures."""
+    health = run_install_doctor(config_path=path)
+    if health.healthy:
+        console.print("[green]Install doctor: healthy enough for MVP3[/green]")
+        return
+
+    console.print("[red]Install doctor: blocking issues found[/red]")
+    for issue in health.issues:
+        console.print(f"  - {issue}")
+    if not health.k3s_active:
+        console.print("  action: check `sudo systemctl status k3s` and re-run `styxctl install local --yes`")
+    if not health.styx_interface_up:
+        console.print("  action: verify /etc/wireguard/Styx.conf and run `sudo wg-quick up Styx`")
+    if not health.wg0_preserved:
+        console.print("  action: investigate wg0 changes before retrying install")
+    raise typer.Exit(code=1)
+
+
+@install_plan_app.command("local")
+def install_plan_local(
+    dry_run: bool = typer.Option(True, "--dry-run/--apply", help="Preview mode is default for install plan."),
+    path: Path | None = typer.Option(None, "--path", help="Path to styx.yaml or styx.yml."),
+) -> None:
+    """Preview the local install plan without changing the host."""
+    if not dry_run:
+        console.print("install plan local only supports preview mode; use `styxctl install local`.")
+        raise typer.Exit(code=1)
+    report, exit_code = run_install_plan_preview(config_path=path)
+    gate = report.get("gate", {})
+    if gate.get("message"):
+        console.print(f"[red]Install blocked:[/red] {gate['message']}")
+    _print_install_report(report, exit_code=exit_code)
+
+
 def _future_app(label: str, milestone: str) -> typer.Typer:
     future = typer.Typer(help=f"Future {label} commands ({milestone}).", no_args_is_help=True)
 
@@ -351,9 +462,13 @@ ports_app.add_typer(ports_check_app, name="check")
 ports_app.add_typer(ports_list_app, name="list")
 ports_app.add_typer(ports_clear_app, name="clear")
 
+install_app.add_typer(install_status_app, name="status")
+install_app.add_typer(install_doctor_app, name="doctor")
+install_app.add_typer(install_plan_app, name="plan")
+
 app.add_typer(sysprep_app, name="sysprep")
 app.add_typer(ports_app, name="ports")
-app.add_typer(_future_app("install", "MVP2"), name="install")
+app.add_typer(install_app, name="install")
 app.add_typer(_future_app("deploy", "MVP3"), name="deploy")
 app.add_typer(_future_app("status", "MVP3"), name="status")
 app.add_typer(_future_app("doctor", "MVP3"), name="doctor")
