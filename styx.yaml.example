@@ -1,0 +1,41 @@
+cluster:
+  name: styx
+  domain: styx.net
+  mode: dual-stack
+
+network:
+  ipv4_supernet: 10.0.0.0/14
+  ipv6_supernet: fd00:cafe::/48
+
+  mesh_ipv4: 10.0.0.0/16
+  infra_ipv4: 10.1.0.0/16
+  pod_ipv4: 10.2.0.0/16
+  service_ipv4: 10.3.0.0/16
+
+  mesh_ipv6: fd00:cafe:0::/48
+  infra_ipv6: fd00:cafe:1::/56
+  pod_ipv6: fd00:cafe:2::/56
+  service_ipv6: fd00:cafe:3::/112
+
+  roadwarrior_ipv4: 10.0.250.0/24
+  roadwarrior_ipv6: fd00:cafe:0:250::/64
+
+wireguard:
+  interface: Styx
+  port: 47800
+  shared_server_identity: true
+
+dns:
+  provider: duckdns
+  auto_endpoint: pistyx
+  fixed_endpoints:
+    pegasus: pipegasus
+    hydra: pihydra
+    kraken: pikraken
+    thor: pithor
+
+siem:
+  enabled: true
+  provider: wazuh
+  namespace: wazuh
+  profile: small-lab
