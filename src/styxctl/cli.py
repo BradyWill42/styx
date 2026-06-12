@@ -58,6 +58,9 @@ def sysprep_check_local() -> None:
     console.print(f"  JSON: {paths['json']}")
     console.print(f"  Text: {paths['text']}")
 
+    if report["status"] == "BLOCKED":
+        raise typer.Exit(code=1)
+
 
 @sysprep_check_app.command("all")
 def sysprep_check_all() -> None:

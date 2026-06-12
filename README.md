@@ -124,8 +124,11 @@ It preserves existing LAN networking, SSH, `wg0`, MooseFS, DNS/BIND, Caddy, home
 ## Development checks
 
 ```bash
+python -m pip install -e ".[dev]"
 python -m pytest
 python -m styxctl.cli --help
 styxctl ports list local
 styxctl ports check local
 ```
+
+When `styxctl sysprep check local` reports `Status: BLOCKED`, the command exits with code `1` so scripts and CI can fail fast.
