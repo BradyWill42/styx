@@ -59,7 +59,7 @@ jobs:
       - name: Run read-only sysprep check on GitHub-hosted runner
         run: |
           styxctl sysprep check local
-          styxctl sysprep safe local --dry-run
+          styxctl sysprep safe preview local
           styxctl ports check local
           cp styx.yaml.example styx.yaml
           styxctl config validate

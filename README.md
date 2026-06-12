@@ -8,16 +8,16 @@ MVP1 covers local assessment and safe remediation on a single Linux gateway node
 
 ```bash
 styxctl sysprep check local
-styxctl sysprep safe local --dry-run
-styxctl sysprep safe local --yes
+styxctl sysprep safe preview local
+styxctl sysprep safe local
 styxctl sysprep check local
 ```
 
 Typical flow:
 
 1. **Check** the node read-only
-2. **Preview** safe cleanup with `--dry-run`
-3. **Apply** safe cleanup with `--yes`
+2. **Preview** safe cleanup with `sysprep safe preview local`
+3. **Apply** safe cleanup with `sysprep safe local`
 4. **Re-check** until status is `READY` or only non-blocking warnings remain
 
 ## Install for local development
@@ -59,10 +59,10 @@ Readiness status:
 ### Safe remediation
 
 ```bash
-styxctl sysprep safe local --dry-run
-styxctl sysprep safe local --yes
-styxctl ports clear local --dry-run
-styxctl ports clear local --yes
+styxctl sysprep safe preview local
+styxctl sysprep safe local
+styxctl ports clear preview local
+styxctl ports clear local
 ```
 
 Safe remediation only acts on items already identified as safe:
@@ -78,27 +78,29 @@ It never touches:
 - unsafe port conflicts
 - deeper k3s state directories (reserved for MVP3 reset)
 
-Use `--dry-run` first. Without `--yes`, styxctl asks for confirmation before changing the host.
+Preview commands are read-only. Apply commands show a preview first, then ask for confirmation before changing the host.
 
 ### Config and reports
 
 ```bash
 styxctl config show
 styxctl config validate
-styxctl report show
-styxctl report show --json
+styxctl report show local
+styxctl report json local
 ```
 
 Copy `styx.yaml.example` to `styx.yaml` when you want config validation before MVP2.
 
 ## CLI style
 
-The CLI is command-discovery-first:
+The CLI is command-discovery-first. No flags — discover commands with tab completion:
 
 ```bash
 styxctl <TAB>
 styxctl sysprep <TAB>
 styxctl sysprep check <TAB>
+styxctl sysprep safe <TAB>
+styxctl sysprep safe preview <TAB>
 ```
 
 Future placeholders remain read-only:
@@ -112,10 +114,10 @@ styxctl install soon          # MVP2
 ## Shell completion
 
 ```bash
-styxctl --install-completion
 styxctl completion bash
 styxctl completion zsh
 styxctl completion fish
+styxctl completion install
 ```
 
 ## Styx reserved ports
@@ -156,7 +158,7 @@ Endpoint = pistyx.duckdns.org:47800
 
 `styxctl sysprep check local` is read-only.
 
-`sysprep safe local` and `ports clear local` are bounded remediation commands. They do not perform destructive resets, delete k3s data directories, or modify preserved infrastructure.
+`sysprep safe preview local`, `ports clear preview local`, `sysprep safe local`, and `ports clear local` are bounded remediation commands. They do not perform destructive resets, delete k3s data directories, or modify preserved infrastructure.
 
 `wg0` is detected and reported as preserved. It is never removed by MVP1.
 
@@ -167,10 +169,12 @@ python -m pip install -e ".[dev]"
 python -m pytest
 python -m styxctl.cli --help
 styxctl sysprep check local
-styxctl sysprep safe local --dry-run
+styxctl sysprep safe preview local
 styxctl config validate
-styxctl report show
+styxctl report show local
 ```
+
+When `styxctl sysprep check local` reports `Status: BLOCKED`, the command exits with code `1` so scripts and CI can fail fast.
 
 ## GitHub-hosted smoke test
 

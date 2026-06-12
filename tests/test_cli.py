@@ -123,7 +123,7 @@ def test_sysprep_check_local_blocked_exits_nonzero(tmp_path, monkeypatch):
     result = runner.invoke(app, ["sysprep", "check", "local"])
     assert result.exit_code == 1
     assert "Status: BLOCKED" in result.stdout
-    assert "sysprep safe local --dry-run" in result.stdout
+    assert "sysprep safe preview local" in result.stdout
 
 
 def test_ports_list_local():
@@ -139,15 +139,15 @@ def test_ports_check_local():
     assert "Styx Reserved Port Conflicts" in result.stdout
 
 
-def test_sysprep_safe_local_dry_run():
-    result = runner.invoke(app, ["sysprep", "safe", "local", "--dry-run"])
+def test_sysprep_safe_preview_local():
+    result = runner.invoke(app, ["sysprep", "safe", "preview", "local"])
     assert result.exit_code == 0
     assert "Mode: dry-run" in result.stdout
     assert "Planned actions:" in result.stdout
 
 
-def test_ports_clear_local_dry_run():
-    result = runner.invoke(app, ["ports", "clear", "local", "--dry-run"])
+def test_ports_clear_preview_local():
+    result = runner.invoke(app, ["ports", "clear", "preview", "local"])
     assert result.exit_code == 0
     assert "Mode: dry-run" in result.stdout
 
@@ -176,11 +176,11 @@ def test_report_show_local(tmp_path, monkeypatch):
     check = runner.invoke(app, ["sysprep", "check", "local"])
     assert check.exit_code in (0, 1)
 
-    result = runner.invoke(app, ["report", "show"])
+    result = runner.invoke(app, ["report", "show", "local"])
     assert result.exit_code == 0
     assert "Styx Sysprep Report" in result.stdout
 
-    json_result = runner.invoke(app, ["report", "show", "--json"])
+    json_result = runner.invoke(app, ["report", "json", "local"])
     assert json_result.exit_code == 0
     payload = json.loads(json_result.stdout)
     assert payload["tool"] == "styxctl"
@@ -188,7 +188,7 @@ def test_report_show_local(tmp_path, monkeypatch):
 
 def test_report_show_missing(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    result = runner.invoke(app, ["report", "show"])
+    result = runner.invoke(app, ["report", "show", "local"])
     assert result.exit_code == 1
     assert "No saved sysprep report found" in result.stdout
 

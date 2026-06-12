@@ -290,7 +290,7 @@ Warnings:
 
 Next:
   MVP1 is read-only unless you run sysprep safe local or ports clear local.
-  Run styxctl sysprep safe local --dry-run to preview safe cleanup.
+  Run styxctl sysprep safe preview local to preview safe cleanup.
 """
     return text.rstrip() + "\n"
 
