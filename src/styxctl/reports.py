@@ -289,8 +289,8 @@ Warnings:
 {_block_or_none(warnings)}
 
 Next:
-  MVP1 is read-only. No cleanup was performed.
-  Run styxctl sysprep safe local when cleanup mode is implemented.
+  MVP1 is read-only unless you run sysprep safe local or ports clear local.
+  Run styxctl sysprep safe local --dry-run to preview safe cleanup.
 """
     return text.rstrip() + "\n"
 
@@ -307,3 +307,50 @@ def save_report_bundle(report: dict[str, Any], text: str) -> dict[str, str]:
     text_path.write_text(text, encoding="utf-8")
 
     return {"json": str(json_path), "text": str(text_path)}
+
+
+def report_root(base: Path | None = None) -> Path:
+    return (base or Path.cwd()) / "reports" / "styx"
+
+
+def find_report_bundle(hostname: str | None = None, base: Path | None = None) -> dict[str, Path] | None:
+    root = report_root(base)
+    if not root.exists():
+        return None
+
+    if hostname:
+        report_dir = root / hostname
+        if not report_dir.is_dir():
+            return None
+    else:
+        candidates = sorted(
+            (path for path in root.iterdir() if path.is_dir()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        if not candidates:
+            return None
+        report_dir = candidates[0]
+
+    json_path = report_dir / "sysprep-report.json"
+    text_path = report_dir / "sysprep-report.txt"
+    if not json_path.is_file() and not text_path.is_file():
+        return None
+    return {"json": json_path, "text": text_path, "dir": report_dir}
+
+
+def load_saved_report(hostname: str | None = None, base: Path | None = None) -> dict[str, Any]:
+    bundle = find_report_bundle(hostname=hostname, base=base)
+    if bundle is None:
+        raise FileNotFoundError("No saved sysprep report found under ./reports/styx/")
+    return json.loads(bundle["json"].read_text(encoding="utf-8"))
+
+
+def load_saved_report_text(hostname: str | None = None, base: Path | None = None) -> str:
+    bundle = find_report_bundle(hostname=hostname, base=base)
+    if bundle is None:
+        raise FileNotFoundError("No saved sysprep report found under ./reports/styx/")
+    if bundle["text"].is_file():
+        return bundle["text"].read_text(encoding="utf-8")
+    report = load_saved_report(hostname=hostname, base=base)
+    return render_sysprep_text(report)

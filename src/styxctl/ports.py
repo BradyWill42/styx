@@ -1,8 +1,4 @@
-"""Reserved Styx port range helpers.
-
-MVP1 is report-only. Nothing in this module stops, kills, disables, or edits
-anything on the host.
-"""
+"""Reserved Styx port range helpers."""
 
 from __future__ import annotations
 
@@ -145,9 +141,9 @@ def proc_systemd_unit(pid: int | None) -> str | None:
 
 
 def infer_safe_to_stop(process_name: str | None, systemd_unit: str | None, command_line: str | None) -> bool:
-    """Best-effort safety label for future cleanup modes.
+    """Best-effort safety label for MVP1 remediation.
 
-    MVP1 never acts on this value. It only reports it.
+    MVP1 only acts on conflicts marked safe to stop.
     """
     haystack = " ".join(part for part in (process_name, systemd_unit, command_line) if part).lower()
     if not haystack:

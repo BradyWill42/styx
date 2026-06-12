@@ -2,13 +2,23 @@
 
 `styxctl` is the control CLI for Styx: a k3s-native, dual-stack WireGuard mesh and access gateway platform.
 
-MVP1 implements the safe, read-only local sysprep check:
+MVP1 covers local assessment and safe remediation on a single Linux gateway node.
+
+## MVP1 workflow
 
 ```bash
 styxctl sysprep check local
+styxctl sysprep safe local --dry-run
+styxctl sysprep safe local --yes
+styxctl sysprep check local
 ```
 
-It collects local inventory, checks only the Styx reserved port range `47800-47850`, detects old k3s/CNI/Styx artifacts, prints a human-readable report, and automatically saves JSON and text reports.
+Typical flow:
+
+1. **Check** the node read-only
+2. **Preview** safe cleanup with `--dry-run`
+3. **Apply** safe cleanup with `--yes`
+4. **Re-check** until status is `READY` or only non-blocking warnings remain
 
 ## Install for local development
 
@@ -21,24 +31,69 @@ python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-Then run:
+## MVP1 commands
+
+### Assessment
 
 ```bash
 styxctl sysprep check local
+styxctl ports check local
+styxctl ports list local
 ```
 
-Reports are saved automatically under:
+`sysprep check local` collects local inventory, checks Styx reserved ports `47800-47850`, detects old k3s/CNI/Styx artifacts, prints a report, and saves JSON/text output.
+
+Reports are saved under:
 
 ```text
 ./reports/styx/<hostname>/sysprep-report.json
 ./reports/styx/<hostname>/sysprep-report.txt
 ```
 
+Readiness status:
+
+- `READY` — clear to proceed toward MVP2 install
+- `READY_WITH_WARNINGS` — usable, but review warnings first
+- `BLOCKED` — critical ports `47800-47808` are occupied; exits with code `1`
+
+### Safe remediation
+
+```bash
+styxctl sysprep safe local --dry-run
+styxctl sysprep safe local --yes
+styxctl ports clear local --dry-run
+styxctl ports clear local --yes
+```
+
+Safe remediation only acts on items already identified as safe:
+
+- Styx/k3s/flannel/CNI processes marked `safe_to_stop`
+- known leftover services such as `k3s.service` and `k3s-agent.service`
+- old temporary Styx files under `/tmp/styx*` and `/var/tmp/styx*`
+
+It never touches:
+
+- `wg0`
+- LAN networking, SSH, BIND, Caddy, MooseFS, home directories, or unrelated services
+- unsafe port conflicts
+- deeper k3s state directories (reserved for MVP3 reset)
+
+Use `--dry-run` first. Without `--yes`, styxctl asks for confirmation before changing the host.
+
+### Config and reports
+
+```bash
+styxctl config show
+styxctl config validate
+styxctl report show
+styxctl report show --json
+```
+
+Copy `styx.yaml.example` to `styx.yaml` when you want config validation before MVP2.
+
 ## CLI style
 
-The CLI is intentionally command-discovery-first instead of flag-heavy.
-
-Expected discovery path:
+The CLI is command-discovery-first:
 
 ```bash
 styxctl <TAB>
@@ -46,42 +101,26 @@ styxctl sysprep <TAB>
 styxctl sysprep check <TAB>
 ```
 
-Implemented MVP1 command:
+Future placeholders remain read-only:
 
 ```bash
-styxctl sysprep check local
+styxctl sysprep reset local   # MVP3
+styxctl sysprep nuke local    # MVP3
+styxctl install soon          # MVP2
 ```
-
-Safe placeholders are present for the future sysprep modes:
-
-```bash
-styxctl sysprep safe local
-styxctl sysprep reset local
-styxctl sysprep nuke local
-```
-
-These placeholders do not change the host.
 
 ## Shell completion
 
-Typer supports completion installation:
-
 ```bash
 styxctl --install-completion
-```
-
-This scaffold also includes command-style helpers:
-
-```bash
 styxctl completion bash
 styxctl completion zsh
 styxctl completion fish
-styxctl completion install
 ```
 
 ## Styx reserved ports
 
-Only this range is checked by MVP1 sysprep:
+Only this range is checked and cleaned by MVP1:
 
 ```text
 47800-47850
@@ -115,9 +154,9 @@ Endpoint = pistyx.duckdns.org:47800
 
 ## Safety rules
 
-`styxctl sysprep check local` is read-only. It does not stop services, kill processes, edit files, delete directories, change networking, disable units, or remove interfaces.
+`styxctl sysprep check local` is read-only.
 
-It preserves existing LAN networking, SSH, `wg0`, MooseFS, DNS/BIND, Caddy, home directories, Ansible directories, non-Styx services, and custom scripts.
+`sysprep safe local` and `ports clear local` are bounded remediation commands. They do not perform destructive resets, delete k3s data directories, or modify preserved infrastructure.
 
 `wg0` is detected and reported as preserved. It is never removed by MVP1.
 
@@ -127,14 +166,14 @@ It preserves existing LAN networking, SSH, `wg0`, MooseFS, DNS/BIND, Caddy, home
 python -m pip install -e ".[dev]"
 python -m pytest
 python -m styxctl.cli --help
-styxctl ports list local
-styxctl ports check local
+styxctl sysprep check local
+styxctl sysprep safe local --dry-run
+styxctl config validate
+styxctl report show
 ```
-
-When `styxctl sysprep check local` reports `Status: BLOCKED`, the command exits with code `1` so scripts and CI can fail fast.
 
 ## GitHub-hosted smoke test
 
 Every push and pull request runs a read-only sysprep check on a GitHub-hosted Ubuntu runner. In the Actions tab, open the **Sysprep check (GitHub-hosted)** job to see the live report output. Download the **sysprep-report-github-hosted** artifact to inspect the saved JSON and text reports.
 
-This validates the full command path on real Linux, but it is not a substitute for running the check on your own gateway node.
+This validates the full check path on real Linux, but it is not a substitute for running MVP1 on your own gateway node.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import yaml
 from typer.testing import CliRunner
 
 from styxctl.cli import app
@@ -15,7 +16,7 @@ runner = CliRunner()
 def test_version():
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert result.stdout.strip() == "0.1.0"
+    assert result.stdout.strip() == "0.2.0"
 
 
 def test_help():
@@ -23,6 +24,8 @@ def test_help():
     assert result.exit_code == 0
     assert "sysprep" in result.stdout
     assert "ports" in result.stdout
+    assert "config" in result.stdout
+    assert "report" in result.stdout
 
 
 def test_sysprep_check_local_writes_reports(tmp_path, monkeypatch):
@@ -119,6 +122,7 @@ def test_sysprep_check_local_blocked_exits_nonzero(tmp_path, monkeypatch):
     result = runner.invoke(app, ["sysprep", "check", "local"])
     assert result.exit_code == 1
     assert "Status: BLOCKED" in result.stdout
+    assert "sysprep safe local --dry-run" in result.stdout
 
 
 def test_ports_list_local():
@@ -134,17 +138,64 @@ def test_ports_check_local():
     assert "Styx Reserved Port Conflicts" in result.stdout
 
 
-def test_sysprep_safe_local_is_read_only():
-    result = runner.invoke(app, ["sysprep", "safe", "local"])
+def test_sysprep_safe_local_dry_run():
+    result = runner.invoke(app, ["sysprep", "safe", "local", "--dry-run"])
     assert result.exit_code == 0
-    assert "not implemented in MVP1" in result.stdout
-    assert "No changes were made" in result.stdout
+    assert "Mode: dry-run" in result.stdout
+    assert "Planned actions:" in result.stdout
+
+
+def test_ports_clear_local_dry_run():
+    result = runner.invoke(app, ["ports", "clear", "local", "--dry-run"])
+    assert result.exit_code == 0
+    assert "Mode: dry-run" in result.stdout
+
+
+def test_config_validate_example(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "styx.yaml"
+    config_path.write_text(Path("/workspace/styx.yaml.example").read_text(encoding="utf-8"), encoding="utf-8")
+    result = runner.invoke(app, ["config", "validate"])
+    assert result.exit_code == 0
+    assert "Config status: VALID" in result.stdout
+
+
+def test_config_show_example(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "styx.yaml"
+    config_path.write_text(Path("/workspace/styx.yaml.example").read_text(encoding="utf-8"), encoding="utf-8")
+    result = runner.invoke(app, ["config", "show"])
+    assert result.exit_code == 0
+    assert "Cluster: styx" in result.stdout
+    assert "WireGuard: Styx on port 47800" in result.stdout
+
+
+def test_report_show_local(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    check = runner.invoke(app, ["sysprep", "check", "local"])
+    assert check.exit_code in (0, 1)
+
+    result = runner.invoke(app, ["report", "show"])
+    assert result.exit_code == 0
+    assert "Styx Sysprep Report" in result.stdout
+
+    json_result = runner.invoke(app, ["report", "show", "--json"])
+    assert json_result.exit_code == 0
+    payload = json.loads(json_result.stdout)
+    assert payload["tool"] == "styxctl"
+
+
+def test_report_show_missing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["report", "show"])
+    assert result.exit_code == 1
+    assert "No saved sysprep report found" in result.stdout
 
 
 def test_future_command_placeholder():
     result = runner.invoke(app, ["install", "soon"])
     assert result.exit_code == 0
-    assert "not implemented yet" in result.stdout
+    assert "MVP2" in result.stdout
 
 
 def test_completion_scripts():
