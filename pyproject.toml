@@ -17,6 +17,12 @@ dependencies = [
   "PyYAML>=6.0.1"
 ]
 
+[project.optional-dependencies]
+dev = [
+  "build>=1.2",
+  "pytest>=8.0",
+]
+
 [project.scripts]
 styxctl = "styxctl.cli:app"
 
