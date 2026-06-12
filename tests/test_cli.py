@@ -197,6 +197,8 @@ def test_help_includes_install():
     assert result.exit_code == 0
     assert "local" in result.stdout
     assert "cluster" in result.stdout
+    assert "plan" in result.stdout
+    assert "apply" in result.stdout
     assert "status" in result.stdout
     assert "doctor" in result.stdout
 

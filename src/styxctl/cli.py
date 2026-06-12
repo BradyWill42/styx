@@ -58,7 +58,8 @@ report_app = typer.Typer(help="Inspect saved sysprep reports.", no_args_is_help=
 install_app = typer.Typer(help="Install Styx prerequisites on local gateway nodes.", no_args_is_help=True)
 install_status_app = typer.Typer(help="Show local install status.", no_args_is_help=True)
 install_doctor_app = typer.Typer(help="Diagnose local install health.", no_args_is_help=True)
-install_plan_app = typer.Typer(help="Preview the local install plan.", no_args_is_help=True)
+install_plan_app = typer.Typer(help="Preview install plans without changing the host.", no_args_is_help=True)
+install_apply_app = typer.Typer(help="Apply install plans without confirmation.", no_args_is_help=True)
 completion_app = typer.Typer(help="Shell completion helpers.", no_args_is_help=True)
 
 
@@ -353,20 +354,26 @@ def _print_install_report(report: dict, *, exit_code: int) -> None:
 
 
 @install_app.command("local")
-def install_local(
-    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show planned actions without changing the host."),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Apply planned actions without confirmation."),
-    path: Path | None = typer.Option(None, "--path", help="Path to styx.yaml or styx.yml."),
-) -> None:
+def install_local() -> None:
     """Install k3s and the Styx WireGuard foundation on this machine."""
-    report, exit_code = run_install_local(dry_run=dry_run, yes=yes, config_path=path)
+    report, exit_code = run_install_local(dry_run=False, yes=False, config_path=None)
     if report.get("status") == "CONFIRMATION_REQUIRED":
         pending = report.get("pending_count", 0)
         console.print(render_install_text(report))
         if not typer.confirm(f"Apply {pending} planned install step(s)?", default=False):
             console.print("No changes were made.")
             raise typer.Exit(code=0)
-        report, exit_code = run_install_local(dry_run=False, yes=True, config_path=path)
+        report, exit_code = run_install_local(dry_run=False, yes=True, config_path=None)
+    gate = report.get("gate", {})
+    if gate.get("message"):
+        console.print(f"[red]Install blocked:[/red] {gate['message']}")
+    _print_install_report(report, exit_code=exit_code)
+
+
+@install_apply_app.command("local")
+def install_apply_local() -> None:
+    """Apply the local install plan without confirmation."""
+    report, exit_code = run_install_local(dry_run=False, yes=True, config_path=None)
     gate = report.get("gate", {})
     if gate.get("message"):
         console.print(f"[red]Install blocked:[/red] {gate['message']}")
@@ -374,11 +381,9 @@ def install_local(
 
 
 @install_status_app.command("local")
-def install_status_local(
-    path: Path | None = typer.Option(None, "--path", help="Path to styx.yaml or styx.yml."),
-) -> None:
+def install_status_local() -> None:
     """Show local install status for k3s and Styx WireGuard."""
-    health = run_install_doctor(config_path=path)
+    health = run_install_doctor(config_path=None)
     table = Table(title="Styx Install Status")
     table.add_column("Component")
     table.add_column("State")
@@ -411,11 +416,9 @@ def install_status_local(
 
 
 @install_doctor_app.command("local")
-def install_doctor_local(
-    path: Path | None = typer.Option(None, "--path", help="Path to styx.yaml or styx.yml."),
-) -> None:
+def install_doctor_local() -> None:
     """Diagnose local install health with actionable failures."""
-    health = run_install_doctor(config_path=path)
+    health = run_install_doctor(config_path=None)
     if health.healthy:
         console.print("[green]Install doctor: healthy enough for MVP3[/green]")
         return
@@ -424,7 +427,7 @@ def install_doctor_local(
     for issue in health.issues:
         console.print(f"  - {issue}")
     if not health.k3s_active:
-        console.print("  action: check `sudo systemctl status k3s` and re-run `styxctl install local --yes`")
+        console.print("  action: check `sudo systemctl status k3s` and re-run `styxctl install apply local`")
     if not health.styx_interface_up:
         console.print("  action: verify /etc/wireguard/Styx.conf and run `sudo wg-quick up Styx`")
     if not health.wg0_preserved:
@@ -433,15 +436,19 @@ def install_doctor_local(
 
 
 @install_plan_app.command("local")
-def install_plan_local(
-    dry_run: bool = typer.Option(True, "--dry-run/--apply", help="Preview mode is default for install plan."),
-    path: Path | None = typer.Option(None, "--path", help="Path to styx.yaml or styx.yml."),
-) -> None:
+def install_plan_local() -> None:
     """Preview the local install plan without changing the host."""
-    if not dry_run:
-        console.print("install plan local only supports preview mode; use `styxctl install local`.")
-        raise typer.Exit(code=1)
-    report, exit_code = run_install_plan_preview(config_path=path)
+    report, exit_code = run_install_plan_preview(config_path=None)
+    gate = report.get("gate", {})
+    if gate.get("message"):
+        console.print(f"[red]Install blocked:[/red] {gate['message']}")
+    _print_install_report(report, exit_code=exit_code)
+
+
+@install_plan_app.command("cluster")
+def install_plan_cluster() -> None:
+    """Preview the k3s cluster install plan without changing nodes."""
+    report, exit_code = run_install_cluster(dry_run=True, yes=False, config_path=None)
     gate = report.get("gate", {})
     if gate.get("message"):
         console.print(f"[red]Install blocked:[/red] {gate['message']}")
@@ -449,20 +456,26 @@ def install_plan_local(
 
 
 @install_app.command("cluster")
-def install_cluster(
-    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show planned cluster actions without changing nodes."),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Join all configured nodes without confirmation."),
-    path: Path | None = typer.Option(None, "--path", help="Path to styx.yaml or styx.yml."),
-) -> None:
+def install_cluster() -> None:
     """Install and join all k3s nodes listed in styx.yaml using their configured IPs."""
-    report, exit_code = run_install_cluster(dry_run=dry_run, yes=yes, config_path=path)
+    report, exit_code = run_install_cluster(dry_run=False, yes=False, config_path=None)
     if report.get("status") == "CONFIRMATION_REQUIRED":
         pending = report.get("pending_count", 0)
         console.print(render_install_text(report))
         if not typer.confirm(f"Apply k3s cluster setup to {pending} remote node(s)?", default=False):
             console.print("No changes were made.")
             raise typer.Exit(code=0)
-        report, exit_code = run_install_cluster(dry_run=False, yes=True, config_path=path)
+        report, exit_code = run_install_cluster(dry_run=False, yes=True, config_path=None)
+    gate = report.get("gate", {})
+    if gate.get("message"):
+        console.print(f"[red]Install blocked:[/red] {gate['message']}")
+    _print_install_report(report, exit_code=exit_code)
+
+
+@install_apply_app.command("cluster")
+def install_apply_cluster() -> None:
+    """Apply the k3s cluster install plan without confirmation."""
+    report, exit_code = run_install_cluster(dry_run=False, yes=True, config_path=None)
     gate = report.get("gate", {})
     if gate.get("message"):
         console.print(f"[red]Install blocked:[/red] {gate['message']}")
@@ -470,11 +483,9 @@ def install_cluster(
 
 
 @install_status_app.command("cluster")
-def install_status_cluster(
-    path: Path | None = typer.Option(None, "--path", help="Path to styx.yaml or styx.yml."),
-) -> None:
+def install_status_cluster() -> None:
     """Show k3s cluster node status for all configured IPs."""
-    health = run_cluster_doctor(config_path=path)
+    health = run_cluster_doctor(config_path=None)
     table = Table(title="Styx k3s Cluster Status")
     table.add_column("Node")
     table.add_column("Role")
@@ -505,18 +516,16 @@ def install_status_cluster(
 
 
 @install_doctor_app.command("cluster")
-def install_doctor_cluster(
-    path: Path | None = typer.Option(None, "--path", help="Path to styx.yaml or styx.yml."),
-) -> None:
+def install_doctor_cluster() -> None:
     """Diagnose k3s cluster health across all configured node IPs."""
-    health = run_cluster_doctor(config_path=path)
+    health = run_cluster_doctor(config_path=None)
     if health.get("healthy"):
         console.print("[green]Cluster doctor: all configured k3s nodes are healthy[/green]")
         return
     console.print("[red]Cluster doctor: blocking cluster issues found[/red]")
     for issue in health.get("issues", []):
         console.print(f"  - {issue}")
-    console.print("  action: run `styxctl install local --yes` on each node, then `styxctl install cluster --yes`")
+    console.print("  action: run `styxctl install apply local` on each node, then `styxctl install apply cluster`")
     raise typer.Exit(code=1)
 
 
@@ -541,6 +550,7 @@ ports_app.add_typer(ports_clear_app, name="clear")
 install_app.add_typer(install_status_app, name="status")
 install_app.add_typer(install_doctor_app, name="doctor")
 install_app.add_typer(install_plan_app, name="plan")
+install_app.add_typer(install_apply_app, name="apply")
 
 app.add_typer(sysprep_app, name="sysprep")
 app.add_typer(ports_app, name="ports")

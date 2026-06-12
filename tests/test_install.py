@@ -171,7 +171,7 @@ def test_install_cluster_dry_run(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_example_config(tmp_path)
     monkeypatch.setattr("styxctl.install.collect_inventory", _base_inventory)
-    result = runner.invoke(app, ["install", "cluster", "--dry-run"])
+    result = runner.invoke(app, ["install", "plan", "cluster"])
     assert result.exit_code == 0
     assert "Cluster plan" in result.stdout or "cluster" in result.stdout.lower()
 
@@ -212,7 +212,7 @@ def test_run_install_local_dry_run_writes_report(tmp_path, monkeypatch):
     _write_example_config(tmp_path)
     monkeypatch.setattr("styxctl.install.collect_inventory", _base_inventory)
 
-    result = runner.invoke(app, ["install", "local", "--dry-run"])
+    result = runner.invoke(app, ["install", "plan", "local"])
     assert result.exit_code == 0
     assert "Styx Install Report" in result.stdout
     assert "Reports saved" in result.stdout
@@ -277,4 +277,4 @@ def test_run_install_plan_preview(tmp_path, monkeypatch):
     monkeypatch.setattr("styxctl.install.collect_inventory", _base_inventory)
     report, exit_code = run_install_plan_preview(config_path=tmp_path / "styx.yaml")
     assert exit_code == 0
-    assert report["command"] == "styxctl install plan local --dry-run"
+    assert report["command"] == "styxctl install plan local"

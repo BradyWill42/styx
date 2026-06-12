@@ -65,8 +65,7 @@ jobs:
           cp styx.yaml.example styx.yaml
           styxctl config validate
           styxctl install plan local
-          styxctl install local --dry-run
-          styxctl install cluster --dry-run
+          styxctl install plan cluster
           styxctl install status cluster || true
           styxctl install doctor cluster || true
 

@@ -513,7 +513,7 @@ def build_install_plan(
                     status="deferred",
                     reason=(
                         f"Node {local_node.name} ({local_node.role}) needs a join token. "
-                        "Run `styxctl install cluster --yes` from the init node first, "
+                        "Run `styxctl install apply cluster` from the init node first, "
                         "or set cluster.join_token in styx.yaml."
                     ),
                 )
@@ -560,8 +560,8 @@ def build_install_plan(
                 category="platform",
                 action="plan",
                 status="pending",
-                reason=f"Cluster has {len(nodes)} nodes; run `styxctl install cluster --yes` to join remote nodes",
-                command_display="styxctl install cluster --yes",
+                reason=f"Cluster has {len(nodes)} nodes; run `styxctl install apply cluster` to join remote nodes",
+                command_display="styxctl install apply cluster",
             )
         )
 
@@ -1145,7 +1145,7 @@ def run_install_local(
     ) if not dry_run else None
 
     report = build_install_report(
-        command="styxctl install local" + (" --dry-run" if dry_run else ""),
+        command="styxctl install local",
         plan=applied_plan,
         gate=gate,
         dry_run=dry_run,
@@ -1177,7 +1177,7 @@ def run_install_plan_preview(*, config_path: str | Path | None = None) -> tuple[
         steps=[],
     )
     report = build_install_report(
-        command="styxctl install plan local --dry-run",
+        command="styxctl install plan local",
         plan=plan,
         gate=gate,
         dry_run=True,
@@ -1266,7 +1266,7 @@ def run_install_cluster(
 
     if dry_run:
         report = build_install_report(
-            command="styxctl install cluster --dry-run",
+            command="styxctl install plan cluster",
             plan=base_plan,
             gate=gate,
             dry_run=True,

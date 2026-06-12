@@ -100,10 +100,11 @@ cp styx.yaml.example styx.yaml
 # Edit nodes: set each node's ipv4/ipv6 to its current LAN addresses
 styxctl config validate
 styxctl install plan local
-styxctl install local --dry-run
-styxctl install local --yes            # prereqs + local k3s role on each node
-styxctl install cluster --dry-run      # preview multi-node k3s join plan
-styxctl install cluster --yes          # init + join all nodes by IP over SSH
+styxctl install plan cluster
+styxctl install local                 # asks for confirmation
+styxctl install apply local             # prereqs + local k3s role on each node
+styxctl install cluster                 # asks for confirmation
+styxctl install apply cluster           # init + join all nodes by IP over SSH
 styxctl install status local
 styxctl install status cluster
 styxctl install doctor local
@@ -131,7 +132,7 @@ Install is blocked when:
 - sysprep status is `BLOCKED` on ports `47800-47808`
 - non-interactive sudo is unavailable for a mutating install
 
-Use `--dry-run` first. Without `--yes`, `styxctl install local` asks for confirmation before changing the host.
+Use `install plan local` first. `install local` asks for confirmation before changing the host; `install apply local` skips the prompt.
 
 `install status local` and `install doctor local` verify k3s, the `Styx` interface, `wg0` preservation, and critical port state. Exit code `0` means healthy enough for MVP3 deploy work.
 
@@ -215,7 +216,8 @@ python -m styxctl.cli --help
 styxctl sysprep check local
 styxctl sysprep safe local --dry-run
 styxctl config validate
-styxctl install local --dry-run
+styxctl install plan local
+styxctl install apply local
 styxctl report show
 ```
 
