@@ -132,3 +132,9 @@ styxctl ports check local
 ```
 
 When `styxctl sysprep check local` reports `Status: BLOCKED`, the command exits with code `1` so scripts and CI can fail fast.
+
+## GitHub-hosted smoke test
+
+Every push and pull request runs a read-only sysprep check on a GitHub-hosted Ubuntu runner. In the Actions tab, open the **Sysprep check (GitHub-hosted)** job to see the live report output. Download the **sysprep-report-github-hosted** artifact to inspect the saved JSON and text reports.
+
+This validates the full command path on real Linux, but it is not a substitute for running the check on your own gateway node.
