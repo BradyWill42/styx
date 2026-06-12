@@ -145,3 +145,10 @@ def test_future_command_placeholder():
     result = runner.invoke(app, ["install", "soon"])
     assert result.exit_code == 0
     assert "not implemented yet" in result.stdout
+
+
+def test_completion_scripts():
+    for shell in ("bash", "zsh", "fish"):
+        result = runner.invoke(app, ["completion", shell])
+        assert result.exit_code == 0, result.stdout + result.stderr
+        assert "styxctl" in result.stdout

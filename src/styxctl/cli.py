@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
-
 import typer
 from rich.console import Console
 from rich.table import Table
+from typer._completion_shared import get_completion_script
 
 from . import __version__
 from .inventory import collect_inventory
@@ -154,19 +151,13 @@ def ports_clear_local() -> None:
 
 
 def _emit_completion(shell: str) -> None:
-    env = os.environ.copy()
-    env["_STYXCTL_COMPLETE"] = f"{shell}_source"
-    completed = subprocess.run(
-        [sys.argv[0]],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=env,
+    typer.echo(
+        get_completion_script(
+            prog_name="styxctl",
+            complete_var="_STYXCTL_COMPLETE",
+            shell=shell,
+        )
     )
-    if completed.returncode != 0:
-        console.print(completed.stderr.strip() or "Completion script generation failed.")
-        raise typer.Exit(code=completed.returncode)
-    typer.echo(completed.stdout)
 
 
 @completion_app.command("bash")
