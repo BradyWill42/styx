@@ -10,6 +10,15 @@ styxctl sysprep check local
 
 It collects local inventory, checks only the Styx reserved port range `47800-47850`, detects old k3s/CNI/Styx artifacts, prints a human-readable report, and automatically saves JSON and text reports.
 
+MVP2 adds local prerequisite installation:
+
+```bash
+styxctl install prerequisites local --dry-run
+styxctl install prerequisites local
+```
+
+It builds an idempotent install plan from the MVP1 inventory, gates on sysprep status, installs missing system packages and k3s when safe, and saves install reports under `./reports/styx/<hostname>/`.
+
 ## Install for local development
 
 From the repository root:
@@ -51,6 +60,14 @@ Implemented MVP1 command:
 ```bash
 styxctl sysprep check local
 ```
+
+Implemented MVP2 command:
+
+```bash
+styxctl install prerequisites local
+```
+
+Use `--dry-run` to preview the install plan without changing the host. Installation is blocked when sysprep status is `BLOCKED` unless `--force` is supplied.
 
 Safe placeholders are present for the future sysprep modes:
 
@@ -116,6 +133,8 @@ Endpoint = pistyx.duckdns.org:47800
 ## Safety rules
 
 `styxctl sysprep check local` is read-only. It does not stop services, kill processes, edit files, delete directories, change networking, disable units, or remove interfaces.
+
+`styxctl install prerequisites local` only installs missing foundational packages and k3s. It does not remove `wg0`, change LAN networking, or stop unrelated services. Wazuh and watchdog installs are deferred in MVP2.
 
 It preserves existing LAN networking, SSH, `wg0`, MooseFS, DNS/BIND, Caddy, home directories, Ansible directories, non-Styx services, and custom scripts.
 

@@ -15,7 +15,7 @@ runner = CliRunner()
 def test_version():
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert result.stdout.strip() == "0.1.0"
+    assert result.stdout.strip() == "0.2.0"
 
 
 def test_help():
@@ -142,7 +142,7 @@ def test_sysprep_safe_local_is_read_only():
 
 
 def test_future_command_placeholder():
-    result = runner.invoke(app, ["install", "soon"])
+    result = runner.invoke(app, ["deploy", "soon"])
     assert result.exit_code == 0
     assert "not implemented yet" in result.stdout
 

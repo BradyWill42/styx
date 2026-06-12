@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "styxctl"
-version = "0.1.0"
+version = "0.2.0"
 description = "CLI for preparing, installing, and managing Styx k3s/WireGuard gateway nodes."
 readme = "README.md"
 requires-python = ">=3.10"

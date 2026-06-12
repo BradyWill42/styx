@@ -10,6 +10,11 @@ from typer._completion_shared import get_completion_script
 from . import __version__
 from .inventory import collect_inventory
 from .ports import PORT_BLOCKS, PORT_PLAN, check_reserved_ports, port_purpose
+from .prerequisites import (
+    render_prerequisites_text,
+    run_prerequisites_install,
+    save_prerequisites_report,
+)
 from .reports import build_report_data, render_sysprep_text, save_report_bundle
 
 console = Console()
@@ -29,6 +34,8 @@ ports_check_app = typer.Typer(help="Check Styx reserved ports.", no_args_is_help
 ports_list_app = typer.Typer(help="List the Styx reserved port plan.", no_args_is_help=True)
 ports_clear_app = typer.Typer(help="Clear Styx reserved ports. MVP1 placeholder only.", no_args_is_help=True)
 completion_app = typer.Typer(help="Shell completion helpers.", no_args_is_help=True)
+install_app = typer.Typer(help="Install Styx prerequisites and platform components.", no_args_is_help=True)
+install_prerequisites_app = typer.Typer(help="Install host prerequisites.", no_args_is_help=True)
 
 
 @app.callback()
@@ -189,6 +196,38 @@ def completion_install() -> None:
     console.print("  styxctl completion fish")
 
 
+@install_prerequisites_app.command("local")
+def install_prerequisites_local(
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show the install plan without changing the host.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Proceed even when sysprep status is BLOCKED.",
+    ),
+    config: str | None = typer.Option(
+        None,
+        "--config",
+        help="Path to styx.yaml for optional component selection.",
+    ),
+) -> None:
+    """Install missing host prerequisites on this machine."""
+    result = run_prerequisites_install(dry_run=dry_run, force=force, config_path=config)
+    text = render_prerequisites_text(result)
+    paths = save_prerequisites_report(result, text)
+
+    console.print(text)
+    console.print("[bold green]Reports saved[/bold green]")
+    console.print(f"  JSON: {paths['json']}")
+    console.print(f"  Text: {paths['text']}")
+
+    if result.overall_status in {"BLOCKED", "FAILED"}:
+        raise typer.Exit(code=1)
+
+
 def _future_app(label: str) -> typer.Typer:
     future = typer.Typer(help=f"Future {label} commands.", no_args_is_help=True)
 
@@ -207,9 +246,11 @@ ports_app.add_typer(ports_check_app, name="check")
 ports_app.add_typer(ports_list_app, name="list")
 ports_app.add_typer(ports_clear_app, name="clear")
 
+install_app.add_typer(install_prerequisites_app, name="prerequisites")
+
 app.add_typer(sysprep_app, name="sysprep")
 app.add_typer(ports_app, name="ports")
-app.add_typer(_future_app("install"), name="install")
+app.add_typer(install_app, name="install")
 app.add_typer(_future_app("deploy"), name="deploy")
 app.add_typer(_future_app("status"), name="status")
 app.add_typer(_future_app("doctor"), name="doctor")
