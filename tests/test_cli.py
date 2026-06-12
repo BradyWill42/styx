@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 from styxctl.cli import app
 
 runner = CliRunner()
+EXAMPLE_CONFIG = Path(__file__).resolve().parent.parent / "styx.yaml.example"
 
 
 def test_version():
@@ -154,7 +155,7 @@ def test_ports_clear_local_dry_run():
 def test_config_validate_example(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config_path = tmp_path / "styx.yaml"
-    config_path.write_text(Path("/workspace/styx.yaml.example").read_text(encoding="utf-8"), encoding="utf-8")
+    config_path.write_text(EXAMPLE_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
     result = runner.invoke(app, ["config", "validate"])
     assert result.exit_code == 0
     assert "Config status: VALID" in result.stdout
@@ -163,7 +164,7 @@ def test_config_validate_example(tmp_path, monkeypatch):
 def test_config_show_example(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config_path = tmp_path / "styx.yaml"
-    config_path.write_text(Path("/workspace/styx.yaml.example").read_text(encoding="utf-8"), encoding="utf-8")
+    config_path.write_text(EXAMPLE_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
     result = runner.invoke(app, ["config", "show"])
     assert result.exit_code == 0
     assert "Cluster: styx" in result.stdout
