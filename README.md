@@ -97,13 +97,20 @@ After MVP1 leaves the node `READY` or `READY_WITH_WARNINGS`:
 
 ```bash
 cp styx.yaml.example styx.yaml
+# Edit nodes: set each node's ipv4/ipv6 to its current LAN addresses
 styxctl config validate
 styxctl install plan local
 styxctl install local --dry-run
-styxctl install local --yes
+styxctl install local --yes            # prereqs + local k3s role on each node
+styxctl install cluster --dry-run      # preview multi-node k3s join plan
+styxctl install cluster --yes          # init + join all nodes by IP over SSH
 styxctl install status local
+styxctl install status cluster
 styxctl install doctor local
+styxctl install doctor cluster
 ```
+
+Each node in `styx.yaml` uses its configured `ipv4` / `ipv6` as the k3s `--node-ip` values. The init-server node bootstraps the cluster with dual-stack pod/service CIDRs from the network plan; additional `server` and `agent` nodes join using their own current IPs.
 
 MVP2 installs only the local foundation prerequisites:
 

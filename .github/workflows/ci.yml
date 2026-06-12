@@ -66,8 +66,9 @@ jobs:
           styxctl config validate
           styxctl install plan local
           styxctl install local --dry-run
-          styxctl install status local || true
-          styxctl install doctor local || true
+          styxctl install cluster --dry-run
+          styxctl install status cluster || true
+          styxctl install doctor cluster || true
 
       - name: Verify sysprep reports were written
         run: |

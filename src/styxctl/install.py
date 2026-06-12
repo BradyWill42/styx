@@ -19,6 +19,16 @@ from typing import Any, Callable
 
 from .config import config_status, find_config, load_config, validate_config
 from .inventory import SystemInventory, collect_inventory, safe_run
+from .k3s_cluster import (
+    ClusterPlan,
+    apply_cluster_node_plan,
+    assess_cluster_nodes,
+    build_cluster_plan,
+    fetch_join_token_from_init,
+    k3s_install_spec,
+    _run_ssh_command,
+)
+from .nodes import identify_local_node, init_server_node, parse_nodes, validate_nodes
 from .remediation import _run_mutating
 from .reports import CRITICAL_PORTS, evaluate_readiness
 
@@ -68,6 +78,8 @@ class InstallPlan:
     warnings: list[str]
     blocking: list[str]
     wg0_before: Wg0Snapshot
+    local_node: str | None = None
+    cluster_plan: ClusterPlan | None = None
     steps: list[InstallStep] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
@@ -79,6 +91,8 @@ class InstallPlan:
             "warnings": self.warnings,
             "blocking": self.blocking,
             "wg0_before": self.wg0_before.to_dict(),
+            "local_node": self.local_node,
+            "cluster_plan": self.cluster_plan.to_dict() if self.cluster_plan else None,
             "steps": [step.to_dict() for step in self.steps],
         }
 
@@ -122,6 +136,9 @@ class InstallHealth:
     config_status: str
     config_path: str | None
     critical_ports_clear: bool
+    cluster_healthy: bool | None
+    cluster_node_count: int
+    local_node: str | None
     issues: list[str]
     warnings: list[str]
 
@@ -266,7 +283,36 @@ def _missing_packages(inventory: SystemInventory, package_manager: str | None) -
     return sorted(set(missing))
 
 
-def _k3s_install_command_display(config: dict[str, Any]) -> str:
+def _join_credentials(config: dict[str, Any], nodes: list) -> tuple[str | None, str | None]:
+    init = init_server_node(nodes)
+    if init is None or not init.primary_ip:
+        return None, None
+    join_url = f"https://{init.primary_ip}:6443"
+    cluster = config.get("cluster", {})
+    token = cluster.get("join_token")
+    if isinstance(token, str) and token.strip():
+        return join_url, token.strip()
+    ssh_user = cluster.get("ssh_user") if isinstance(cluster.get("ssh_user"), str) else None
+    ok, detail = fetch_join_token_from_init(init, ssh_user=ssh_user)
+    if ok:
+        return join_url, detail.strip()
+    return join_url, None
+
+
+def _k3s_install_command_display(config: dict[str, Any], inventory: SystemInventory) -> str:
+    nodes = parse_nodes(config)
+    local_node = identify_local_node(nodes, inventory)
+    all_nodes = nodes or []
+    if local_node and all_nodes:
+        join_url, join_token = _join_credentials(config, all_nodes)
+        _, _, display = k3s_install_spec(
+            config,
+            local_node,
+            all_nodes=all_nodes,
+            join_url=join_url if local_node.role != "init-server" else None,
+            join_token=join_token if local_node.role != "init-server" else None,
+        )
+        return display
     args = _k3s_install_args(config)
     arg_text = " ".join(args)
     return (
@@ -372,6 +418,9 @@ def build_install_plan(
     wg0_before = capture_wg0_snapshot(inventory)
     steps: list[InstallStep] = []
     interface, port = _wireguard_settings(config)
+    nodes = parse_nodes(config)
+    local_node = identify_local_node(nodes, inventory)
+    cluster_plan = build_cluster_plan(config, local_node=local_node) if nodes else None
 
     missing_packages = _missing_packages(inventory, package_manager)
     if missing_packages and package_manager == "apt":
@@ -453,6 +502,41 @@ def build_install_plan(
                 reason=f"k3s already present at {inventory.detected_binaries['k3s']}",
             )
         )
+    elif local_node and local_node.role != "init-server":
+        join_url, join_token = _join_credentials(config, nodes)
+        if not join_token:
+            steps.append(
+                InstallStep(
+                    name="k3s",
+                    category="platform",
+                    action="join",
+                    status="deferred",
+                    reason=(
+                        f"Node {local_node.name} ({local_node.role}) needs a join token. "
+                        "Run `styxctl install cluster --yes` from the init node first, "
+                        "or set cluster.join_token in styx.yaml."
+                    ),
+                )
+            )
+        else:
+            _, _, display = k3s_install_spec(
+                config,
+                local_node,
+                all_nodes=nodes,
+                join_url=join_url,
+                join_token=join_token,
+            )
+            steps.append(
+                InstallStep(
+                    name="k3s",
+                    category="platform",
+                    action="join",
+                    status="pending",
+                    reason=f"Join {local_node.name} as {local_node.role} using current node IPs",
+                    command=["curl", "-sfL", "https://get.k3s.io"],
+                    command_display=display,
+                )
+            )
     else:
         steps.append(
             InstallStep(
@@ -460,9 +544,24 @@ def build_install_plan(
                 category="platform",
                 action="install",
                 status="pending",
-                reason="Install k3s server with Styx cluster/service CIDRs from styx.yaml",
+                reason=(
+                    f"Install k3s {'init-server' if local_node and local_node.role == 'init-server' else 'server'} "
+                    "with Styx dual-stack CIDRs and node IPs from styx.yaml"
+                ),
                 command=["curl", "-sfL", "https://get.k3s.io"],
-                command_display=_k3s_install_command_display(config),
+                command_display=_k3s_install_command_display(config, inventory),
+            )
+        )
+
+    if nodes:
+        steps.append(
+            InstallStep(
+                name="k3s-cluster",
+                category="platform",
+                action="plan",
+                status="pending",
+                reason=f"Cluster has {len(nodes)} nodes; run `styxctl install cluster --yes` to join remote nodes",
+                command_display="styxctl install cluster --yes",
             )
         )
 
@@ -515,6 +614,8 @@ def build_install_plan(
         warnings=gate.warnings,
         blocking=gate.blocking,
         wg0_before=wg0_before,
+        local_node=local_node.name if local_node else None,
+        cluster_plan=cluster_plan,
         steps=steps,
     )
 
@@ -728,12 +829,29 @@ def _execute_step(
             sudo_available=inventory.sudo_available,
         )
     elif step.name == "k3s":
-        args = _k3s_install_args(config)
+        nodes = parse_nodes(config)
+        local_node = identify_local_node(nodes, inventory)
+        if local_node and nodes:
+            join_url, join_token = _join_credentials(config, nodes)
+            env, args, _ = k3s_install_spec(
+                config,
+                local_node,
+                all_nodes=nodes,
+                join_url=join_url if local_node.role != "init-server" else None,
+                join_token=join_token if local_node.role != "init-server" else None,
+            )
+        else:
+            env = {"INSTALL_K3S_EXEC": "server"}
+            args = _k3s_install_args(config)
         ok, detail = _run_pipeline(
             ["curl", "-sfL", "https://get.k3s.io"],
             ["sh", "-s", "-", *args],
-            env={"INSTALL_K3S_EXEC": "server"},
+            env=env,
         )
+    elif step.name == "k3s-cluster":
+        step.status = "skipped"
+        step.detail = "cluster orchestration is handled by `styxctl install cluster`"
+        return step
     elif step.name == "styx-wireguard":
         ok, detail = _write_styx_wireguard_config(
             config,
@@ -885,6 +1003,8 @@ def assess_install_health(
     if not critical_ports_clear:
         health_issues.append("critical Styx ports 47800-47808 have conflicts")
 
+    cluster_nodes = parse_nodes(config)
+    local_node = identify_local_node(cluster_nodes, inventory)
     healthy = not health_issues
     return InstallHealth(
         healthy=healthy,
@@ -899,6 +1019,9 @@ def assess_install_health(
         config_status=status,
         config_path=str(resolved_path) if resolved_path else None,
         critical_ports_clear=critical_ports_clear,
+        cluster_healthy=None,
+        cluster_node_count=len(cluster_nodes),
+        local_node=local_node.name if local_node else None,
         issues=health_issues,
         warnings=warnings,
     )
@@ -1061,3 +1184,180 @@ def run_install_plan_preview(*, config_path: str | Path | None = None) -> tuple[
         pre_inventory=pre_inventory,
     )
     return report, 0 if gate.ok else 1
+
+
+def check_cluster_gate(
+    *,
+    config_path: str | Path | None = None,
+    require_sudo: bool = False,
+) -> InstallGateResult:
+    gate = check_install_gate(config_path=config_path, require_sudo=require_sudo)
+    if not gate.ok:
+        return gate
+
+    nodes = parse_nodes(gate.config)
+    node_errors = validate_nodes(nodes)
+    if not nodes:
+        return InstallGateResult(
+            ok=False,
+            message="No cluster nodes defined in styx.yaml. Add a nodes list with IPs and roles.",
+            config=gate.config,
+            config_path=gate.config_path,
+            config_status_value=gate.config_status_value,
+            inventory=gate.inventory,
+            sysprep_status=gate.sysprep_status,
+            warnings=gate.warnings,
+            blocking=["nodes list is empty"],
+        )
+    if node_errors:
+        return InstallGateResult(
+            ok=False,
+            message="Cluster node configuration is invalid.",
+            config=gate.config,
+            config_path=gate.config_path,
+            config_status_value="INVALID",
+            inventory=gate.inventory,
+            sysprep_status=gate.sysprep_status,
+            warnings=gate.warnings,
+            blocking=node_errors,
+        )
+    return gate
+
+
+def run_install_cluster(
+    *,
+    dry_run: bool = False,
+    yes: bool = False,
+    config_path: str | Path | None = None,
+    runner: Callable[[str, str], RunResult] | None = None,
+) -> tuple[dict[str, Any], int]:
+    pre_inventory = collect_inventory()
+    gate = check_cluster_gate(
+        config_path=config_path,
+        require_sudo=not dry_run,
+    )
+    nodes = parse_nodes(gate.config) if gate.ok else []
+    local_node = identify_local_node(nodes, pre_inventory) if nodes else None
+    cluster_plan = build_cluster_plan(gate.config, local_node=local_node) if gate.ok else ClusterPlan(init_node="unknown")
+
+    base_plan = InstallPlan(
+        hostname=pre_inventory.hostname,
+        config_path=str(gate.config_path) if gate.config_path else None,
+        config_status=gate.config_status_value,
+        sysprep_status=gate.sysprep_status,
+        warnings=gate.warnings,
+        blocking=gate.blocking,
+        wg0_before=capture_wg0_snapshot(pre_inventory),
+        local_node=local_node.name if local_node else None,
+        cluster_plan=cluster_plan,
+        steps=[],
+    )
+
+    if not gate.ok:
+        report = build_install_report(
+            command="styxctl install cluster",
+            plan=base_plan,
+            gate=gate,
+            dry_run=dry_run,
+            pre_inventory=pre_inventory,
+        )
+        report["status"] = "FAILED"
+        return report, 1
+
+    if dry_run:
+        report = build_install_report(
+            command="styxctl install cluster --dry-run",
+            plan=base_plan,
+            gate=gate,
+            dry_run=True,
+            pre_inventory=pre_inventory,
+        )
+        report["cluster"] = cluster_plan.to_dict()
+        return report, 0
+
+    pending = [item for item in cluster_plan.nodes if not item.local_execution]
+    if pending and not yes:
+        report = build_install_report(
+            command="styxctl install cluster",
+            plan=base_plan,
+            gate=gate,
+            dry_run=True,
+            pre_inventory=pre_inventory,
+        )
+        report["status"] = "CONFIRMATION_REQUIRED"
+        report["pending_count"] = len(pending)
+        report["cluster"] = cluster_plan.to_dict()
+        return report, 0
+
+    ssh_user = gate.config.get("cluster", {}).get("ssh_user")
+    join_url: str | None = None
+    join_token: str | None = None
+    ssh_runner = runner or _run_ssh_command
+
+    for node_plan in cluster_plan.nodes:
+        if node_plan.local_execution and local_node:
+            env, args, _ = k3s_install_spec(
+                gate.config,
+                local_node,
+                all_nodes=nodes,
+                join_url=join_url,
+                join_token=join_token,
+            )
+            ok, detail = _run_pipeline(
+                ["curl", "-sfL", "https://get.k3s.io"],
+                ["sh", "-s", "-", *args],
+                env=env,
+            )
+            node_plan.status = "installed" if ok else "failed"
+            node_plan.detail = detail
+        else:
+            if node_plan.role != "init-server" and not join_token:
+                init = init_server_node(nodes)
+                if init:
+                    token_ok, token_detail = fetch_join_token_from_init(init, ssh_user=ssh_user, runner=ssh_runner)
+                    if token_ok:
+                        join_token = token_detail.strip()
+                        join_url = f"https://{init.primary_ip}:6443"
+                        env, args, _ = k3s_install_spec(
+                            gate.config,
+                            node_plan.node,
+                            all_nodes=nodes,
+                            join_url=join_url,
+                            join_token=join_token,
+                        )
+                        node_plan.k3s_env = env
+                        node_plan.k3s_args = args
+            apply_cluster_node_plan(node_plan, ssh_user=ssh_user, runner=ssh_runner)
+
+        if node_plan.role == "init-server" and node_plan.status == "installed":
+            init = init_server_node(nodes)
+            if init:
+                token_ok, token_detail = fetch_join_token_from_init(init, ssh_user=ssh_user, runner=ssh_runner)
+                if token_ok:
+                    join_token = token_detail.strip()
+                    join_url = f"https://{init.primary_ip}:6443"
+
+    cluster_health = assess_cluster_nodes(gate.config, ssh_user=ssh_user, runner=ssh_runner)
+    report = build_install_report(
+        command="styxctl install cluster",
+        plan=base_plan,
+        gate=gate,
+        dry_run=False,
+        pre_inventory=pre_inventory,
+        post_inventory=collect_inventory(),
+    )
+    report["cluster"] = cluster_plan.to_dict()
+    report["cluster_health"] = cluster_health
+    report["status"] = "INSTALLED" if cluster_health.get("healthy") else "INSTALLED_WITH_ISSUES"
+
+    if any(item.status == "failed" for item in cluster_plan.nodes):
+        return report, 1
+    if not cluster_health.get("healthy"):
+        return report, 1
+    return report, 0
+
+
+def run_cluster_doctor(*, config_path: str | Path | None = None) -> dict[str, Any]:
+    config = load_config(config_path) if config_path else load_config(find_config())
+    ssh_user = config.get("cluster", {}).get("ssh_user") if isinstance(config.get("cluster"), dict) else None
+    return assess_cluster_nodes(config, ssh_user=ssh_user)

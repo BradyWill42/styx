@@ -19,7 +19,7 @@ from .config import (
     validate_config,
 )
 from .inventory import collect_inventory
-from .install import run_install_doctor, run_install_local, run_install_plan_preview
+from .install import run_install_cluster, run_install_doctor, run_install_local, run_install_plan_preview, run_cluster_doctor
 from .install_report import render_install_text, save_install_report
 from .ports import PORT_BLOCKS, PORT_PLAN, check_reserved_ports, port_purpose
 from .remediation import (
@@ -393,6 +393,10 @@ def install_status_local(
     table.add_row("wg0 preserved", "yes" if health.wg0_preserved else "no")
     table.add_row("config", f"{health.config_path or 'not found'} ({health.config_status})")
     table.add_row("critical ports", "clear" if health.critical_ports_clear else "conflicts")
+    if health.cluster_node_count:
+        table.add_row("cluster nodes configured", str(health.cluster_node_count))
+        if health.local_node:
+            table.add_row("local cluster node", health.local_node)
 
     console.print(table)
     if health.warnings:
@@ -442,6 +446,78 @@ def install_plan_local(
     if gate.get("message"):
         console.print(f"[red]Install blocked:[/red] {gate['message']}")
     _print_install_report(report, exit_code=exit_code)
+
+
+@install_app.command("cluster")
+def install_cluster(
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show planned cluster actions without changing nodes."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Join all configured nodes without confirmation."),
+    path: Path | None = typer.Option(None, "--path", help="Path to styx.yaml or styx.yml."),
+) -> None:
+    """Install and join all k3s nodes listed in styx.yaml using their configured IPs."""
+    report, exit_code = run_install_cluster(dry_run=dry_run, yes=yes, config_path=path)
+    if report.get("status") == "CONFIRMATION_REQUIRED":
+        pending = report.get("pending_count", 0)
+        console.print(render_install_text(report))
+        if not typer.confirm(f"Apply k3s cluster setup to {pending} remote node(s)?", default=False):
+            console.print("No changes were made.")
+            raise typer.Exit(code=0)
+        report, exit_code = run_install_cluster(dry_run=False, yes=True, config_path=path)
+    gate = report.get("gate", {})
+    if gate.get("message"):
+        console.print(f"[red]Install blocked:[/red] {gate['message']}")
+    _print_install_report(report, exit_code=exit_code)
+
+
+@install_status_app.command("cluster")
+def install_status_cluster(
+    path: Path | None = typer.Option(None, "--path", help="Path to styx.yaml or styx.yml."),
+) -> None:
+    """Show k3s cluster node status for all configured IPs."""
+    health = run_cluster_doctor(config_path=path)
+    table = Table(title="Styx k3s Cluster Status")
+    table.add_column("Node")
+    table.add_column("Role")
+    table.add_column("IPv4")
+    table.add_column("IPv6")
+    table.add_column("Reachable")
+    table.add_column("k3s Active")
+
+    for node in health.get("nodes", []):
+        table.add_row(
+            node.get("name", "unknown"),
+            node.get("role", "unknown"),
+            node.get("ipv4") or "-",
+            node.get("ipv6") or "-",
+            "yes" if node.get("reachable") else "no",
+            "yes" if node.get("k3s_active") else "no",
+        )
+
+    console.print(table)
+    kubectl_nodes = health.get("kubectl_nodes") or []
+    if kubectl_nodes:
+        console.print(f"kubectl nodes: {', '.join(kubectl_nodes)}")
+    if health.get("issues"):
+        console.print("[red]Issues:[/red]")
+        for issue in health["issues"]:
+            console.print(f"  - {issue}")
+        raise typer.Exit(code=1)
+
+
+@install_doctor_app.command("cluster")
+def install_doctor_cluster(
+    path: Path | None = typer.Option(None, "--path", help="Path to styx.yaml or styx.yml."),
+) -> None:
+    """Diagnose k3s cluster health across all configured node IPs."""
+    health = run_cluster_doctor(config_path=path)
+    if health.get("healthy"):
+        console.print("[green]Cluster doctor: all configured k3s nodes are healthy[/green]")
+        return
+    console.print("[red]Cluster doctor: blocking cluster issues found[/red]")
+    for issue in health.get("issues", []):
+        console.print(f"  - {issue}")
+    console.print("  action: run `styxctl install local --yes` on each node, then `styxctl install cluster --yes`")
+    raise typer.Exit(code=1)
 
 
 def _future_app(label: str, milestone: str) -> typer.Typer:

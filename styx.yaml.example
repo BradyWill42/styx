@@ -2,6 +2,7 @@ cluster:
   name: styx
   domain: styx.net
   mode: dual-stack
+  ssh_user: ubuntu
 
 network:
   ipv4_supernet: 10.0.0.0/14
@@ -24,6 +25,20 @@ wireguard:
   interface: Styx
   port: 47800
   shared_server_identity: true
+
+nodes:
+  - name: pistyx
+    ipv4: 10.0.0.1
+    ipv6: fd00:cafe::1
+    role: init-server
+  - name: pegasus
+    ipv4: 10.0.0.2
+    ipv6: fd00:cafe::2
+    role: server
+  - name: hydra
+    ipv4: 10.0.0.3
+    ipv6: fd00:cafe::3
+    role: agent
 
 dns:
   provider: duckdns

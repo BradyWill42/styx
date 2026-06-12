@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from .ports import RESERVED_PORT_END, RESERVED_PORT_START
+from .nodes import parse_nodes, validate_nodes
 
 
 DEFAULT_CONFIG_FILENAMES = ("styx.yaml", "styx.yml")
@@ -159,6 +160,19 @@ def validate_config(config: dict[str, Any]) -> list[ValidationIssue]:
         if siem_map and siem_map.get("enabled") is True:
             _require_str(siem_map.get("provider"), "siem.provider", issues)
 
+    nodes = parse_nodes(config)
+    if nodes:
+        for message in validate_nodes(nodes):
+            issues.append(ValidationIssue("error", "nodes", message))
+    else:
+        issues.append(
+            ValidationIssue(
+                "warning",
+                "nodes",
+                "no cluster nodes defined; install cluster requires nodes with IPs in styx.yaml",
+            )
+        )
+
     return issues
 
 
@@ -193,4 +207,10 @@ def format_config_summary(config: dict[str, Any], config_path: Path | None) -> s
         provider = siem.get("provider")
         provider_suffix = f" ({provider})" if provider else ""
         lines.append(f"SIEM: {'enabled' if siem.get('enabled') else 'disabled'}{provider_suffix}")
+    nodes = parse_nodes(config)
+    if nodes:
+        lines.append(f"Nodes: {len(nodes)} configured")
+        for node in nodes:
+            ips = ", ".join(filter(None, (node.ipv4, node.ipv6)))
+            lines.append(f"  - {node.name} ({node.role}) {ips}")
     return "\n".join(lines).rstrip() + "\n"

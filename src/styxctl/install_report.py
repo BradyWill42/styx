@@ -57,8 +57,26 @@ def render_install_text(report: dict[str, Any]) -> str:
                 f"  Styx port listening: {'yes' if health.get('styx_port_listening') else 'no'}",
                 f"  wg0 preserved: {'yes' if health.get('wg0_preserved') else 'no'}",
                 f"  critical ports clear: {'yes' if health.get('critical_ports_clear') else 'no'}",
+                f"  local cluster node: {health.get('local_node') or 'unmatched'}",
+                f"  cluster nodes configured: {health.get('cluster_node_count', 0)}",
             ]
         )
+
+    cluster = report.get("cluster")
+    if cluster:
+        lines.extend(["", "Cluster plan:", f"  init node: {cluster.get('init_node', 'unknown')}"])
+        for node in cluster.get("nodes", []):
+            node_info = node.get("node", {})
+            lines.append(
+                f"  - {node_info.get('name')} ({node.get('role')}) "
+                f"[{node.get('status')}] -> {node.get('command_display')}"
+            )
+
+    cluster_health = report.get("cluster_health")
+    if cluster_health:
+        lines.extend(["", "Cluster health:", f"  healthy: {'yes' if cluster_health.get('healthy') else 'no'}"])
+        if cluster_health.get("kubectl_nodes"):
+            lines.append(f"  kubectl nodes: {', '.join(cluster_health['kubectl_nodes'])}")
 
     blocking = report.get("blocking", [])
     warnings = report.get("warnings", [])

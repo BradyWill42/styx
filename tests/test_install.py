@@ -12,9 +12,11 @@ from styxctl.install import (
     InstallGateResult,
     build_install_plan,
     check_install_gate,
+    run_install_cluster,
     run_install_local,
     run_install_plan_preview,
 )
+from styxctl.k3s_cluster import build_cluster_plan
 from styxctl.inventory import SystemInventory
 from styxctl.ports import PortScanResult
 
@@ -144,6 +146,65 @@ def test_build_install_plan_includes_k3s_and_styx_wireguard(tmp_path, monkeypatc
     k3s_step = next(step for step in plan.steps if step.name == "k3s")
     assert k3s_step.status == "pending"
     assert "--cluster-cidr" in (k3s_step.command_display or "")
+    assert "--cluster-init" in (k3s_step.command_display or "")
+    assert plan.local_node == "pistyx"
+    assert plan.cluster_plan is not None
+    assert len(plan.cluster_plan.nodes) == 3
+
+
+def test_build_cluster_plan_uses_node_ips(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config_path = _write_example_config(tmp_path)
+    from styxctl.config import load_config
+
+    config = load_config(config_path)
+    cluster_plan = build_cluster_plan(config)
+    assert cluster_plan.init_node == "pistyx"
+    init_plan = cluster_plan.nodes[0]
+    assert init_plan.role == "init-server"
+    assert "10.0.0.1" in init_plan.node_ips
+    assert "--node-ip" in init_plan.command_display
+    assert "--tls-san" in init_plan.command_display
+
+
+def test_install_cluster_dry_run(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_example_config(tmp_path)
+    monkeypatch.setattr("styxctl.install.collect_inventory", _base_inventory)
+    result = runner.invoke(app, ["install", "cluster", "--dry-run"])
+    assert result.exit_code == 0
+    assert "Cluster plan" in result.stdout or "cluster" in result.stdout.lower()
+
+
+def test_run_install_cluster_mocked_ssh(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config_path = _write_example_config(tmp_path)
+    monkeypatch.setattr("styxctl.install.collect_inventory", _base_inventory)
+
+    def fake_ssh(target: str, command: str) -> tuple[bool, str]:
+        if "node-token" in command:
+            return True, "test-token"
+        if "kubectl get nodes" in command:
+            return True, '{"items":[{"metadata":{"name":"pistyx"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
+        return True, "active"
+
+    monkeypatch.setattr("styxctl.install._run_ssh_command", fake_ssh)
+    monkeypatch.setattr(
+        "styxctl.install._run_pipeline",
+        lambda *args, **kwargs: (True, "local k3s installed"),
+    )
+    monkeypatch.setattr(
+        "styxctl.k3s_cluster._run_ssh_command",
+        fake_ssh,
+    )
+    report, exit_code = run_install_cluster(
+        dry_run=False,
+        yes=True,
+        config_path=config_path,
+        runner=fake_ssh,
+    )
+    assert report["cluster"] is not None
+    assert exit_code in (0, 1)
 
 
 def test_run_install_local_dry_run_writes_report(tmp_path, monkeypatch):
