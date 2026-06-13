@@ -75,17 +75,14 @@ class SystemInventory:
 
 def safe_run(name: str, command: list[str], timeout: float = 8.0) -> CommandResult:
     """Run a read-only command safely and record all failure modes."""
+    def _result(**kwargs: object) -> CommandResult:
+        defaults = {"available": True, "returncode": None, "stdout": "", "stderr": "", "timed_out": False, "error": None}
+        defaults.update(kwargs)
+        return CommandResult(name=name, command=command, **defaults)
+
     executable = shutil.which(command[0])
     if executable is None:
-        return CommandResult(
-            name=name,
-            command=command,
-            available=False,
-            returncode=None,
-            stdout="",
-            stderr="",
-            error=f"command not found: {command[0]}",
-        )
+        return _result(available=False, returncode=None, error=f"command not found: {command[0]}")
 
     resolved = [executable, *command[1:]]
     try:
@@ -99,10 +96,7 @@ def safe_run(name: str, command: list[str], timeout: float = 8.0) -> CommandResu
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout or b"").decode(errors="replace")
         stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode(errors="replace")
-        return CommandResult(
-            name=name,
-            command=command,
-            available=True,
+        return _result(
             returncode=None,
             stdout=stdout or "",
             stderr=stderr or "",
@@ -110,20 +104,9 @@ def safe_run(name: str, command: list[str], timeout: float = 8.0) -> CommandResu
             error=f"timed out after {timeout} seconds",
         )
     except OSError as exc:
-        return CommandResult(
-            name=name,
-            command=command,
-            available=True,
-            returncode=None,
-            stdout="",
-            stderr="",
-            error=str(exc),
-        )
+        return _result(returncode=None, error=str(exc))
 
-    return CommandResult(
-        name=name,
-        command=command,
-        available=True,
+    return _result(
         returncode=completed.returncode,
         stdout=completed.stdout or "",
         stderr=completed.stderr or "",
@@ -180,9 +163,7 @@ def parse_nameservers(resolv_conf: str) -> list[str]:
 
 def parse_ip_route_src(output: str) -> str | None:
     match = re.search(r"\bsrc\s+(\S+)", output)
-    if match:
-        return match.group(1)
-    return None
+    return match.group(1) if match else None
 
 
 def parse_ip_br_addr(output: str) -> tuple[list[str], list[str]]:
@@ -205,32 +186,20 @@ def detect_binaries(names: Iterable[str]) -> dict[str, str | None]:
 
 
 def detect_service(service_name: str, commands: dict[str, CommandResult]) -> dict[str, str | None]:
-    active = safe_run(f"systemctl_is_active_{service_name}", ["systemctl", "is-active", service_name], timeout=3.0)
-    enabled = safe_run(f"systemctl_is_enabled_{service_name}", ["systemctl", "is-enabled", service_name], timeout=3.0)
-    commands[active.name] = active
-    commands[enabled.name] = enabled
-    return {
-        "active": active.stdout.strip() or ("missing" if active.returncode not in (0, None) else None),
-        "enabled": enabled.stdout.strip() or ("missing" if enabled.returncode not in (0, None) else None),
-    }
+    def _state(kind: str) -> str | None:
+        result = safe_run(f"systemctl_is_{kind}_{service_name}", ["systemctl", f"is-{kind}", service_name], timeout=3.0)
+        commands[result.name] = result
+        value = result.stdout.strip()
+        return value or ("missing" if result.returncode not in (0, None) else None)
+
+    return {"active": _state("active"), "enabled": _state("enabled")}
 
 
-def paths_that_exist(paths: Iterable[str]) -> list[str]:
+def _existing(paths: Iterable[str], *, glob: bool = False) -> list[str]:
     found: list[str] = []
     for raw in paths:
-        path = Path(raw)
-        try:
-            if path.exists():
-                found.append(str(path))
-        except OSError:
-            continue
-    return found
-
-
-def glob_that_exists(patterns: Iterable[str]) -> list[str]:
-    found: list[str] = []
-    for pattern in patterns:
-        for path in sorted(Path("/").glob(pattern.lstrip("/"))):
+        candidates = sorted(Path("/").glob(raw.lstrip("/"))) if glob else [Path(raw)]
+        for path in candidates:
             try:
                 if path.exists():
                     found.append(str(path))
@@ -239,29 +208,51 @@ def glob_that_exists(patterns: Iterable[str]) -> list[str]:
     return found
 
 
+ARTIFACT_PATHS = {
+    "old_k3s_files": (
+        "/usr/local/bin/k3s",
+        "/etc/systemd/system/k3s.service",
+        "/etc/systemd/system/k3s-agent.service",
+        "/lib/systemd/system/k3s.service",
+        "/lib/systemd/system/k3s-agent.service",
+        "/var/lib/rancher/k3s",
+        "/etc/rancher/k3s",
+        "/run/k3s",
+    ),
+    "old_kubelet_state": ("/var/lib/kubelet",),
+    "old_cni_configs": ("/etc/cni", "/var/lib/cni"),
+    "old_flannel_state": ("/run/flannel",),
+}
+INTERFACE_ARTIFACTS = {
+    "old_cni_interfaces": ("cni0",),
+    "old_flannel_interfaces": ("flannel.1", "flannel-v6.1"),
+    "old_styx_interface_exact": ("Styx",),
+}
+CNI_INTERFACE_NAMES = frozenset({"cni0", "flannel.1", "flannel-v6.1"})
+SERVICE_UNITS = {
+    "k3s": "k3s.service",
+    "k3s_agent": "k3s-agent.service",
+    "containerd": "containerd.service",
+    "docker": "docker.service",
+    "wazuh_agent": "wazuh-agent.service",
+    "wazuh_manager": "wazuh-manager.service",
+    "watchdog": "watchdog.service",
+    "styx": "styx.service",
+}
+BINARY_NAMES = (
+    "k3s", "kubectl", "containerd", "docker", "wg",
+    "wazuh-control", "wazuh-agentd", "watchdog", "nft", "iptables", "ip6tables", "ss",
+)
+
+
 def detect_artifacts(interface_names: Iterable[str]) -> dict[str, list[str]]:
     interface_set = set(interface_names)
-    return {
-        "old_k3s_files": paths_that_exist(
-            [
-                "/usr/local/bin/k3s",
-                "/etc/systemd/system/k3s.service",
-                "/etc/systemd/system/k3s-agent.service",
-                "/lib/systemd/system/k3s.service",
-                "/lib/systemd/system/k3s-agent.service",
-                "/var/lib/rancher/k3s",
-                "/etc/rancher/k3s",
-                "/run/k3s",
-            ]
-        ),
-        "old_kubelet_state": paths_that_exist(["/var/lib/kubelet"]),
-        "old_cni_configs": paths_that_exist(["/etc/cni", "/var/lib/cni"]),
-        "old_flannel_state": paths_that_exist(["/run/flannel"]),
-        "old_cni_interfaces": [name for name in ("cni0",) if name in interface_set],
-        "old_flannel_interfaces": [name for name in ("flannel.1", "flannel-v6.1") if name in interface_set],
-        "old_styx_interface_exact": [name for name in ("Styx",) if name in interface_set],
-        "old_temporary_styx_files": glob_that_exists(["/tmp/styx*", "/var/tmp/styx*"]),
-    }
+    artifacts = {name: _existing(paths) for name, paths in ARTIFACT_PATHS.items()}
+    artifacts.update(
+        {name: [item for item in names if item in interface_set] for name, names in INTERFACE_ARTIFACTS.items()}
+    )
+    artifacts["old_temporary_styx_files"] = _existing(["/tmp/styx*", "/var/tmp/styx*"], glob=True)
+    return artifacts
 
 
 def detect_firewall_backend(commands: dict[str, CommandResult]) -> dict[str, object]:
@@ -327,38 +318,12 @@ def collect_inventory() -> SystemInventory:
     wireguard_interfaces = parse_wg_interfaces(commands["wg_show_interfaces"], interface_names)
     port_scan = check_reserved_ports()
 
-    binary_names = [
-        "k3s",
-        "kubectl",
-        "containerd",
-        "docker",
-        "wg",
-        "wazuh-control",
-        "wazuh-agentd",
-        "watchdog",
-        "nft",
-        "iptables",
-        "ip6tables",
-        "ss",
-    ]
-    detected_binaries = detect_binaries(binary_names)
+    detected_binaries = detect_binaries(BINARY_NAMES)
 
-    detected_services = {
-        name: detect_service(service, commands)
-        for name, service in {
-            "k3s": "k3s.service",
-            "k3s_agent": "k3s-agent.service",
-            "containerd": "containerd.service",
-            "docker": "docker.service",
-            "wazuh_agent": "wazuh-agent.service",
-            "wazuh_manager": "wazuh-manager.service",
-            "watchdog": "watchdog.service",
-            "styx": "styx.service",
-        }.items()
-    }
+    detected_services = {name: detect_service(service, commands) for name, service in SERVICE_UNITS.items()}
 
     detected_artifacts = detect_artifacts(interface_names)
-    cni_interfaces = [name for name in interface_names if name in {"cni0", "flannel.1", "flannel-v6.1"}]
+    cni_interfaces = [name for name in interface_names if name in CNI_INTERFACE_NAMES]
     firewall_backend = detect_firewall_backend(commands)
 
     time_sync_status = commands["timedatectl"].stdout.strip() or commands["timedatectl"].stderr.strip() or "unknown"

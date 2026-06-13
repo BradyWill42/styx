@@ -168,7 +168,7 @@ def sysprep_safe_local() -> None:
     )
 
 
-def _not_implemented_future(command_name: str, milestone: str) -> None:
+def _not_implemented(command_name: str, milestone: str) -> None:
     console.print(f"{command_name} is not implemented in {milestone}.")
     console.print("No changes were made.")
 
@@ -176,13 +176,13 @@ def _not_implemented_future(command_name: str, milestone: str) -> None:
 @sysprep_reset_app.command("local")
 def sysprep_reset_local() -> None:
     """Future: interactive reset of known Styx/k3s/CNI leftovers."""
-    _not_implemented_future("styxctl sysprep reset local", "MVP3")
+    _not_implemented("styxctl sysprep reset local", "MVP3")
 
 
 @sysprep_nuke_app.command("local")
 def sysprep_nuke_local() -> None:
     """Future: destructive force-clear with confirmation."""
-    _not_implemented_future("styxctl sysprep nuke local", "MVP3")
+    _not_implemented("styxctl sysprep nuke local", "MVP3")
 
 
 @ports_check_app.command("local")
@@ -339,7 +339,7 @@ def _future_app(label: str, milestone: str) -> typer.Typer:
 
     @future.command("soon")
     def soon() -> None:  # pragma: no cover - simple placeholder
-        _not_implemented_future(f"{label} commands", milestone)
+        _not_implemented(f"{label} commands", milestone)
 
     return future
 

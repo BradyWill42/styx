@@ -293,17 +293,19 @@ def find_report_bundle(hostname: str | None = None, base: Path | None = None) ->
     return {"json": json_path, "text": text_path, "dir": report_dir}
 
 
-def load_saved_report(hostname: str | None = None, base: Path | None = None) -> dict[str, Any]:
+def _report_bundle(hostname: str | None = None, base: Path | None = None) -> dict[str, Path]:
     bundle = find_report_bundle(hostname=hostname, base=base)
     if bundle is None:
         raise FileNotFoundError("No saved sysprep report found under ./reports/styx/")
-    return json.loads(bundle["json"].read_text(encoding="utf-8"))
+    return bundle
+
+
+def load_saved_report(hostname: str | None = None, base: Path | None = None) -> dict[str, Any]:
+    return json.loads(_report_bundle(hostname, base)["json"].read_text(encoding="utf-8"))
 
 
 def load_saved_report_text(hostname: str | None = None, base: Path | None = None) -> str:
-    bundle = find_report_bundle(hostname=hostname, base=base)
-    if bundle is None:
-        raise FileNotFoundError("No saved sysprep report found under ./reports/styx/")
+    bundle = _report_bundle(hostname, base)
     if bundle["text"].is_file():
         return bundle["text"].read_text(encoding="utf-8")
     return render_sysprep_text(load_saved_report(hostname=hostname, base=base))

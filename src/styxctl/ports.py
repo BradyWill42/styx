@@ -198,12 +198,10 @@ def _line_to_conflict(line: str) -> PortConflict | None:
 
 
 def parse_ss_output(output: str) -> list[PortConflict]:
-    conflicts: list[PortConflict] = []
-    for line in output.splitlines():
-        conflict = _line_to_conflict(line)
-        if conflict is not None:
-            conflicts.append(conflict)
-    return sorted(conflicts, key=lambda item: (item.port, item.protocol, item.pid or 0))
+    return sorted(
+        (conflict for line in output.splitlines() if (conflict := _line_to_conflict(line))),
+        key=lambda item: (item.port, item.protocol, item.pid or 0),
+    )
 
 
 def _scan_result(*, scanner: str, command_available: bool, **fields: object) -> PortScanResult:

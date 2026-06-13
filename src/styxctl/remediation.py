@@ -166,38 +166,28 @@ def _remove_path(path: str, inventory: SystemInventory) -> ActionOutcome:
     )
 
 
+def _port_target(conflict: PortConflict) -> str:
+    return f"{conflict.port}/{conflict.protocol}"
+
+
+def _port_outcome(conflict: PortConflict, *, status: str, detail: str) -> ActionOutcome:
+    return ActionOutcome("port", _port_target(conflict), "stop", status, detail)
+
+
 def _stop_pid(conflict: PortConflict, inventory: SystemInventory) -> ActionOutcome:
     if conflict.pid is None:
-        return ActionOutcome(
-            category="port",
-            target=f"{conflict.port}/{conflict.protocol}",
-            action="stop",
-            status="skipped",
-            detail="no pid available",
-        )
+        return _port_outcome(conflict, status="skipped", detail="no pid available")
 
     if conflict.systemd_unit and _is_safe_service_unit(conflict.systemd_unit):
         stop = _systemctl_action(conflict.systemd_unit, "stop", inventory)
         if stop.status == "applied":
             _systemctl_action(conflict.systemd_unit, "disable", inventory)
-        return ActionOutcome(
-            category="port",
-            target=f"{conflict.port}/{conflict.protocol}",
-            action="stop",
-            status=stop.status,
-            detail=f"{conflict.systemd_unit}: {stop.detail}",
-        )
+        return _port_outcome(conflict, status=stop.status, detail=f"{conflict.systemd_unit}: {stop.detail}")
 
     try:
         os.kill(conflict.pid, signal.SIGTERM)
     except OSError as exc:
-        return ActionOutcome(
-            category="port",
-            target=f"{conflict.port}/{conflict.protocol}",
-            action="stop",
-            status="failed",
-            detail=str(exc),
-        )
+        return _port_outcome(conflict, status="failed", detail=str(exc))
 
     time.sleep(0.2)
     try:
@@ -206,10 +196,8 @@ def _stop_pid(conflict: PortConflict, inventory: SystemInventory) -> ActionOutco
     except OSError:
         pass
 
-    return ActionOutcome(
-        category="port",
-        target=f"{conflict.port}/{conflict.protocol}",
-        action="stop",
+    return _port_outcome(
+        conflict,
         status="applied",
         detail=f"stopped pid {conflict.pid} ({conflict.process_name or 'unknown'})",
     )
@@ -230,7 +218,7 @@ def build_port_clear_plan(inventory: SystemInventory) -> RemediationResult:
     skipped: list[str] = []
 
     for conflict in _port_conflicts(inventory, safe=True):
-        target = f"{conflict.port}/{conflict.protocol}"
+        target = _port_target(conflict)
         if conflict.systemd_unit and _is_safe_service_unit(conflict.systemd_unit):
             planned.append(
                 PlannedAction(
@@ -306,48 +294,56 @@ def build_safe_sysprep_plan(inventory: SystemInventory) -> RemediationResult:
     return result
 
 
-def apply_port_clear(inventory: SystemInventory, *, dry_run: bool = False) -> RemediationResult:
-    plan = build_port_clear_plan(inventory)
+def _apply_plan(
+    inventory: SystemInventory,
+    *,
+    build_plan,
+    dry_run: bool,
+    apply,
+) -> RemediationResult:
+    plan = build_plan(inventory)
     plan.dry_run = dry_run
     if dry_run:
         return plan
+    return apply(plan, inventory)
 
-    for conflict in _port_conflicts(inventory, safe=True):
-        plan.outcomes.append(_stop_pid(conflict, inventory))
 
-    refreshed = check_reserved_ports()
-    remaining = [item for item in refreshed.conflicts if item.safe_to_stop]
-    if remaining:
-        plan.skipped.append(
-            f"{len(remaining)} safe conflict(s) still present after cleanup; re-run sysprep check local"
-        )
+def apply_port_clear(inventory: SystemInventory, *, dry_run: bool = False) -> RemediationResult:
+    def _apply(plan: RemediationResult, inv: SystemInventory) -> RemediationResult:
+        for conflict in _port_conflicts(inv, safe=True):
+            plan.outcomes.append(_stop_pid(conflict, inv))
 
-    return plan
+        refreshed = check_reserved_ports()
+        remaining = [item for item in refreshed.conflicts if item.safe_to_stop]
+        if remaining:
+            plan.skipped.append(
+                f"{len(remaining)} safe conflict(s) still present after cleanup; re-run sysprep check local"
+            )
+        return plan
+
+    return _apply_plan(inventory, build_plan=build_port_clear_plan, dry_run=dry_run, apply=_apply)
 
 
 def apply_safe_sysprep(inventory: SystemInventory, *, dry_run: bool = False) -> RemediationResult:
-    plan = build_safe_sysprep_plan(inventory)
-    plan.dry_run = dry_run
-    if dry_run:
+    def _apply(plan: RemediationResult, inv: SystemInventory) -> RemediationResult:
+        port_result = apply_port_clear(inv, dry_run=False)
+        plan.outcomes.extend(port_result.outcomes)
+        plan.skipped.extend(port_result.skipped)
+
+        for unit in SAFE_SYSTEMD_UNITS:
+            needs_stop, needs_disable = _service_needs_remediation(
+                inv.detected_services.get(SERVICE_KEYS[unit], {})
+            )
+            if needs_stop:
+                plan.outcomes.append(_systemctl_action(unit, "stop", inv))
+            if needs_disable:
+                plan.outcomes.append(_systemctl_action(unit, "disable", inv))
+
+        for path in inv.detected_artifacts.get("old_temporary_styx_files", []):
+            plan.outcomes.append(_remove_path(path, inv))
         return plan
 
-    port_result = apply_port_clear(inventory, dry_run=False)
-    plan.outcomes.extend(port_result.outcomes)
-    plan.skipped.extend(port_result.skipped)
-
-    for unit in SAFE_SYSTEMD_UNITS:
-        needs_stop, needs_disable = _service_needs_remediation(
-            inventory.detected_services.get(SERVICE_KEYS[unit], {})
-        )
-        if needs_stop:
-            plan.outcomes.append(_systemctl_action(unit, "stop", inventory))
-        if needs_disable:
-            plan.outcomes.append(_systemctl_action(unit, "disable", inventory))
-
-    for path in inventory.detected_artifacts.get("old_temporary_styx_files", []):
-        plan.outcomes.append(_remove_path(path, inventory))
-
-    return plan
+    return _apply_plan(inventory, build_plan=build_safe_sysprep_plan, dry_run=dry_run, apply=_apply)
 
 
 def render_remediation_summary(result: RemediationResult, *, title: str) -> str:
