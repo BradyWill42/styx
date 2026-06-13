@@ -1,8 +1,8 @@
 # styxctl
 
-**The control CLI for [Styx](https://github.com/BradyWill42/styxctl)** — a k3s-native, dual-stack WireGuard mesh and access gateway platform.
+**The control CLI for [Styx](https://github.com/BradyWill42/styx)** — a k3s-native, dual-stack WireGuard mesh and access gateway platform.
 
-`styxctl` prepares Linux gateway nodes for Styx installation. On this branch, **MVP1** is fully implemented: read-only assessment, reserved-port scanning, and bounded safe remediation. Install and cluster commands live on the [`MVP2`](https://github.com/BradyWill42/styxctl/tree/MVP2) and [`main`](https://github.com/BradyWill42/styxctl/tree/main) branches.
+`styxctl` prepares Linux gateway nodes for Styx installation. On this branch, **MVP1** is fully implemented: read-only assessment, reserved-port scanning, and bounded safe remediation. Install and cluster commands live on the [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) and [`main`](https://github.com/BradyWill42/styx/tree/main) branches.
 
 Every command is **command-discovery-first**: no flags, just composable subcommands with shell tab completion.
 
@@ -98,8 +98,8 @@ Dashed lines indicate milestones not yet available on this branch.
 | Branch | Contents | Use when |
 |--------|----------|----------|
 | **`MVP1` (you are here)** | Assessment and safe remediation | Preparing a single gateway node |
-| [`MVP2`](https://github.com/BradyWill42/styxctl/tree/MVP2) | MVP1 + k3s / WireGuard install | Installing the k3s foundation |
-| [`main`](https://github.com/BradyWill42/styxctl/tree/main) | MVP1 + MVP2 integrated release | Default — full platform prep and install |
+| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP1 + k3s / WireGuard install | Installing the k3s foundation |
+| [`main`](https://github.com/BradyWill42/styx/tree/main) | MVP1 + MVP2 integrated release | Default — full platform prep and install |
 
 All branches share the same CLI design and safety rules. Feature work lands on `MVP1` or `MVP2` first, then merges into `main`.
 
@@ -110,7 +110,7 @@ All branches share the same CLI design and safety rules. Feature work lands on `
 ### Install `styxctl`
 
 ```bash
-git clone https://github.com/BradyWill42/styxctl.git
+git clone https://github.com/BradyWill42/styx.git
 cd styxctl
 git checkout MVP1
 
@@ -242,7 +242,7 @@ MVP2 adds:
 - Multi-node cluster join over SSH from the init-server
 - `install plan`, `install apply`, `install status`, and `install doctor` commands
 
-See the [README on `main`](https://github.com/BradyWill42/styxctl/blob/main/README.md) for the full MVP2 workflow.
+See the [README on `main`](https://github.com/BradyWill42/styx/blob/main/README.md) for the full MVP2 workflow.
 
 ---
 
