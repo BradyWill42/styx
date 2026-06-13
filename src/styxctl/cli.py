@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -86,6 +89,21 @@ def _preview_remediation(*, title: str, build_plan) -> None:
     console.print(render_remediation_summary(result, title=title))
 
 
+def _load_config_or_exit() -> tuple[dict[str, Any], Path | None]:
+    config_path = find_config()
+    try:
+        return load_config(config_path), config_path
+    except ConfigError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
+def _report_missing(exc: FileNotFoundError) -> None:
+    console.print(f"[red]Error:[/red] {exc}")
+    console.print("Run `styxctl sysprep check local` first.")
+    raise typer.Exit(code=1) from exc
+
+
 def _apply_remediation(*, title: str, build_plan, apply_plan) -> None:
     inventory = collect_inventory()
     plan = build_plan(inventory)
@@ -115,16 +133,20 @@ def sysprep_check_local() -> None:
         raise typer.Exit(code=1)
 
 
+def _mvp4_placeholder(message: str) -> None:
+    console.print(f"MVP4 placeholder: {message}")
+
+
 @sysprep_check_app.command("all")
 def sysprep_check_all() -> None:
     """Future: run sysprep checks across all nodes."""
-    console.print("MVP4 placeholder: no remote checks were run.")
+    _mvp4_placeholder("no remote checks were run.")
 
 
 @sysprep_check_app.command("node")
 def sysprep_check_node() -> None:
     """Future: run sysprep check on one named node."""
-    console.print("MVP4 placeholder: no remote node check was run.")
+    _mvp4_placeholder("no remote node check was run.")
 
 
 @sysprep_safe_preview_app.command("local")
@@ -235,24 +257,14 @@ def ports_clear_local() -> None:
 @config_app.command("show")
 def config_show() -> None:
     """Show the active Styx config summary from ./styx.yaml."""
-    config_path = find_config()
-    try:
-        config = load_config(config_path)
-    except ConfigError as exc:
-        console.print(f"[red]Error:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
+    config, config_path = _load_config_or_exit()
     console.print(format_config_summary(config, config_path))
 
 
 @config_app.command("validate")
 def config_validate() -> None:
     """Validate ./styx.yaml structure for Styx."""
-    config_path = find_config()
-    try:
-        config = load_config(config_path)
-    except ConfigError as exc:
-        console.print(f"[red]Error:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
+    config, config_path = _load_config_or_exit()
 
     issues = validate_config(config)
     status = config_status(issues)
@@ -279,21 +291,16 @@ def report_show_local() -> None:
     try:
         console.print(load_saved_report_text(), end="")
     except FileNotFoundError as exc:
-        console.print(f"[red]Error:[/red] {exc}")
-        console.print("Run `styxctl sysprep check local` first.")
-        raise typer.Exit(code=1) from exc
+        _report_missing(exc)
 
 
 @report_json_app.command("local")
 def report_json_local() -> None:
     """Show the latest saved local sysprep report as JSON."""
     try:
-        report = load_saved_report()
-        console.print_json(data=report)
+        console.print_json(data=load_saved_report())
     except FileNotFoundError as exc:
-        console.print(f"[red]Error:[/red] {exc}")
-        console.print("Run `styxctl sysprep check local` first.")
-        raise typer.Exit(code=1) from exc
+        _report_missing(exc)
 
 
 def _emit_completion(shell: str) -> None:
@@ -306,22 +313,16 @@ def _emit_completion(shell: str) -> None:
     )
 
 
-@completion_app.command("bash")
-def completion_bash() -> None:
-    """Print bash completion script."""
-    _emit_completion("bash")
+def _completion_command(shell: str):
+    def cmd() -> None:
+        _emit_completion(shell)
+
+    cmd.__doc__ = f"Print {shell} completion script."
+    return cmd
 
 
-@completion_app.command("zsh")
-def completion_zsh() -> None:
-    """Print zsh completion script."""
-    _emit_completion("zsh")
-
-
-@completion_app.command("fish")
-def completion_fish() -> None:
-    """Print fish completion script."""
-    _emit_completion("fish")
+for _shell in ("bash", "zsh", "fish"):
+    completion_app.command(_shell)(_completion_command(_shell))
 
 
 @completion_app.command("install")

@@ -206,24 +206,33 @@ def parse_ss_output(output: str) -> list[PortConflict]:
     return sorted(conflicts, key=lambda item: (item.port, item.protocol, item.pid or 0))
 
 
+def _scan_result(*, scanner: str, command_available: bool, **fields: object) -> PortScanResult:
+    return PortScanResult(
+        range_start=RESERVED_PORT_START,
+        range_end=RESERVED_PORT_END,
+        scanner=scanner,
+        command_available=command_available,
+        returncode=fields.get("returncode"),
+        timed_out=bool(fields.get("timed_out")),
+        error=fields.get("error"),
+        stdout=str(fields.get("stdout") or ""),
+        stderr=str(fields.get("stderr") or ""),
+        conflicts=fields.get("conflicts") or [],
+    )
+
+
 def check_reserved_ports(timeout: float = 5.0) -> PortScanResult:
     """Check only the Styx reserved range, 47800-47850."""
     scanner = shutil.which("ss")
     if scanner is None:
-        return PortScanResult(
-            range_start=RESERVED_PORT_START,
-            range_end=RESERVED_PORT_END,
+        return _scan_result(
             scanner="ss -H -lntup",
             command_available=False,
-            returncode=None,
-            timed_out=False,
             error="ss command not found; install iproute2 to enable port scanning.",
-            stdout="",
-            stderr="",
-            conflicts=[],
         )
 
     command = [scanner, "-H", "-lntup"]
+    scanner_label = " ".join(command)
     try:
         completed = subprocess.run(
             command,
@@ -233,33 +242,24 @@ def check_reserved_ports(timeout: float = 5.0) -> PortScanResult:
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
-        return PortScanResult(
-            range_start=RESERVED_PORT_START,
-            range_end=RESERVED_PORT_END,
-            scanner=" ".join(command),
+        return _scan_result(
+            scanner=scanner_label,
             command_available=True,
-            returncode=None,
             timed_out=True,
             error=f"ss timed out after {timeout} seconds",
             stdout=exc.stdout or "",
             stderr=exc.stderr or "",
-            conflicts=[],
         )
 
     stdout = completed.stdout or ""
-    stderr = completed.stderr or ""
-    conflicts = parse_ss_output(stdout)
-    return PortScanResult(
-        range_start=RESERVED_PORT_START,
-        range_end=RESERVED_PORT_END,
-        scanner=" ".join(command),
+    return _scan_result(
+        scanner=scanner_label,
         command_available=True,
         returncode=completed.returncode,
-        timed_out=False,
         error=None if completed.returncode == 0 else "ss returned a nonzero exit code",
         stdout=stdout,
-        stderr=stderr,
-        conflicts=conflicts,
+        stderr=completed.stderr or "",
+        conflicts=parse_ss_output(stdout),
     )
 
 

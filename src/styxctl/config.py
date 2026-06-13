@@ -134,9 +134,7 @@ def validate_config(config: dict[str, Any]) -> list[ValidationIssue]:
                 )
             )
         port = wireguard.get("port")
-        if port is None:
-            issues.append(ValidationIssue("error", "wireguard.port", "expected an integer port"))
-        elif not isinstance(port, int):
+        if not isinstance(port, int):
             issues.append(ValidationIssue("error", "wireguard.port", "expected an integer port"))
         elif not (RESERVED_PORT_START <= port <= RESERVED_PORT_END):
             issues.append(
