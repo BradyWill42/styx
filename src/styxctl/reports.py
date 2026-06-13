@@ -13,6 +13,7 @@ from .ports import (
     PORT_PLAN,
     RESERVED_PORT_END,
     RESERVED_PORT_START,
+    PortConflict,
     conflicts_for_port,
     planned_protocol,
     port_purpose,
@@ -23,17 +24,16 @@ CRITICAL_PORTS = set(range(47800, 47809))
 
 
 def _service_present(service: dict[str, str | None]) -> bool:
-    values = {value for value in service.values() if value}
-    return bool(values - {"missing", "inactive", "disabled", "not-found", "not found"})
+    inactive = {"missing", "inactive", "disabled", "not-found", "not found"}
+    return bool({value for value in service.values() if value} - inactive)
 
 
 def _artifact_warnings(inventory: SystemInventory) -> list[str]:
-    warnings: list[str] = []
-    for name, found in inventory.detected_artifacts.items():
-        if found:
-            pretty = name.replace("_", " ")
-            warnings.append(f"Detected {pretty}: {', '.join(found)}")
-    return warnings
+    return [
+        f"Detected {name.replace('_', ' ')}: {', '.join(found)}"
+        for name, found in inventory.detected_artifacts.items()
+        if found
+    ]
 
 
 def evaluate_readiness(inventory: SystemInventory) -> tuple[str, list[str], list[str]]:
@@ -47,16 +47,14 @@ def evaluate_readiness(inventory: SystemInventory) -> tuple[str, list[str], list
             f" by {conflict.process_name or 'unknown process'}"
             f"{f' pid {conflict.pid}' if conflict.pid else ''}"
         )
-        if conflict.port in CRITICAL_PORTS:
-            blocking.append(message)
-        else:
-            warnings.append(message)
+        (blocking if conflict.port in CRITICAL_PORTS else warnings).append(message)
 
-    if not inventory.ports.command_available:
+    ports = inventory.ports
+    if not ports.command_available:
         warnings.append("Could not run ss; Styx reserved port scan was not completed")
-    elif inventory.ports.returncode not in (0, None):
+    elif ports.returncode not in (0, None):
         warnings.append("ss returned a nonzero exit code; port scan may be incomplete")
-    elif inventory.ports.timed_out:
+    elif ports.timed_out:
         warnings.append("ss timed out; port scan may be incomplete")
 
     warnings.extend(_artifact_warnings(inventory))
@@ -71,18 +69,15 @@ def evaluate_readiness(inventory: SystemInventory) -> tuple[str, list[str], list
     if inventory.detected_binaries.get("k3s"):
         warnings.append(f"k3s binary detected at {inventory.detected_binaries['k3s']}")
 
-    if _service_present(inventory.detected_services.get("k3s", {})):
-        warnings.append("k3s.service appears to exist or be active")
-    if _service_present(inventory.detected_services.get("k3s_agent", {})):
-        warnings.append("k3s-agent.service appears to exist or be active")
+    for key in ("k3s", "k3s_agent"):
+        if _service_present(inventory.detected_services.get(key, {})):
+            warnings.append(f"{key.replace('_', '-')}.service appears to exist or be active")
 
     if blocking:
-        status = "BLOCKED"
-    elif warnings:
-        status = "READY_WITH_WARNINGS"
-    else:
-        status = "READY"
-    return status, warnings, blocking
+        return "BLOCKED", warnings, blocking
+    if warnings:
+        return "READY_WITH_WARNINGS", warnings, blocking
+    return "READY", warnings, blocking
 
 
 def build_report_data(inventory: SystemInventory, command: str) -> dict[str, Any]:
@@ -109,8 +104,7 @@ def _present_absent(value: bool) -> str:
 
 def _first_line(text: str, fallback: str = "unknown") -> str:
     for line in text.splitlines():
-        stripped = line.strip()
-        if stripped:
+        if stripped := line.strip():
             return stripped
     return fallback
 
@@ -121,166 +115,126 @@ def _block_or_none(lines: list[str], none_text: str = "none") -> str:
     return "\n".join(f"  {line}" for line in lines)
 
 
-def _format_detected(inventory: SystemInventory) -> list[str]:
-    interface_names = set(inventory.interface_names)
-    wg_interfaces = set(inventory.wireguard_interfaces)
-    detected: list[str] = []
-    k3s_path = inventory.detected_binaries.get("k3s")
-    detected.append(f"k3s: {k3s_path if k3s_path else 'not installed'}")
-    detected.append(f"containerd: {inventory.detected_binaries.get('containerd') or 'not installed'}")
-    detected.append(f"Docker: {inventory.detected_binaries.get('docker') or 'not installed'}")
-    detected.append(f"Wazuh: {inventory.detected_binaries.get('wazuh-control') or inventory.detected_binaries.get('wazuh-agentd') or 'not installed'}")
-    detected.append(f"watchdog: {inventory.detected_binaries.get('watchdog') or 'not installed'}")
-    detected.append(f"wg0: {'present, preserved' if 'wg0' in interface_names or 'wg0' in wg_interfaces else 'absent'}")
-    detected.append(f"Styx interface: {_present_absent('Styx' in interface_names or 'Styx' in wg_interfaces)}")
-    detected.append(f"cni0: {_present_absent('cni0' in interface_names)}")
-    detected.append(f"flannel.1: {_present_absent('flannel.1' in interface_names)}")
-    detected.append(f"flannel-v6.1: {_present_absent('flannel-v6.1' in interface_names)}")
-    detected.append(f"firewall backend: {inventory.firewall_backend.get('preferred', 'unknown')}")
-    return detected
+def _conflict_line(conflict: PortConflict) -> str:
+    owner = conflict.process_name or "unknown process"
+    pid = f" pid={conflict.pid}" if conflict.pid else ""
+    unit = f" unit={conflict.systemd_unit}" if conflict.systemd_unit else ""
+    safe = "yes" if conflict.safe_to_stop else "no"
+    extra = f" purpose={port_purpose(conflict.port)}" if conflict.port not in PORT_PLAN else ""
+    return (
+        f"{conflict.port}/{conflict.protocol}: occupied by {owner}{pid}{unit}{extra} "
+        f"safe_to_stop={safe}"
+    )
 
 
-def _format_ports(inventory: SystemInventory) -> list[str]:
-    lines: list[str] = [f"Range: {RESERVED_PORT_START}-{RESERVED_PORT_END}"]
+def _conflicts_from_dict(raw: list[dict[str, Any]]) -> list[PortConflict]:
+    return [
+        PortConflict(
+            protocol=str(item.get("protocol", "")),
+            port=int(item["port"]),
+            process_name=item.get("process_name"),
+            pid=item.get("pid"),
+            systemd_unit=item.get("systemd_unit"),
+            command_line=item.get("command_line"),
+            safe_to_stop=bool(item.get("safe_to_stop")),
+            raw=str(item.get("raw", "")),
+        )
+        for item in raw
+    ]
 
+
+def _format_detected(inv: dict[str, Any]) -> list[str]:
+    interface_names = set(inv.get("interface_names", []))
+    wg_interfaces = set(inv.get("wireguard_interfaces", []))
+    binaries = inv.get("detected_binaries", {})
+    wazuh = binaries.get("wazuh-control") or binaries.get("wazuh-agentd") or "not installed"
+    wg0 = "present, preserved" if {"wg0"} & (interface_names | wg_interfaces) else "absent"
+    styx = _present_absent("Styx" in interface_names or "Styx" in wg_interfaces)
+    return [
+        f"k3s: {binaries.get('k3s') or 'not installed'}",
+        f"containerd: {binaries.get('containerd') or 'not installed'}",
+        f"Docker: {binaries.get('docker') or 'not installed'}",
+        f"Wazuh: {wazuh}",
+        f"watchdog: {binaries.get('watchdog') or 'not installed'}",
+        f"wg0: {wg0}",
+        f"Styx interface: {styx}",
+        f"cni0: {_present_absent('cni0' in interface_names)}",
+        f"flannel.1: {_present_absent('flannel.1' in interface_names)}",
+        f"flannel-v6.1: {_present_absent('flannel-v6.1' in interface_names)}",
+        f"firewall backend: {inv.get('firewall_backend', {}).get('preferred', 'unknown')}",
+    ]
+
+
+def _format_ports(conflicts: list[PortConflict]) -> list[str]:
+    lines = [f"Range: {RESERVED_PORT_START}-{RESERVED_PORT_END}"]
     for port in sorted(PORT_PLAN):
-        protocol = planned_protocol(port)
-        conflicts = conflicts_for_port(inventory.ports.conflicts, port)
-        if conflicts:
-            for conflict in conflicts:
-                owner = conflict.process_name or "unknown process"
-                pid = f" pid={conflict.pid}" if conflict.pid else ""
-                unit = f" unit={conflict.systemd_unit}" if conflict.systemd_unit else ""
-                safe = "yes" if conflict.safe_to_stop else "no"
-                lines.append(
-                    f"{port}/{conflict.protocol}: occupied by {owner}{pid}{unit} safe_to_stop={safe}"
-                )
+        matching = conflicts_for_port(conflicts, port)
+        if matching:
+            lines.extend(_conflict_line(conflict) for conflict in matching)
         else:
-            lines.append(f"{port}/{protocol}: free ({port_purpose(port)})")
+            lines.append(f"{port}/{planned_protocol(port)}: free ({port_purpose(port)})")
 
-    extra_conflicts = [conflict for conflict in inventory.ports.conflicts if conflict.port not in PORT_PLAN]
-    if extra_conflicts:
+    extra = [conflict for conflict in conflicts if conflict.port not in PORT_PLAN]
+    if extra:
         lines.append("Additional occupied reserved ports:")
-        for conflict in extra_conflicts:
-            owner = conflict.process_name or "unknown process"
-            pid = f" pid={conflict.pid}" if conflict.pid else ""
-            unit = f" unit={conflict.systemd_unit}" if conflict.systemd_unit else ""
-            safe = "yes" if conflict.safe_to_stop else "no"
-            lines.append(
-                f"{conflict.port}/{conflict.protocol}: occupied by {owner}{pid}{unit} "
-                f"purpose={port_purpose(conflict.port)} safe_to_stop={safe}"
-            )
+        lines.extend(_conflict_line(conflict) for conflict in extra)
     return lines
 
 
 def render_sysprep_text(report: dict[str, Any]) -> str:
-    inventory_dict = report["inventory"]
-    # The report data is JSON-friendly; the original object is not available here.
-    # Re-read commonly used values from the dict to keep text rendering pure.
-    status = report["status"]
-    warnings = report["warnings"]
-    blocking = report["blocking"]
-
-    ports = inventory_dict["ports"]
-    interface_names = set(inventory_dict.get("interface_names", []))
-    wg_interfaces = set(inventory_dict.get("wireguard_interfaces", []))
-
-    detected_lines = []
-    detected_binaries = inventory_dict.get("detected_binaries", {})
-    firewall_backend = inventory_dict.get("firewall_backend", {})
-    detected_lines.append(f"k3s: {detected_binaries.get('k3s') or 'not installed'}")
-    detected_lines.append(f"containerd: {detected_binaries.get('containerd') or 'not installed'}")
-    detected_lines.append(f"Docker: {detected_binaries.get('docker') or 'not installed'}")
-    detected_lines.append(f"Wazuh: {detected_binaries.get('wazuh-control') or detected_binaries.get('wazuh-agentd') or 'not installed'}")
-    detected_lines.append(f"watchdog: {detected_binaries.get('watchdog') or 'not installed'}")
-    detected_lines.append(f"wg0: {'present, preserved' if 'wg0' in interface_names or 'wg0' in wg_interfaces else 'absent'}")
-    detected_lines.append(f"Styx interface: {_present_absent('Styx' in interface_names or 'Styx' in wg_interfaces)}")
-    detected_lines.append(f"cni0: {_present_absent('cni0' in interface_names)}")
-    detected_lines.append(f"flannel.1: {_present_absent('flannel.1' in interface_names)}")
-    detected_lines.append(f"flannel-v6.1: {_present_absent('flannel-v6.1' in interface_names)}")
-    detected_lines.append(f"firewall backend: {firewall_backend.get('preferred', 'unknown')}")
-
-    port_lines: list[str] = [f"Range: {RESERVED_PORT_START}-{RESERVED_PORT_END}"]
-    conflicts = ports.get("conflicts", [])
-    for port in sorted(PORT_PLAN):
-        protocol = planned_protocol(port)
-        matching = [conflict for conflict in conflicts if conflict.get("port") == port]
-        if matching:
-            for conflict in matching:
-                owner = conflict.get("process_name") or "unknown process"
-                pid = f" pid={conflict.get('pid')}" if conflict.get("pid") else ""
-                unit = f" unit={conflict.get('systemd_unit')}" if conflict.get("systemd_unit") else ""
-                safe = "yes" if conflict.get("safe_to_stop") else "no"
-                port_lines.append(
-                    f"{port}/{conflict.get('protocol')}: occupied by {owner}{pid}{unit} safe_to_stop={safe}"
-                )
-        else:
-            port_lines.append(f"{port}/{protocol}: free ({port_purpose(port)})")
-
-    extra_conflicts = [conflict for conflict in conflicts if conflict.get("port") not in PORT_PLAN]
-    if extra_conflicts:
-        port_lines.append("Additional occupied reserved ports:")
-        for conflict in extra_conflicts:
-            owner = conflict.get("process_name") or "unknown process"
-            pid = f" pid={conflict.get('pid')}" if conflict.get("pid") else ""
-            unit = f" unit={conflict.get('systemd_unit')}" if conflict.get("systemd_unit") else ""
-            safe = "yes" if conflict.get("safe_to_stop") else "no"
-            port_lines.append(
-                f"{conflict.get('port')}/{conflict.get('protocol')}: occupied by {owner}{pid}{unit} "
-                f"purpose={port_purpose(int(conflict.get('port')))} safe_to_stop={safe}"
-            )
-
-    artifacts = inventory_dict.get("detected_artifacts", {})
-    artifact_lines: list[str] = []
-    for name, found in artifacts.items():
-        artifact_lines.append(f"{name.replace('_', ' ')}: {', '.join(found) if found else 'none'}")
-
-    network_lines = inventory_dict.get("network_interfaces", [])
-    dns_resolvers = inventory_dict.get("dns_resolvers", [])
+    inventory = report["inventory"]
+    status, warnings, blocking = report["status"], report["warnings"], report["blocking"]
+    conflicts = _conflicts_from_dict(inventory.get("ports", {}).get("conflicts", []))
+    artifacts = inventory.get("detected_artifacts", {})
+    artifact_lines = [
+        f"{name.replace('_', ' ')}: {', '.join(found) if found else 'none'}"
+        for name, found in artifacts.items()
+    ]
+    dns_resolvers = inventory.get("dns_resolvers", [])
 
     text = f"""Styx Sysprep Report
 ====================
 
-Node: {inventory_dict.get('hostname', 'unknown')}
-FQDN: {inventory_dict.get('fqdn', 'unknown')}
+Node: {inventory.get('hostname', 'unknown')}
+FQDN: {inventory.get('fqdn', 'unknown')}
 Status: {status}
 Generated: {report.get('generated_at', 'unknown')}
 
 System:
-  OS: {inventory_dict.get('os_version', 'unknown')}
-  Arch: {inventory_dict.get('architecture', 'unknown')}
-  Kernel: {inventory_dict.get('kernel_version', 'unknown')}
-  Boot Time: {inventory_dict.get('boot_time') or 'unknown'}
-  Current User: {inventory_dict.get('current_user', 'unknown')}
-  Non-interactive sudo: {_yes_no(bool(inventory_dict.get('sudo_available')))}
-  Time Sync: {_first_line(inventory_dict.get('time_sync_status', ''), 'unknown')}
+  OS: {inventory.get('os_version', 'unknown')}
+  Arch: {inventory.get('architecture', 'unknown')}
+  Kernel: {inventory.get('kernel_version', 'unknown')}
+  Boot Time: {inventory.get('boot_time') or 'unknown'}
+  Current User: {inventory.get('current_user', 'unknown')}
+  Non-interactive sudo: {_yes_no(bool(inventory.get('sudo_available')))}
+  Time Sync: {_first_line(inventory.get('time_sync_status', ''), 'unknown')}
 
 Network:
-  Primary LAN IP: {inventory_dict.get('primary_lan_ip') or 'unknown'}
-  Bootstrap IPv4: {inventory_dict.get('bootstrap_ipv4') or 'unknown'}
-  Bootstrap IPv6: {inventory_dict.get('bootstrap_ipv6') or 'unknown'}
+  Primary LAN IP: {inventory.get('primary_lan_ip') or 'unknown'}
+  Bootstrap IPv4: {inventory.get('bootstrap_ipv4') or 'unknown'}
+  Bootstrap IPv6: {inventory.get('bootstrap_ipv6') or 'unknown'}
   DNS Resolvers: {', '.join(dns_resolvers) if dns_resolvers else 'unknown'}
 
 Network Interfaces:
-{_block_or_none(network_lines)}
+{_block_or_none(inventory.get('network_interfaces', []))}
 
 Default Route:
-{indent(inventory_dict.get('default_route') or 'unknown', '  ')}
+{indent(inventory.get('default_route') or 'unknown', '  ')}
 
 Disk Usage:
-{indent(inventory_dict.get('disk_usage') or 'unknown', '  ')}
+{indent(inventory.get('disk_usage') or 'unknown', '  ')}
 
 Memory and Swap:
-{indent(inventory_dict.get('memory_swap') or 'unknown', '  ')}
+{indent(inventory.get('memory_swap') or 'unknown', '  ')}
 
 Detected:
-{_block_or_none(detected_lines)}
+{_block_or_none(_format_detected(inventory))}
 
 Detected k3s/CNI/Styx Artifacts:
 {_block_or_none(artifact_lines)}
 
 Styx Reserved Ports:
-{_block_or_none(port_lines)}
+{_block_or_none(_format_ports(conflicts))}
 
 Blocking:
 {_block_or_none(blocking)}
@@ -352,5 +306,4 @@ def load_saved_report_text(hostname: str | None = None, base: Path | None = None
         raise FileNotFoundError("No saved sysprep report found under ./reports/styx/")
     if bundle["text"].is_file():
         return bundle["text"].read_text(encoding="utf-8")
-    report = load_saved_report(hostname=hostname, base=base)
-    return render_sysprep_text(report)
+    return render_sysprep_text(load_saved_report(hostname=hostname, base=base))

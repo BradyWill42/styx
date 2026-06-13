@@ -26,6 +26,9 @@ SERVICE_KEYS = {
     "k3s-agent.service": "k3s_agent",
 }
 SAFE_SERVICE_NAME_TOKENS = ("k3s", "styx", "flannel", "cni")
+ACTIVE_STATES = frozenset({"active", "activating", "reloading"})
+ENABLED_STATES = frozenset({"enabled", "enabled-runtime"})
+SYSPREP_SKIP_ARTIFACTS = frozenset({"old_temporary_styx_files", "old_cni_interfaces", "old_flannel_interfaces"})
 
 
 @dataclass(slots=True)
@@ -212,19 +215,21 @@ def _stop_pid(conflict: PortConflict, inventory: SystemInventory) -> ActionOutco
     )
 
 
-def _safe_port_conflicts(inventory: SystemInventory) -> list[PortConflict]:
-    return [conflict for conflict in inventory.ports.conflicts if conflict.safe_to_stop]
+def _port_conflicts(inventory: SystemInventory, *, safe: bool) -> list[PortConflict]:
+    return [conflict for conflict in inventory.ports.conflicts if conflict.safe_to_stop is safe]
 
 
-def _unsafe_port_conflicts(inventory: SystemInventory) -> list[PortConflict]:
-    return [conflict for conflict in inventory.ports.conflicts if not conflict.safe_to_stop]
+def _service_needs_remediation(service: dict[str, str | None]) -> tuple[bool, bool]:
+    active = (service.get("active") or "").lower()
+    enabled = (service.get("enabled") or "").lower()
+    return active in ACTIVE_STATES, enabled in ENABLED_STATES
 
 
 def build_port_clear_plan(inventory: SystemInventory) -> RemediationResult:
     planned: list[PlannedAction] = []
     skipped: list[str] = []
 
-    for conflict in _safe_port_conflicts(inventory):
+    for conflict in _port_conflicts(inventory, safe=True):
         target = f"{conflict.port}/{conflict.protocol}"
         if conflict.systemd_unit and _is_safe_service_unit(conflict.systemd_unit):
             planned.append(
@@ -248,7 +253,7 @@ def build_port_clear_plan(inventory: SystemInventory) -> RemediationResult:
         else:
             skipped.append(f"{target} has no safe stop path")
 
-    for conflict in _unsafe_port_conflicts(inventory):
+    for conflict in _port_conflicts(inventory, safe=False):
         skipped.append(
             f"{conflict.port}/{conflict.protocol} occupied by "
             f"{conflict.process_name or 'unknown process'} (not marked safe to stop)"
@@ -261,11 +266,10 @@ def build_safe_sysprep_plan(inventory: SystemInventory) -> RemediationResult:
     result = build_port_clear_plan(inventory)
 
     for unit in SAFE_SYSTEMD_UNITS:
-        service_key = SERVICE_KEYS[unit]
-        service = inventory.detected_services.get(service_key, {})
-        active = (service.get("active") or "").lower()
-        enabled = (service.get("enabled") or "").lower()
-        if active in {"active", "activating", "reloading"} or enabled in {"enabled", "enabled-runtime"}:
+        needs_stop, needs_disable = _service_needs_remediation(
+            inventory.detected_services.get(SERVICE_KEYS[unit], {})
+        )
+        if needs_stop or needs_disable:
             result.planned.append(
                 PlannedAction(
                     category="service",
@@ -291,14 +295,13 @@ def build_safe_sysprep_plan(inventory: SystemInventory) -> RemediationResult:
         result.skipped.append(f"preserved interfaces left untouched: {', '.join(preserved)}")
 
     for name, paths in inventory.detected_artifacts.items():
-        if name in {"old_temporary_styx_files", "old_cni_interfaces", "old_flannel_interfaces"}:
+        if name in SYSPREP_SKIP_ARTIFACTS or not paths:
             continue
-        if paths and name != "old_temporary_styx_files":
-            pretty = name.replace("_", " ")
-            result.skipped.append(
-                f"{pretty} detected ({', '.join(paths[:3])}{'...' if len(paths) > 3 else ''}); "
-                "use MVP3 reset for deeper cleanup"
-            )
+        pretty = name.replace("_", " ")
+        suffix = "..." if len(paths) > 3 else ""
+        result.skipped.append(
+            f"{pretty} detected ({', '.join(paths[:3])}{suffix}); use MVP3 reset for deeper cleanup"
+        )
 
     return result
 
@@ -309,7 +312,7 @@ def apply_port_clear(inventory: SystemInventory, *, dry_run: bool = False) -> Re
     if dry_run:
         return plan
 
-    for conflict in _safe_port_conflicts(inventory):
+    for conflict in _port_conflicts(inventory, safe=True):
         plan.outcomes.append(_stop_pid(conflict, inventory))
 
     refreshed = check_reserved_ports()
@@ -333,13 +336,12 @@ def apply_safe_sysprep(inventory: SystemInventory, *, dry_run: bool = False) -> 
     plan.skipped.extend(port_result.skipped)
 
     for unit in SAFE_SYSTEMD_UNITS:
-        service_key = SERVICE_KEYS[unit]
-        service = inventory.detected_services.get(service_key, {})
-        active = (service.get("active") or "").lower()
-        enabled = (service.get("enabled") or "").lower()
-        if active in {"active", "activating", "reloading"}:
+        needs_stop, needs_disable = _service_needs_remediation(
+            inventory.detected_services.get(SERVICE_KEYS[unit], {})
+        )
+        if needs_stop:
             plan.outcomes.append(_systemctl_action(unit, "stop", inventory))
-        if enabled in {"enabled", "enabled-runtime"}:
+        if needs_disable:
             plan.outcomes.append(_systemctl_action(unit, "disable", inventory))
 
     for path in inventory.detected_artifacts.get("old_temporary_styx_files", []):
