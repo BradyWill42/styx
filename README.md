@@ -1,6 +1,6 @@
 # styxctl
 
-**The control CLI for [Styx](https://github.com/BradyWill42/styxctl)** — a k3s-native, dual-stack WireGuard mesh and access gateway platform.
+**The control CLI for [Styx](https://github.com/BradyWill42/styx)** — a k3s-native, dual-stack WireGuard mesh and access gateway platform.
 
 `styxctl` prepares Linux gateway nodes, installs the k3s foundation, and (in future milestones) deploys the full Styx mesh. Every command is **command-discovery-first**: no flags, just composable subcommands with shell tab completion.
 
@@ -103,9 +103,9 @@ Each node's `ipv4` / `ipv6` in config becomes its k3s `--node-ip`. The init-serv
 
 | Branch | Contents | Use when |
 |--------|----------|----------|
-| [`main`](https://github.com/BradyWill42/styxctl/tree/main) | MVP1 + MVP2 (current release) | Default — full platform prep and install |
-| [`MVP1`](https://github.com/BradyWill42/styxctl/tree/MVP1) | Assessment and safe remediation only | You only need sysprep on a single node |
-| [`MVP2`](https://github.com/BradyWill42/styxctl/tree/MVP2) | MVP1 + k3s / WireGuard install | Feature development on install path |
+| [`main`](https://github.com/BradyWill42/styx/tree/main) | MVP1 + MVP2 (current release) | Default — full platform prep and install |
+| [`MVP1`](https://github.com/BradyWill42/styx/tree/MVP1) | Assessment and safe remediation only | You only need sysprep on a single node |
+| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP1 + k3s / WireGuard install | Feature development on install path |
 
 All branches share the same CLI design and safety rules. `main` is the integration branch; feature branches merge into `MVP1` or `MVP2` first, then into `main`.
 
@@ -116,7 +116,7 @@ All branches share the same CLI design and safety rules. `main` is the integrati
 ### 1. Install `styxctl`
 
 ```bash
-git clone https://github.com/BradyWill42/styxctl.git
+git clone https://github.com/BradyWill42/styx.git
 cd styxctl
 
 python3 -m venv .venv
