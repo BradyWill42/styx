@@ -1,230 +1,655 @@
 # styxctl
 
-`styxctl` is the control CLI for Styx: a k3s-native, dual-stack WireGuard mesh and access gateway platform.
+**The control CLI for [Styx](https://github.com/BradyWill42/styxctl)** — a k3s-native, dual-stack WireGuard mesh and access gateway platform.
 
-MVP1 covers local assessment and safe remediation on a single Linux gateway node.
+`styxctl` prepares Linux gateway nodes, installs the k3s foundation, and (in future milestones) deploys the full Styx mesh. Every command is **command-discovery-first**: no flags, just composable subcommands with shell tab completion.
 
-## MVP1 workflow
+| | |
+|---|---|
+| **Version** | `0.3.0` |
+| **Python** | 3.10+ |
+| **License** | MIT |
+| **Status** | MVP1 + MVP2 shipped on `main` |
 
-```bash
-styxctl sysprep check local
-styxctl sysprep safe plan local
-styxctl sysprep safe apply local
-styxctl sysprep check local
+---
+
+## Table of contents
+
+- [What is Styx?](#what-is-styx)
+- [Architecture](#architecture)
+- [Repository branches](#repository-branches)
+- [Quick start](#quick-start)
+- [Milestone roadmap](#milestone-roadmap)
+- [MVP1: Assess and remediate](#mvp1-assess-and-remediate)
+- [MVP2: Install prerequisites](#mvp2-install-prerequisites)
+- [Configuration (`styx.yaml`)](#configuration-styxyaml)
+- [Reserved port plan](#reserved-port-plan)
+- [Safety doctrine](#safety-doctrine)
+- [Command reference](#command-reference)
+- [Reports and artifacts](#reports-and-artifacts)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+- [Continuous integration](#continuous-integration)
+- [License](#license)
+
+---
+
+## What is Styx?
+
+Styx is a homelab and small-site platform that combines:
+
+- **k3s** for lightweight Kubernetes orchestration across gateway nodes
+- **Dual-stack WireGuard** (`Styx` interface on UDP `47800`) for mesh connectivity — separate from any existing `wg0` tunnel you already run
+- **Reserved service ports** (`47800–47850`) for gateway APIs, agents, diagnostics, and metrics
+- **Declarative cluster config** in `styx.yaml` — nodes, CIDRs, DNS endpoints, and future SIEM integration
+
+`styxctl` is the operator-facing tool that drives each phase. It collects inventory, remediates only what is provably safe, installs k3s with your network plan, and writes human-readable plus machine-readable reports at every step.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph operator["Operator workstation"]
+        CLI["styxctl CLI"]
+        CFG["styx.yaml"]
+        RPT["reports/styx/"]
+    end
+
+    subgraph mvp1["MVP1 — Sysprep"]
+        INV["Inventory collection"]
+        PORTS["Port scan 47800–47850"]
+        SAFE["Safe remediation"]
+    end
+
+    subgraph mvp2["MVP2 — Install"]
+        K3S["k3s cluster"]
+        WG["WireGuard Styx interface"]
+        SSH["SSH cluster join"]
+    end
+
+    subgraph future["MVP3+ — Deploy"]
+        DEPLOY["Gateway workloads"]
+        CLIENT["Client profiles"]
+        SIEM["Wazuh SIEM"]
+    end
+
+    CLI --> CFG
+    CLI --> INV --> PORTS
+    PORTS --> SAFE
+    SAFE --> K3S
+    K3S --> WG
+    K3S --> SSH
+    WG --> DEPLOY
+    CLI --> RPT
+    DEPLOY --> CLIENT
+    DEPLOY --> SIEM
 ```
 
-Typical flow:
+**Node roles** (defined in `styx.yaml`):
 
-1. **Check** the node read-only
-2. **Preview** safe cleanup with `sysprep safe plan local`
-3. **Apply** safe cleanup with `sysprep safe apply local`
-4. **Re-check** until status is `READY` or only non-blocking warnings remain
+| Role | Purpose |
+|------|---------|
+| `init-server` | Bootstraps the k3s cluster with `--cluster-init` and dual-stack CIDRs |
+| `server` | Additional k3s control-plane / server node |
+| `agent` | k3s worker node |
 
-## Install for local development
+Each node's `ipv4` / `ipv6` in config becomes its k3s `--node-ip`. The init-server node is joined over SSH by all other nodes using their configured addresses.
 
-From the repository root:
+---
+
+## Repository branches
+
+| Branch | Contents | Use when |
+|--------|----------|----------|
+| [`main`](https://github.com/BradyWill42/styxctl/tree/main) | MVP1 + MVP2 (current release) | Default — full platform prep and install |
+| [`MVP1`](https://github.com/BradyWill42/styxctl/tree/MVP1) | Assessment and safe remediation only | You only need sysprep on a single node |
+| [`MVP2`](https://github.com/BradyWill42/styxctl/tree/MVP2) | MVP1 + k3s / WireGuard install | Feature development on install path |
+
+All branches share the same CLI design and safety rules. `main` is the integration branch; feature branches merge into `MVP1` or `MVP2` first, then into `main`.
+
+---
+
+## Quick start
+
+### 1. Install `styxctl`
 
 ```bash
+git clone https://github.com/BradyWill42/styxctl.git
+cd styxctl
+
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-## MVP1 commands
+Verify:
 
-### Assessment
+```bash
+styxctl version
+styxctl --help
+```
+
+### 2. Prepare a gateway node (MVP1)
 
 ```bash
 styxctl sysprep check local
-styxctl ports check local
-styxctl ports list local
+styxctl sysprep safe plan local      # preview only
+styxctl sysprep safe apply local     # apply without prompt
+styxctl sysprep check local          # re-check until READY
 ```
 
-`sysprep check local` collects local inventory, checks Styx reserved ports `47800-47850`, detects old k3s/CNI/Styx artifacts, prints a report, and saves JSON/text output.
-
-Reports are saved under:
-
-```text
-./reports/styx/<hostname>/sysprep-report.json
-./reports/styx/<hostname>/sysprep-report.txt
-```
-
-Readiness status:
-
-- `READY` — clear to proceed toward MVP2 install
-- `READY_WITH_WARNINGS` — usable, but review warnings first
-- `BLOCKED` — critical ports `47800-47808` are occupied; exits with code `1`
-
-### Safe remediation
-
-```bash
-styxctl sysprep safe plan local
-styxctl sysprep safe apply local
-styxctl sysprep safe local
-styxctl ports clear plan local
-styxctl ports clear apply local
-styxctl ports clear local
-```
-
-Safe remediation only acts on items already identified as safe:
-
-- Styx/k3s/flannel/CNI processes marked `safe_to_stop`
-- known leftover services such as `k3s.service` and `k3s-agent.service`
-- old temporary Styx files under `/tmp/styx*` and `/var/tmp/styx*`
-
-It never touches:
-
-- `wg0`
-- LAN networking, SSH, BIND, Caddy, MooseFS, home directories, or unrelated services
-- unsafe port conflicts
-- deeper k3s state directories (reserved for MVP3 reset)
-
-Use `sysprep safe plan local` first. `sysprep safe local` asks for confirmation before changing the host; `sysprep safe apply local` skips the prompt.
-
-### Config and reports
-
-```bash
-styxctl config show
-styxctl config validate
-styxctl report show
-styxctl report json
-```
-
-Copy `styx.yaml.example` to `styx.yaml` when you want config validation before MVP2.
-
-## MVP2 workflow
-
-After MVP1 leaves the node `READY` or `READY_WITH_WARNINGS`:
+### 3. Install the foundation (MVP2)
 
 ```bash
 cp styx.yaml.example styx.yaml
 # Edit nodes: set each node's ipv4/ipv6 to its current LAN addresses
 styxctl config validate
+
 styxctl install plan local
+styxctl install apply local          # on every node
+
 styxctl install plan cluster
-styxctl install local                 # asks for confirmation
-styxctl install apply local             # prereqs + local k3s role on each node
-styxctl install cluster                 # asks for confirmation
-styxctl install apply cluster           # init + join all nodes by IP over SSH
+styxctl install apply cluster        # init + join from init-server over SSH
+
+styxctl install doctor local
+styxctl install doctor cluster
+```
+
+### Requirements
+
+| Requirement | MVP1 | MVP2 |
+|-------------|------|------|
+| Linux gateway host | Yes | Yes |
+| Python 3.10+ (for CLI) | Yes | Yes |
+| `sudo` (non-interactive for mutating commands) | Recommended | Required |
+| `ss` / `iproute2` | Recommended | Installed by MVP2 |
+| Passwordless SSH between nodes | No | Required for `install cluster` |
+| `styx.yaml` | Optional | Required |
+
+---
+
+## Milestone roadmap
+
+| Milestone | Status | Scope |
+|-----------|--------|-------|
+| **MVP1** | Shipped | Read-only inventory, port scan, safe remediation |
+| **MVP2** | Shipped | k3s install, `Styx` WireGuard interface, multi-node cluster join |
+| **MVP3** | Planned | `sysprep reset` / `nuke`, `deploy`, `gateway`, `status`, `doctor` |
+| **MVP4** | Planned | Remote sysprep (`check all` / `check node`), `client`, `siem` |
+
+Placeholder commands exist today and print a clear "not implemented" message — they never mutate the host.
+
+---
+
+## MVP1: Assess and remediate
+
+MVP1 answers one question: **is this node safe to install Styx on?**
+
+### Typical workflow
+
+```bash
+styxctl sysprep check local
+styxctl sysprep safe plan local
+styxctl sysprep safe apply local
+styxctl sysprep check local
+```
+
+1. **Check** — read-only inventory and port scan
+2. **Plan** — preview safe cleanup actions (no changes)
+3. **Apply** — execute safe cleanup (or use `sysprep safe local` for interactive confirm)
+4. **Re-check** — repeat until `READY` or `READY_WITH_WARNINGS`
+
+### What `sysprep check local` collects
+
+- Host identity, OS, kernel, architecture, boot time
+- Network interfaces, default route, DNS resolvers, LAN IPs
+- WireGuard interfaces (including `wg0` preservation status)
+- Processes and systemd units listening on ports `47800–47850`
+- k3s / flannel / CNI artifacts and leftover services
+- Sudo availability, time sync, disk and memory snapshot
+- Detected binaries (`k3s`, `kubectl`, `wg`, etc.)
+
+### Readiness status
+
+| Status | Meaning | Exit code |
+|--------|---------|-----------|
+| `READY` | Clear to proceed to MVP2 | `0` |
+| `READY_WITH_WARNINGS` | Usable; review warnings first | `0` |
+| `BLOCKED` | Critical ports `47800–47808` occupied | `1` |
+
+When blocked, try `styxctl sysprep safe plan local` to preview cleanup, or `styxctl ports check local` to inspect conflicts.
+
+### Safe remediation scope
+
+**Will act on** (only when marked `safe_to_stop`):
+
+- Styx / k3s / flannel / CNI processes in the reserved port range
+- Known leftover services: `k3s.service`, `k3s-agent.service`
+- Temporary Styx files under `/tmp/styx*` and `/var/tmp/styx*`
+
+**Will never touch**:
+
+- `wg0` or its configuration
+- LAN networking, SSH, BIND, Caddy, MooseFS, home directories
+- Unsafe port conflicts (non-Styx/k3s processes)
+- k3s data directories (reserved for MVP3 `reset` / `nuke`)
+
+### Port commands
+
+```bash
+styxctl ports check local          # conflicts in 47800–47850
+styxctl ports list local           # full port plan
+styxctl ports clear plan local     # preview safe port cleanup
+styxctl ports clear apply local    # apply safe port cleanup
+styxctl ports clear local          # interactive confirm
+```
+
+---
+
+## MVP2: Install prerequisites
+
+After MVP1 reports `READY` or `READY_WITH_WARNINGS`, MVP2 installs the local foundation on each node and optionally joins a multi-node k3s cluster.
+
+### Typical workflow
+
+```bash
+cp styx.yaml.example styx.yaml
+# Set each node's ipv4/ipv6 to its current LAN addresses
+styxctl config validate
+
+# Per-node local install (run on every gateway)
+styxctl install plan local
+styxctl install apply local
+
+# Cluster join from init-server (SSH to all nodes)
+styxctl install plan cluster
+styxctl install apply cluster
+
+# Verify
 styxctl install status local
 styxctl install status cluster
 styxctl install doctor local
 styxctl install doctor cluster
 ```
 
-Each node in `styx.yaml` uses its configured `ipv4` / `ipv6` as the k3s `--node-ip` values. The init-server node bootstraps the cluster with dual-stack pod/service CIDRs from the network plan; additional `server` and `agent` nodes join using their own current IPs.
+### What MVP2 installs
 
-MVP2 installs only the local foundation prerequisites:
+| Component | Detail |
+|-----------|--------|
+| **Packages** | `iproute2`, `wireguard`, `wireguard-tools`, `curl`, `ca-certificates` |
+| **k3s** | Server or agent role per `styx.yaml`; dual-stack pod/service CIDRs |
+| **WireGuard** | `Styx` interface on UDP `47800` (never `wg0`) |
+| **Preservation** | `wg0` config hash/mtime snapshotted before and verified after |
 
-- k3s server with cluster/service CIDRs from `styx.yaml`
-- Styx WireGuard interface on `47800/udp` (interface name `Styx`, never `wg0`)
-- supporting packages such as `iproute2`, WireGuard tools, and `curl`
+### Install gates
 
-Reports are saved under:
+Install is **blocked** when:
+
+- `styx.yaml` is missing or `INVALID`
+- Sysprep status is `BLOCKED` on ports `47800–47808`
+- Non-interactive `sudo` is unavailable for mutating install steps
+- Cluster join cannot reach remote nodes over SSH
+
+Always run `install plan` before `install apply`. Interactive commands (`install local`, `install cluster`) ask for confirmation; `install apply` variants skip the prompt.
+
+### Cluster install order
+
+1. `init-server` node — `curl -sfL https://get.k3s.io` with `--cluster-init` and network CIDRs
+2. `server` nodes — join with token from init-server
+3. `agent` nodes — join as k3s agents
+
+Remote steps use the `ssh_user` from `cluster.ssh_user` (default in example: `ubuntu`). Ensure key-based SSH works from the init-server to every node IP in config.
+
+### Health checks
+
+`install doctor local` exits `0` when healthy enough for MVP3 deploy work. It verifies:
+
+- k3s installed and active
+- `kubectl` available
+- `Styx` WireGuard interface up
+- UDP `47800` listening
+- `wg0` preserved unchanged
+- Critical ports clear
+
+`install doctor cluster` checks reachability and k3s status for every configured node.
+
+---
+
+## Configuration (`styx.yaml`)
+
+Copy the example and edit for your lab:
+
+```bash
+cp styx.yaml.example styx.yaml
+styxctl config show
+styxctl config validate
+```
+
+### Key sections
+
+```yaml
+cluster:
+  name: styx
+  domain: styx.net
+  mode: dual-stack          # dual-stack | ipv4-only | ipv6-only
+  ssh_user: ubuntu          # default SSH user for cluster join
+
+network:
+  ipv4_supernet: 10.0.0.0/14
+  ipv6_supernet: fd00:cafe::/48
+  mesh_ipv4: 10.0.0.0/16
+  pod_ipv4: 10.2.0.0/16     # k3s --cluster-cidr
+  service_ipv4: 10.3.0.0/16
+  # ... matching IPv6 CIDRs for dual-stack
+
+wireguard:
+  interface: Styx           # must NOT be wg0
+  port: 47800
+  shared_server_identity: true
+
+nodes:
+  - name: pistyx
+    ipv4: 10.0.0.1          # set to this node's current LAN IP
+    ipv6: fd00:cafe::1
+    role: init-server
+  - name: pegasus
+    ipv4: 10.0.0.2
+    ipv6: fd00:cafe::2
+    role: server
+  - name: hydra
+    ipv4: 10.0.0.3
+    ipv6: fd00:cafe::3
+    role: agent
+
+dns:
+  provider: duckdns
+  auto_endpoint: pistyx
+
+siem:
+  enabled: true
+  provider: wazuh           # MVP4 placeholder
+```
+
+**Important:** node `ipv4` / `ipv6` values must match each machine's **current reachable addresses** — they drive k3s `--node-ip`, TLS SANs, and SSH targets during cluster join.
+
+Config validation status:
+
+| Status | Meaning |
+|--------|---------|
+| `VALID` | Ready for MVP2 |
+| `VALID_WITH_WARNINGS` | Usable; e.g. no nodes defined yet |
+| `INVALID` | Blocking errors; fix before install |
+
+---
+
+## Reserved port plan
+
+Only ports `47800–47850` are managed by `styxctl`. Critical production ports `47800–47808` block MVP2 install when occupied.
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 47800 | UDP | Styx production WireGuard gateway |
+| 47801 | TCP | Styx gateway health API |
+| 47802 | TCP | Styx director API |
+| 47803 | TCP | Styx status dashboard/API |
+| 47804 | TCP | Styx node agent API |
+| 47805 | TCP | Styx Ansible controller API |
+| 47806 | TCP | Styx watchdog agent API |
+| 47807 | TCP | Styx local diagnostics API |
+| 47808 | TCP | Styx metrics exporter |
+| 47809 | any | Reserved |
+| 47810–47819 | any | Site/gateway testing |
+| 47820–47829 | any | Client/profile testing |
+| 47830–47839 | any | Development/debug |
+| 47840–47850 | any | Reserved future |
+
+Planned WireGuard endpoint for production clients:
+
+```ini
+Endpoint = pistyx.duckdns.org:47800
+```
+
+---
+
+## Safety doctrine
+
+Styx is designed for gateway nodes that may already run critical services. `styxctl` enforces strict boundaries:
+
+| Command class | Mutates host? | Scope |
+|---------------|---------------|-------|
+| `sysprep check`, `ports check`, `ports list`, `config show`, `install plan`, `report` | No | Read-only |
+| `sysprep safe`, `ports clear`, `install apply` | Yes | Only pre-identified safe targets |
+| `sysprep reset`, `sysprep nuke`, `deploy` | MVP3 | Not implemented yet |
+
+**`wg0` is sacred.** It is inventoried, reported, and hash-verified — never removed or modified by MVP1 or MVP2.
+
+Every mutating command follows **plan → confirm → apply**:
+
+```bash
+styxctl sysprep safe plan local     # dry-run
+styxctl sysprep safe local          # preview + confirm
+styxctl sysprep safe apply local    # apply without confirm
+```
+
+---
+
+## Command reference
+
+Discover commands with tab completion:
+
+```bash
+styxctl <TAB>
+styxctl sysprep <TAB>
+styxctl install <TAB>
+```
+
+### Sysprep
+
+| Command | Description |
+|---------|-------------|
+| `sysprep check local` | Read-only MVP1 assessment |
+| `sysprep check all` | MVP4 placeholder |
+| `sysprep check node` | MVP4 placeholder |
+| `sysprep safe plan local` | Preview safe cleanup |
+| `sysprep safe apply local` | Apply safe cleanup (no prompt) |
+| `sysprep safe local` | Preview + interactive confirm |
+| `sysprep reset local` | MVP3 placeholder |
+| `sysprep nuke local` | MVP3 placeholder |
+
+### Ports
+
+| Command | Description |
+|---------|-------------|
+| `ports check local` | Show conflicts in reserved range |
+| `ports list local` | Show full port plan |
+| `ports clear plan local` | Preview safe port cleanup |
+| `ports clear apply local` | Apply safe port cleanup |
+| `ports clear local` | Interactive port cleanup |
+
+### Install
+
+| Command | Description |
+|---------|-------------|
+| `install plan local` | Preview local install steps |
+| `install plan cluster` | Preview cluster join steps |
+| `install local` | Local install with confirm |
+| `install apply local` | Local install without confirm |
+| `install cluster` | Cluster install with confirm |
+| `install apply cluster` | Cluster install without confirm |
+| `install status local` | k3s + WireGuard status table |
+| `install status cluster` | All nodes reachability table |
+| `install doctor local` | Actionable local health diagnosis |
+| `install doctor cluster` | Cluster-wide health diagnosis |
+
+### Config, reports, and shell
+
+| Command | Description |
+|---------|-------------|
+| `config show` | Summarize active `styx.yaml` |
+| `config validate` | Validate config; exit `1` if invalid |
+| `report show [hostname]` | Display latest sysprep report |
+| `report json [hostname]` | Print sysprep report as JSON |
+| `version` | Print `styxctl` version |
+| `completion bash\|zsh\|fish` | Print shell completion script |
+| `--install-completion` | Install completion for active shell |
+
+### Future (placeholders)
+
+```bash
+styxctl deploy soon      # MVP3
+styxctl gateway soon     # MVP3
+styxctl status soon      # MVP3
+styxctl doctor soon      # MVP3
+styxctl client soon      # MVP4
+styxctl siem soon        # MVP4
+```
+
+---
+
+## Reports and artifacts
+
+### Sysprep reports (MVP1)
+
+```text
+./reports/styx/<hostname>/sysprep-report.json
+./reports/styx/<hostname>/sysprep-report.txt
+```
+
+### Install reports (MVP2)
 
 ```text
 ./reports/styx/<hostname>/install-report.json
 ./reports/styx/<hostname>/install-report.txt
 ```
 
-Install is blocked when:
-
-- `styx.yaml` is missing or `INVALID`
-- sysprep status is `BLOCKED` on ports `47800-47808`
-- non-interactive sudo is unavailable for a mutating install
-
-Use `install plan local` first. `install local` asks for confirmation before changing the host; `install apply local` skips the prompt.
-
-`install status local` and `install doctor local` verify k3s, the `Styx` interface, `wg0` preservation, and critical port state. Exit code `0` means healthy enough for MVP3 deploy work.
-
-## CLI style
-
-The CLI is command-discovery-first:
+Inspect saved reports:
 
 ```bash
-styxctl <TAB>
-styxctl sysprep <TAB>
-styxctl sysprep check <TAB>
+styxctl report show
+styxctl report json
 ```
 
-Future placeholders remain read-only:
+Reports include timestamps, readiness status, warnings, blocking reasons, inventory snapshots, and planned/applied action outcomes.
+
+---
+
+## Troubleshooting
+
+### `BLOCKED` after sysprep check
 
 ```bash
-styxctl sysprep reset local   # MVP3
-styxctl sysprep nuke local    # MVP3
-styxctl deploy soon           # MVP3
+styxctl ports check local
+styxctl sysprep safe plan local
+styxctl sysprep safe apply local
+styxctl sysprep check local
 ```
 
-## Shell completion
+If a non-Styx process holds a critical port, stop it manually — MVP1 will not kill unsafe processes.
+
+### Install blocked: invalid config
 
 ```bash
-styxctl --install-completion
-styxctl completion bash
-styxctl completion zsh
-styxctl completion fish
+styxctl config validate
 ```
 
-## Styx reserved ports
+Common fixes: set node IPs to real LAN addresses, ensure exactly one `init-server`, and keep `wireguard.interface` as `Styx` (not `wg0`).
 
-Only this range is checked and cleaned by MVP1:
+### Install blocked: sudo unavailable
 
-```text
-47800-47850
+Ensure passwordless sudo for the installing user, or run from an account that has it:
+
+```bash
+sudo -n true && echo "sudo ok" || echo "sudo required"
 ```
 
-Important planned ports:
+### k3s not active after install
 
-```text
-47800/udp  Styx production WireGuard gateway
-47801/tcp  Styx gateway health API
-47802/tcp  Styx director API
-47803/tcp  Styx status dashboard/API
-47804/tcp  Styx node agent API
-47805/tcp  Styx Ansible controller API
-47806/tcp  Styx watchdog agent API
-47807/tcp  Styx local diagnostics API
-47808/tcp  Styx metrics exporter
-47809      reserved
-
-47810-47819  site/gateway testing
-47820-47829  client/profile testing
-47830-47839  development/debug
-47840-47850  reserved future
+```bash
+sudo systemctl status k3s
+styxctl install doctor local
+styxctl install apply local
 ```
 
-The future WireGuard endpoint should use:
+### Cluster join failures
 
-```ini
-Endpoint = pistyx.duckdns.org:47800
+```bash
+# From init-server, verify SSH to each node IP
+ssh ubuntu@<node-ip> true
+
+styxctl install status cluster
+styxctl install doctor cluster
 ```
 
-## Safety rules
+Ensure every node has completed `install apply local` before `install apply cluster`.
 
-`styxctl sysprep check local` is read-only.
+### `wg0` preservation warning
 
-`sysprep safe local` and `ports clear local` are bounded remediation commands. They do not perform destructive resets, delete k3s data directories, or modify preserved infrastructure.
+Investigate any changes to `/etc/wireguard/wg0.conf` before retrying. MVP2 snapshots `wg0` before install and compares afterward.
 
-`styxctl install local` only installs k3s and the `Styx` WireGuard interface. It never modifies `wg0`, LAN networking, SSH, BIND, Caddy, MooseFS, or unrelated services.
+---
 
-`wg0` is detected and reported as preserved. It is never removed by MVP1 or modified by MVP2 install.
+## Development
 
-## Development checks
+### Setup
 
 ```bash
 python -m pip install -e ".[dev]"
-python -m pytest
-python -m styxctl.cli --help
+```
+
+### Run tests
+
+```bash
+python -m pytest -v
+```
+
+### Manual smoke checks
+
+```bash
 styxctl sysprep check local
 styxctl sysprep safe plan local
 styxctl config validate
 styxctl install plan local
-styxctl install apply local
 styxctl report show
 ```
 
-## GitHub-hosted smoke test
+### Project layout
 
-Every push and pull request runs a read-only sysprep check on a GitHub-hosted Ubuntu runner. In the Actions tab, open the **Sysprep check (GitHub-hosted)** job to see the live report output. Download the **sysprep-report-github-hosted** artifact to inspect the saved JSON and text reports.
+```text
+src/styxctl/
+  cli.py              # Typer entry point and command tree
+  inventory.py        # Read-only host inventory (MVP1)
+  ports.py            # Reserved port scan and plan
+  remediation.py      # Safe cleanup actions (MVP1)
+  reports.py          # Sysprep report generation
+  config.py           # styx.yaml load and validate
+  nodes.py            # Cluster node parsing
+  install.py          # Local + cluster install (MVP2)
+  k3s_cluster.py      # k3s cluster planning and SSH orchestration
+  install_report.py   # Install report generation
+tests/                # pytest suite
+styx.yaml.example     # Reference cluster configuration
+```
 
-This validates the full check path on real Linux, but it is not a substitute for running MVP1 on your own gateway node.
+---
+
+## Continuous integration
+
+Every push and pull request to `main`, `MVP1`, or `MVP2` runs two jobs:
+
+1. **Test matrix** — Python 3.10, 3.11, 3.12: pytest, CLI smoke, wheel build
+2. **Sysprep smoke** — read-only `sysprep check` on a GitHub-hosted Ubuntu runner; uploads report artifacts
+
+View results in the repository **Actions** tab. Download the **sysprep-report-github-hosted** artifact to inspect JSON and text reports from CI.
+
+CI validates the full check and plan path on real Linux, but it is **not** a substitute for running MVP1 on your own gateway hardware.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+Copyright (c) 2026 Brady Williams
