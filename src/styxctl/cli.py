@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -17,7 +20,13 @@ from .config import (
     validate_config,
 )
 from .inventory import collect_inventory
-from .install import run_install_cluster, run_install_doctor, run_install_local, run_install_plan_preview, run_cluster_doctor
+from .install import (
+    run_cluster_doctor,
+    run_install_cluster,
+    run_install_doctor,
+    run_install_local,
+    run_install_plan_preview,
+)
 from .install_report import render_install_text, save_install_report
 from .ports import PORT_BLOCKS, PORT_PLAN, check_reserved_ports, port_purpose
 from .remediation import (
@@ -37,32 +46,29 @@ from .reports import (
 
 console = Console()
 
-app = typer.Typer(
-    name="styxctl",
-    help="Prepare, install, and manage Styx nodes.",
-    no_args_is_help=True,
-)
-sysprep_app = typer.Typer(help="Prepare hosts safely before Styx installation.", no_args_is_help=True)
-sysprep_check_app = typer.Typer(help="Read-only sysprep checks.", no_args_is_help=True)
-sysprep_safe_app = typer.Typer(help="Known-safe local cleanup before install.", no_args_is_help=True)
-sysprep_safe_plan_app = typer.Typer(help="Preview safe local cleanup without changing the host.", no_args_is_help=True)
-sysprep_safe_apply_app = typer.Typer(help="Apply safe local cleanup without confirmation.", no_args_is_help=True)
-sysprep_reset_app = typer.Typer(help="Interactive cleanup modes. MVP3 placeholder.", no_args_is_help=True)
-sysprep_nuke_app = typer.Typer(help="Destructive cleanup modes. MVP3 placeholder.", no_args_is_help=True)
-ports_app = typer.Typer(help="Inspect the Styx reserved port range.", no_args_is_help=True)
-ports_check_app = typer.Typer(help="Check Styx reserved ports.", no_args_is_help=True)
-ports_list_app = typer.Typer(help="List the Styx reserved port plan.", no_args_is_help=True)
-ports_clear_app = typer.Typer(help="Clear safe Styx reserved port conflicts.", no_args_is_help=True)
-ports_clear_plan_app = typer.Typer(help="Preview safe port cleanup without changing the host.", no_args_is_help=True)
-ports_clear_apply_app = typer.Typer(help="Apply safe port cleanup without confirmation.", no_args_is_help=True)
-config_app = typer.Typer(help="Inspect and validate styx.yaml.", no_args_is_help=True)
-report_app = typer.Typer(help="Inspect saved sysprep reports.", no_args_is_help=True)
-install_app = typer.Typer(help="Install Styx prerequisites on local gateway nodes.", no_args_is_help=True)
-install_status_app = typer.Typer(help="Show local install status.", no_args_is_help=True)
-install_doctor_app = typer.Typer(help="Diagnose local install health.", no_args_is_help=True)
-install_plan_app = typer.Typer(help="Preview install plans without changing the host.", no_args_is_help=True)
-install_apply_app = typer.Typer(help="Apply install plans without confirmation.", no_args_is_help=True)
-completion_app = typer.Typer(help="Shell completion helpers.", no_args_is_help=True)
+
+def _group(help: str) -> typer.Typer:
+    return typer.Typer(help=help, no_args_is_help=True)
+
+
+app = _group("Prepare, install, and manage Styx nodes.")
+sysprep_app = _group("Prepare hosts safely before Styx installation.")
+sysprep_check_app = _group("Read-only sysprep checks.")
+sysprep_safe_app = _group("Known-safe local cleanup before install.")
+sysprep_reset_app = _group("Interactive cleanup modes. MVP3 placeholder.")
+sysprep_nuke_app = _group("Destructive cleanup modes. MVP3 placeholder.")
+ports_app = _group("Inspect the Styx reserved port range.")
+ports_check_app = _group("Check Styx reserved ports.")
+ports_list_app = _group("List the Styx reserved port plan.")
+ports_clear_app = _group("Clear safe Styx reserved port conflicts.")
+config_app = _group("Inspect and validate styx.yaml.")
+report_app = _group("Inspect saved sysprep reports.")
+install_app = _group("Install Styx prerequisites on local gateway nodes.")
+install_status_app = _group("Show local install status.")
+install_doctor_app = _group("Diagnose local install health.")
+install_plan_app = _group("Preview install plans without changing the host.")
+install_apply_app = _group("Apply install plans without confirmation.")
+completion_app = _group("Shell completion helpers.")
 
 
 @app.callback()
@@ -113,6 +119,88 @@ def _run_remediation(
     console.print("[bold green]Re-run recommended:[/bold green] styxctl sysprep check local")
 
 
+def _add_remediation_commands(
+    parent: typer.Typer,
+    plan_app: typer.Typer,
+    apply_app: typer.Typer,
+    *,
+    title: str,
+    build_plan,
+    apply_plan,
+    helps: tuple[str, str, str],
+) -> None:
+    for app, help_text, dry_run, yes in (
+        (plan_app, helps[1], True, False),
+        (apply_app, helps[2], False, True),
+        (parent, helps[0], False, False),
+    ):
+        def handler(dry_run: bool = dry_run, yes: bool = yes) -> None:
+            _run_remediation(
+                title=title,
+                build_plan=build_plan,
+                apply_plan=apply_plan,
+                dry_run=dry_run,
+                yes=yes,
+            )
+
+        handler.__doc__ = help_text
+        app.command("local")(handler)
+
+
+def _not_implemented_future(command_name: str, milestone: str) -> None:
+    console.print(f"{command_name} is not implemented in {milestone}.")
+    console.print("No changes were made.")
+
+
+def _load_config_or_exit() -> tuple[dict[str, Any], Any]:
+    config_path = find_config()
+    try:
+        return load_config(config_path), config_path
+    except ConfigError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
+def _report_or_exit(exc: FileNotFoundError) -> None:
+    console.print(f"[red]Error:[/red] {exc}")
+    console.print("Run `styxctl sysprep check local` first.")
+    raise typer.Exit(code=1) from exc
+
+
+def _print_install_report(report: dict, *, exit_code: int) -> None:
+    text = render_install_text(report)
+    paths = save_install_report(report, text)
+    console.print(text)
+    console.print("[bold green]Reports saved[/bold green]")
+    console.print(f"  JSON: {paths['json']}")
+    console.print(f"  Text: {paths['text']}")
+    if report.get("message"):
+        console.print(report["message"])
+    if exit_code != 0:
+        raise typer.Exit(code=exit_code)
+
+
+def _finish_install_report(report: dict, exit_code: int) -> None:
+    if message := report.get("gate", {}).get("message"):
+        console.print(f"[red]Install blocked:[/red] {message}")
+    _print_install_report(report, exit_code=exit_code)
+
+
+def _run_confirmed_install(
+    run_fn: Callable[..., tuple[dict, int]],
+    confirm_template: str,
+) -> None:
+    report, exit_code = run_fn(dry_run=False, yes=False, config_path=None)
+    if report.get("status") == "CONFIRMATION_REQUIRED":
+        pending = report.get("pending_count", 0)
+        console.print(render_install_text(report))
+        if not typer.confirm(confirm_template.format(pending=pending), default=False):
+            console.print("No changes were made.")
+            raise typer.Exit(code=0)
+        report, exit_code = run_fn(dry_run=False, yes=True, config_path=None)
+    _finish_install_report(report, exit_code)
+
+
 @sysprep_check_app.command("local")
 def sysprep_check_local() -> None:
     """Run the read-only MVP1 sysprep check on this machine."""
@@ -122,7 +210,7 @@ def sysprep_check_local() -> None:
     paths = save_report_bundle(report, text)
 
     console.print(text)
-    console.print(f"[bold green]Reports saved[/bold green]")
+    console.print("[bold green]Reports saved[/bold green]")
     console.print(f"  JSON: {paths['json']}")
     console.print(f"  Text: {paths['text']}")
 
@@ -143,47 +231,6 @@ def sysprep_check_node() -> None:
     console.print("MVP4 placeholder: no remote node check was run.")
 
 
-@sysprep_safe_plan_app.command("local")
-def sysprep_safe_plan_local() -> None:
-    """Preview known-safe Styx/k3s cleanup without changing the host."""
-    _run_remediation(
-        title="Styx Safe Sysprep Remediation",
-        build_plan=build_safe_sysprep_plan,
-        apply_plan=apply_safe_sysprep,
-        dry_run=True,
-        yes=False,
-    )
-
-
-@sysprep_safe_apply_app.command("local")
-def sysprep_safe_apply_local() -> None:
-    """Apply known-safe Styx/k3s cleanup without confirmation."""
-    _run_remediation(
-        title="Styx Safe Sysprep Remediation",
-        build_plan=build_safe_sysprep_plan,
-        apply_plan=apply_safe_sysprep,
-        dry_run=False,
-        yes=True,
-    )
-
-
-@sysprep_safe_app.command("local")
-def sysprep_safe_local() -> None:
-    """Stop/disable known-safe Styx/k3s leftovers and clear safe reserved-port conflicts."""
-    _run_remediation(
-        title="Styx Safe Sysprep Remediation",
-        build_plan=build_safe_sysprep_plan,
-        apply_plan=apply_safe_sysprep,
-        dry_run=False,
-        yes=False,
-    )
-
-
-def _not_implemented_future(command_name: str, milestone: str) -> None:
-    console.print(f"{command_name} is not implemented in {milestone}.")
-    console.print("No changes were made.")
-
-
 @sysprep_reset_app.command("local")
 def sysprep_reset_local() -> None:
     """Future: interactive reset of known Styx/k3s/CNI leftovers."""
@@ -201,13 +248,8 @@ def ports_check_local() -> None:
     """Read-only check of occupied ports in 47800-47850."""
     scan = check_reserved_ports()
     table = Table(title="Styx Reserved Port Conflicts")
-    table.add_column("Protocol")
-    table.add_column("Port")
-    table.add_column("Process")
-    table.add_column("PID")
-    table.add_column("Systemd Unit")
-    table.add_column("Safe To Stop")
-    table.add_column("Purpose")
+    for column in ("Protocol", "Port", "Process", "PID", "Systemd Unit", "Safe To Stop", "Purpose"):
+        table.add_column(column)
 
     if scan.conflicts:
         for conflict in scan.conflicts:
@@ -239,78 +281,27 @@ def ports_list_local() -> None:
     for port in sorted(PORT_PLAN):
         item = PORT_PLAN[port]
         table.add_row(str(port), item["protocol"], item["purpose"])
-
     for purpose, start, end in PORT_BLOCKS:
         table.add_row(f"{start}-{end}", "any", purpose)
 
     console.print(table)
 
 
-@ports_clear_plan_app.command("local")
-def ports_clear_plan_local() -> None:
-    """Preview safe Styx reserved port cleanup without changing the host."""
-    _run_remediation(
-        title="Styx Reserved Port Cleanup",
-        build_plan=build_port_clear_plan,
-        apply_plan=apply_port_clear,
-        dry_run=True,
-        yes=False,
-    )
-
-
-@ports_clear_apply_app.command("local")
-def ports_clear_apply_local() -> None:
-    """Clear safe Styx reserved port conflicts without confirmation."""
-    _run_remediation(
-        title="Styx Reserved Port Cleanup",
-        build_plan=build_port_clear_plan,
-        apply_plan=apply_port_clear,
-        dry_run=False,
-        yes=True,
-    )
-
-
-@ports_clear_app.command("local")
-def ports_clear_local() -> None:
-    """Clear only safe Styx reserved port conflicts in 47800-47850."""
-    _run_remediation(
-        title="Styx Reserved Port Cleanup",
-        build_plan=build_port_clear_plan,
-        apply_plan=apply_port_clear,
-        dry_run=False,
-        yes=False,
-    )
-
-
 @config_app.command("show")
 def config_show() -> None:
     """Show the active Styx config summary."""
-    config_path = find_config()
-    try:
-        config = load_config(config_path)
-    except ConfigError as exc:
-        console.print(f"[red]Error:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
+    config, config_path = _load_config_or_exit()
     console.print(format_config_summary(config, config_path))
 
 
 @config_app.command("validate")
 def config_validate() -> None:
     """Validate styx.yaml structure for Styx."""
-    config_path = find_config()
-    try:
-        config = load_config(config_path)
-    except ConfigError as exc:
-        console.print(f"[red]Error:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
-
+    config, config_path = _load_config_or_exit()
     issues = validate_config(config)
     status = config_status(issues)
     console.print(f"Config status: {status}")
-    if config_path:
-        console.print(f"Config file: {config_path}")
-    else:
-        console.print("Config file: not found")
+    console.print(f"Config file: {config_path or 'not found'}")
 
     if issues:
         for issue in issues:
@@ -331,9 +322,7 @@ def report_show_local(
     try:
         console.print(load_saved_report_text(hostname=hostname), end="")
     except FileNotFoundError as exc:
-        console.print(f"[red]Error:[/red] {exc}")
-        console.print("Run `styxctl sysprep check local` first.")
-        raise typer.Exit(code=1) from exc
+        _report_or_exit(exc)
 
 
 @report_app.command("json")
@@ -342,40 +331,9 @@ def report_json_local(
 ) -> None:
     """Print the latest saved local sysprep report as JSON."""
     try:
-        report = load_saved_report(hostname=hostname)
-        console.print_json(data=report)
+        console.print_json(data=load_saved_report(hostname=hostname))
     except FileNotFoundError as exc:
-        console.print(f"[red]Error:[/red] {exc}")
-        console.print("Run `styxctl sysprep check local` first.")
-        raise typer.Exit(code=1) from exc
-
-
-def _emit_completion(shell: str) -> None:
-    typer.echo(
-        get_completion_script(
-            prog_name="styxctl",
-            complete_var="_STYXCTL_COMPLETE",
-            shell=shell,
-        )
-    )
-
-
-@completion_app.command("bash")
-def completion_bash() -> None:
-    """Print bash completion script."""
-    _emit_completion("bash")
-
-
-@completion_app.command("zsh")
-def completion_zsh() -> None:
-    """Print zsh completion script."""
-    _emit_completion("zsh")
-
-
-@completion_app.command("fish")
-def completion_fish() -> None:
-    """Print fish completion script."""
-    _emit_completion("fish")
+        _report_or_exit(exc)
 
 
 @completion_app.command("install")
@@ -384,49 +342,24 @@ def completion_install() -> None:
     console.print("Typer can install completion for your active shell:")
     console.print("  styxctl --install-completion")
     console.print("Or print a script directly:")
-    console.print("  styxctl completion bash")
-    console.print("  styxctl completion zsh")
-    console.print("  styxctl completion fish")
-
-
-def _print_install_report(report: dict, *, exit_code: int) -> None:
-    text = render_install_text(report)
-    paths = save_install_report(report, text)
-    console.print(text)
-    console.print("[bold green]Reports saved[/bold green]")
-    console.print(f"  JSON: {paths['json']}")
-    console.print(f"  Text: {paths['text']}")
-    if report.get("message"):
-        console.print(report["message"])
-    if exit_code != 0:
-        raise typer.Exit(code=exit_code)
+    for shell in ("bash", "zsh", "fish"):
+        console.print(f"  styxctl completion {shell}")
 
 
 @install_app.command("local")
 def install_local() -> None:
     """Install k3s and the Styx WireGuard foundation on this machine."""
-    report, exit_code = run_install_local(dry_run=False, yes=False, config_path=None)
-    if report.get("status") == "CONFIRMATION_REQUIRED":
-        pending = report.get("pending_count", 0)
-        console.print(render_install_text(report))
-        if not typer.confirm(f"Apply {pending} planned install step(s)?", default=False):
-            console.print("No changes were made.")
-            raise typer.Exit(code=0)
-        report, exit_code = run_install_local(dry_run=False, yes=True, config_path=None)
-    gate = report.get("gate", {})
-    if gate.get("message"):
-        console.print(f"[red]Install blocked:[/red] {gate['message']}")
-    _print_install_report(report, exit_code=exit_code)
+    _run_confirmed_install(
+        run_install_local,
+        "Apply {pending} planned install step(s)?",
+    )
 
 
 @install_apply_app.command("local")
 def install_apply_local() -> None:
     """Apply the local install plan without confirmation."""
     report, exit_code = run_install_local(dry_run=False, yes=True, config_path=None)
-    gate = report.get("gate", {})
-    if gate.get("message"):
-        console.print(f"[red]Install blocked:[/red] {gate['message']}")
-    _print_install_report(report, exit_code=exit_code)
+    _finish_install_report(report, exit_code)
 
 
 @install_status_app.command("local")
@@ -437,20 +370,24 @@ def install_status_local() -> None:
     table.add_column("Component")
     table.add_column("State")
 
-    table.add_row("k3s installed", "yes" if health.k3s_installed else "no")
-    table.add_row("k3s active", "yes" if health.k3s_active else "no")
-    table.add_row("k3s version", health.k3s_version or "unknown")
-    table.add_row("kubectl", "available" if health.kubectl_available else "missing")
-    table.add_row("wg binary", "available" if health.wg_binary else "missing")
-    table.add_row("Styx interface", "up" if health.styx_interface_up else "down")
-    table.add_row("47800/udp listening", "yes" if health.styx_port_listening else "no")
-    table.add_row("wg0 preserved", "yes" if health.wg0_preserved else "no")
-    table.add_row("config", f"{health.config_path or 'not found'} ({health.config_status})")
-    table.add_row("critical ports", "clear" if health.critical_ports_clear else "conflicts")
+    rows = [
+        ("k3s installed", "yes" if health.k3s_installed else "no"),
+        ("k3s active", "yes" if health.k3s_active else "no"),
+        ("k3s version", health.k3s_version or "unknown"),
+        ("kubectl", "available" if health.kubectl_available else "missing"),
+        ("wg binary", "available" if health.wg_binary else "missing"),
+        ("Styx interface", "up" if health.styx_interface_up else "down"),
+        ("47800/udp listening", "yes" if health.styx_port_listening else "no"),
+        ("wg0 preserved", "yes" if health.wg0_preserved else "no"),
+        ("config", f"{health.config_path or 'not found'} ({health.config_status})"),
+        ("critical ports", "clear" if health.critical_ports_clear else "conflicts"),
+    ]
     if health.cluster_node_count:
-        table.add_row("cluster nodes configured", str(health.cluster_node_count))
+        rows.append(("cluster nodes configured", str(health.cluster_node_count)))
         if health.local_node:
-            table.add_row("local cluster node", health.local_node)
+            rows.append(("local cluster node", health.local_node))
+    for label, value in rows:
+        table.add_row(label, value)
 
     console.print(table)
     if health.warnings:
@@ -488,47 +425,30 @@ def install_doctor_local() -> None:
 def install_plan_local() -> None:
     """Preview the local install plan without changing the host."""
     report, exit_code = run_install_plan_preview(config_path=None)
-    gate = report.get("gate", {})
-    if gate.get("message"):
-        console.print(f"[red]Install blocked:[/red] {gate['message']}")
-    _print_install_report(report, exit_code=exit_code)
+    _finish_install_report(report, exit_code)
 
 
 @install_plan_app.command("cluster")
 def install_plan_cluster() -> None:
     """Preview the k3s cluster install plan without changing nodes."""
     report, exit_code = run_install_cluster(dry_run=True, yes=False, config_path=None)
-    gate = report.get("gate", {})
-    if gate.get("message"):
-        console.print(f"[red]Install blocked:[/red] {gate['message']}")
-    _print_install_report(report, exit_code=exit_code)
+    _finish_install_report(report, exit_code)
 
 
 @install_app.command("cluster")
 def install_cluster() -> None:
     """Install and join all k3s nodes listed in styx.yaml using their configured IPs."""
-    report, exit_code = run_install_cluster(dry_run=False, yes=False, config_path=None)
-    if report.get("status") == "CONFIRMATION_REQUIRED":
-        pending = report.get("pending_count", 0)
-        console.print(render_install_text(report))
-        if not typer.confirm(f"Apply k3s cluster setup to {pending} remote node(s)?", default=False):
-            console.print("No changes were made.")
-            raise typer.Exit(code=0)
-        report, exit_code = run_install_cluster(dry_run=False, yes=True, config_path=None)
-    gate = report.get("gate", {})
-    if gate.get("message"):
-        console.print(f"[red]Install blocked:[/red] {gate['message']}")
-    _print_install_report(report, exit_code=exit_code)
+    _run_confirmed_install(
+        run_install_cluster,
+        "Apply k3s cluster setup to {pending} remote node(s)?",
+    )
 
 
 @install_apply_app.command("cluster")
 def install_apply_cluster() -> None:
     """Apply the k3s cluster install plan without confirmation."""
     report, exit_code = run_install_cluster(dry_run=False, yes=True, config_path=None)
-    gate = report.get("gate", {})
-    if gate.get("message"):
-        console.print(f"[red]Install blocked:[/red] {gate['message']}")
-    _print_install_report(report, exit_code=exit_code)
+    _finish_install_report(report, exit_code)
 
 
 @install_status_app.command("cluster")
@@ -536,12 +456,8 @@ def install_status_cluster() -> None:
     """Show k3s cluster node status for all configured IPs."""
     health = run_cluster_doctor(config_path=None)
     table = Table(title="Styx k3s Cluster Status")
-    table.add_column("Node")
-    table.add_column("Role")
-    table.add_column("IPv4")
-    table.add_column("IPv6")
-    table.add_column("Reachable")
-    table.add_column("k3s Active")
+    for column in ("Node", "Role", "IPv4", "IPv6", "Reachable", "k3s Active"):
+        table.add_column(column)
 
     for node in health.get("nodes", []):
         table.add_row(
@@ -554,8 +470,7 @@ def install_status_cluster() -> None:
         )
 
     console.print(table)
-    kubectl_nodes = health.get("kubectl_nodes") or []
-    if kubectl_nodes:
+    if kubectl_nodes := health.get("kubectl_nodes") or []:
         console.print(f"kubectl nodes: {', '.join(kubectl_nodes)}")
     if health.get("issues"):
         console.print("[red]Issues:[/red]")
@@ -579,7 +494,7 @@ def install_doctor_cluster() -> None:
 
 
 def _future_app(label: str, milestone: str) -> typer.Typer:
-    future = typer.Typer(help=f"Future {label} commands ({milestone}).", no_args_is_help=True)
+    future = _group(f"Future {label} commands ({milestone}).")
 
     @future.command("soon")
     def soon() -> None:  # pragma: no cover - simple placeholder
@@ -587,6 +502,55 @@ def _future_app(label: str, milestone: str) -> typer.Typer:
 
     return future
 
+
+def _completion_command(shell: str) -> Callable[[], None]:
+    def handler() -> None:
+        typer.echo(
+            get_completion_script(
+                prog_name="styxctl",
+                complete_var="_STYXCTL_COMPLETE",
+                shell=shell,
+            )
+        )
+
+    handler.__doc__ = f"Print {shell} completion script."
+    return handler
+
+
+sysprep_safe_plan_app = _group("Preview safe local cleanup without changing the host.")
+sysprep_safe_apply_app = _group("Apply safe local cleanup without confirmation.")
+_add_remediation_commands(
+    sysprep_safe_app,
+    sysprep_safe_plan_app,
+    sysprep_safe_apply_app,
+    title="Styx Safe Sysprep Remediation",
+    build_plan=build_safe_sysprep_plan,
+    apply_plan=apply_safe_sysprep,
+    helps=(
+        "Stop/disable known-safe Styx/k3s leftovers and clear safe reserved-port conflicts.",
+        "Preview known-safe Styx/k3s cleanup without changing the host.",
+        "Apply known-safe Styx/k3s cleanup without confirmation.",
+    ),
+)
+
+ports_clear_plan_app = _group("Preview safe port cleanup without changing the host.")
+ports_clear_apply_app = _group("Apply safe port cleanup without confirmation.")
+_add_remediation_commands(
+    ports_clear_app,
+    ports_clear_plan_app,
+    ports_clear_apply_app,
+    title="Styx Reserved Port Cleanup",
+    build_plan=build_port_clear_plan,
+    apply_plan=apply_port_clear,
+    helps=(
+        "Clear only safe Styx reserved port conflicts in 47800-47850.",
+        "Preview safe Styx reserved port cleanup without changing the host.",
+        "Clear safe Styx reserved port conflicts without confirmation.",
+    ),
+)
+
+for shell in ("bash", "zsh", "fish"):
+    completion_app.command(shell)(_completion_command(shell))
 
 sysprep_app.add_typer(sysprep_check_app, name="check")
 sysprep_app.add_typer(sysprep_safe_app, name="safe")
@@ -599,7 +563,6 @@ ports_app.add_typer(ports_list_app, name="list")
 ports_app.add_typer(ports_clear_app, name="clear")
 ports_clear_app.add_typer(ports_clear_plan_app, name="plan")
 ports_clear_app.add_typer(ports_clear_apply_app, name="apply")
-
 install_app.add_typer(install_status_app, name="status")
 install_app.add_typer(install_doctor_app, name="doctor")
 install_app.add_typer(install_plan_app, name="plan")
@@ -608,12 +571,15 @@ install_app.add_typer(install_apply_app, name="apply")
 app.add_typer(sysprep_app, name="sysprep")
 app.add_typer(ports_app, name="ports")
 app.add_typer(install_app, name="install")
-app.add_typer(_future_app("deploy", "MVP3"), name="deploy")
-app.add_typer(_future_app("status", "MVP3"), name="status")
-app.add_typer(_future_app("doctor", "MVP3"), name="doctor")
-app.add_typer(_future_app("client", "MVP4"), name="client")
-app.add_typer(_future_app("gateway", "MVP3"), name="gateway")
-app.add_typer(_future_app("siem", "MVP4"), name="siem")
+for label, milestone in (
+    ("deploy", "MVP3"),
+    ("status", "MVP3"),
+    ("doctor", "MVP3"),
+    ("client", "MVP4"),
+    ("gateway", "MVP3"),
+    ("siem", "MVP4"),
+):
+    app.add_typer(_future_app(label, milestone), name=label)
 app.add_typer(config_app, name="config")
 app.add_typer(report_app, name="report")
 app.add_typer(completion_app, name="completion")

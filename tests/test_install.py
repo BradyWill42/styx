@@ -17,75 +17,11 @@ from styxctl.install import (
     run_install_plan_preview,
 )
 from styxctl.k3s_cluster import build_cluster_plan
-from styxctl.inventory import SystemInventory
-from styxctl.ports import PortScanResult
+from styxctl.ports import PortConflict, PortScanResult
 
-from tests.support import example_config_text
+from tests.support import example_config_text, make_inventory
 
 runner = CliRunner()
-
-
-def _base_inventory(**overrides) -> SystemInventory:
-    inventory = SystemInventory(
-        generated_at="2026-01-01T00:00:00+00:00",
-        hostname="test-node",
-        fqdn="test-node.local",
-        os_version="Test OS",
-        architecture="x86_64",
-        kernel_version="6.1.0",
-        boot_time=None,
-        current_user="tester",
-        sudo_available=True,
-        primary_lan_ip="10.0.0.1",
-        bootstrap_ipv4="10.0.0.1",
-        bootstrap_ipv6="fd00:cafe::1",
-        default_route="default via 10.0.0.254",
-        dns_resolvers=["10.0.0.2"],
-        time_sync_status="System clock synchronized: yes",
-        disk_usage="",
-        memory_swap="",
-        mounted_filesystems="",
-        network_interfaces=[],
-        interface_names=[],
-        wireguard_interfaces=[],
-        ports=PortScanResult(
-            range_start=47800,
-            range_end=47850,
-            scanner="ss -H -lntup",
-            command_available=True,
-            returncode=0,
-            timed_out=False,
-            error=None,
-            stdout="",
-            stderr="",
-            conflicts=[],
-        ),
-        detected_binaries={
-            "k3s": None,
-            "kubectl": None,
-            "wg": None,
-            "ss": "/usr/bin/ss",
-            "curl": "/usr/bin/curl",
-        },
-        detected_services={
-            "k3s": {"active": "inactive", "enabled": "disabled"},
-        },
-        detected_artifacts={key: [] for key in (
-            "old_k3s_files",
-            "old_kubelet_state",
-            "old_cni_configs",
-            "old_flannel_state",
-            "old_cni_interfaces",
-            "old_flannel_interfaces",
-            "old_styx_interface_exact",
-            "old_temporary_styx_files",
-        )},
-        cni_interfaces=[],
-        firewall_backend={"preferred": "unknown", "binaries": {}, "services": {}},
-    )
-    for key, value in overrides.items():
-        setattr(inventory, key, value)
-    return inventory
 
 
 def _write_example_config(tmp_path: Path) -> Path:
@@ -96,7 +32,7 @@ def _write_example_config(tmp_path: Path) -> Path:
 
 def test_check_install_gate_requires_config(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    gate = check_install_gate(inventory=_base_inventory())
+    gate = check_install_gate(inventory=make_inventory())
     assert gate.ok is False
     assert "styx.yaml not found" in (gate.message or "")
 
@@ -106,7 +42,7 @@ def test_check_install_gate_blocks_on_sysprep_blocked(tmp_path, monkeypatch):
     _write_example_config(tmp_path)
     from styxctl.ports import PortConflict
 
-    inventory = _base_inventory(
+    inventory = make_inventory(
         ports=PortScanResult(
             range_start=47800,
             range_end=47850,
@@ -140,7 +76,7 @@ def test_check_install_gate_blocks_on_sysprep_blocked(tmp_path, monkeypatch):
 def test_build_install_plan_includes_k3s_and_styx_wireguard(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config_path = _write_example_config(tmp_path)
-    gate = check_install_gate(inventory=_base_inventory(), config_path=config_path)
+    gate = check_install_gate(inventory=make_inventory(), config_path=config_path)
     plan = build_install_plan(gate)
     names = [step.name for step in plan.steps]
     assert "k3s" in names
@@ -172,7 +108,7 @@ def test_build_cluster_plan_uses_node_ips(tmp_path, monkeypatch):
 def test_install_cluster_dry_run(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_example_config(tmp_path)
-    monkeypatch.setattr("styxctl.install.collect_inventory", _base_inventory)
+    monkeypatch.setattr("styxctl.install.collect_inventory", make_inventory)
     result = runner.invoke(app, ["install", "plan", "cluster"])
     assert result.exit_code == 0
     assert "Cluster plan" in result.stdout or "cluster" in result.stdout.lower()
@@ -181,7 +117,7 @@ def test_install_cluster_dry_run(tmp_path, monkeypatch):
 def test_run_install_cluster_mocked_ssh(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config_path = _write_example_config(tmp_path)
-    monkeypatch.setattr("styxctl.install.collect_inventory", _base_inventory)
+    monkeypatch.setattr("styxctl.install.collect_inventory", make_inventory)
 
     def fake_ssh(target: str, command: str) -> tuple[bool, str]:
         if "node-token" in command:
@@ -212,7 +148,7 @@ def test_run_install_cluster_mocked_ssh(tmp_path, monkeypatch):
 def test_run_install_local_dry_run_writes_report(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_example_config(tmp_path)
-    monkeypatch.setattr("styxctl.install.collect_inventory", _base_inventory)
+    monkeypatch.setattr("styxctl.install.collect_inventory", make_inventory)
 
     result = runner.invoke(app, ["install", "plan", "local"])
     assert result.exit_code == 0
@@ -227,7 +163,7 @@ def test_run_install_local_dry_run_writes_report(tmp_path, monkeypatch):
 
 def test_install_plan_local_blocked_without_config(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("styxctl.install.collect_inventory", _base_inventory)
+    monkeypatch.setattr("styxctl.install.collect_inventory", make_inventory)
     result = runner.invoke(app, ["install", "plan", "local"])
     assert result.exit_code == 1
     assert "Install blocked" in result.stdout
@@ -236,7 +172,7 @@ def test_install_plan_local_blocked_without_config(tmp_path, monkeypatch):
 def test_install_status_local_reports_issues(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_example_config(tmp_path)
-    monkeypatch.setattr("styxctl.install.collect_inventory", _base_inventory)
+    monkeypatch.setattr("styxctl.install.collect_inventory", make_inventory)
     result = runner.invoke(app, ["install", "status", "local"])
     assert result.exit_code == 1
     assert "k3s installed" in result.stdout
@@ -246,7 +182,7 @@ def test_install_status_local_reports_issues(tmp_path, monkeypatch):
 def test_install_doctor_local_exit_code(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_example_config(tmp_path)
-    monkeypatch.setattr("styxctl.install.collect_inventory", _base_inventory)
+    monkeypatch.setattr("styxctl.install.collect_inventory", make_inventory)
     result = runner.invoke(app, ["install", "doctor", "local"])
     assert result.exit_code == 1
     assert "blocking issues found" in result.stdout
@@ -255,14 +191,14 @@ def test_install_doctor_local_exit_code(tmp_path, monkeypatch):
 def test_run_install_local_blocked_returns_exit_one(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_example_config(tmp_path)
-    monkeypatch.setattr("styxctl.install.collect_inventory", _base_inventory)
+    monkeypatch.setattr("styxctl.install.collect_inventory", make_inventory)
     gate = InstallGateResult(
         ok=False,
         message="blocked",
         config={},
         config_path=tmp_path / "styx.yaml",
         config_status_value="VALID",
-        inventory=_base_inventory(),
+        inventory=make_inventory(),
         sysprep_status="BLOCKED",
         warnings=[],
         blocking=["blocked"],
@@ -276,7 +212,7 @@ def test_run_install_local_blocked_returns_exit_one(tmp_path, monkeypatch):
 def test_run_install_plan_preview(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_example_config(tmp_path)
-    monkeypatch.setattr("styxctl.install.collect_inventory", _base_inventory)
+    monkeypatch.setattr("styxctl.install.collect_inventory", make_inventory)
     report, exit_code = run_install_plan_preview(config_path=tmp_path / "styx.yaml")
     assert exit_code == 0
     assert report["command"] == "styxctl install plan local"
