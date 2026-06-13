@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [MVP1, MVP2, main, "cursor/**"]
+  pull_request:
+    branches: [MVP1, MVP2, main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package and dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run tests
+        run: python -m pytest -v
+
+      - name: Verify CLI entry point
+        run: |
+          styxctl version
+          styxctl --help
+          styxctl sysprep check --help
+          styxctl install --help
+          styxctl ports list local
+
+      - name: Build wheel
+        run: python -m pip install build && python -m build
+
+  sysprep-smoke:
+    name: Sysprep check (GitHub-hosted)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install styxctl
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Run read-only sysprep check on GitHub-hosted runner
+        run: |
+          styxctl sysprep check local
+          styxctl sysprep safe plan local
+          styxctl ports check local
+          cp styx.yaml.example styx.yaml
+          styxctl config validate
+          styxctl install plan local
+          styxctl install plan cluster
+          styxctl install status cluster || true
+          styxctl install doctor cluster || true
+
+      - name: Verify sysprep reports were written
+        run: |
+          test -d reports/styx
+          hostname="$(ls reports/styx | head -n1)"
+          test -f "reports/styx/${hostname}/sysprep-report.json"
+          test -f "reports/styx/${hostname}/sysprep-report.txt"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report_dir = next(Path("reports/styx").iterdir())
+          report = json.loads((report_dir / "sysprep-report.json").read_text())
+          status = report["status"]
+          print(f"Sysprep status: {status}")
+          assert status in {"READY", "READY_WITH_WARNINGS", "BLOCKED"}
+          PY
+
+      - name: Upload sysprep reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: sysprep-report-github-hosted
+          path: reports/styx/
+          if-no-files-found: error

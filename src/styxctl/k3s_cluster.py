@@ -1,0 +1,308 @@
+"""Multi-node k3s cluster planning and remote orchestration for MVP2."""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+import json
+import shutil
+import subprocess
+from typing import Any, Callable
+
+from .config import load_config
+from .inventory import SystemInventory, safe_run
+from .nodes import ClusterNode, all_node_tls_sans, init_server_node, parse_nodes, sort_nodes_for_install
+
+K3S_TOKEN_PATH = "/var/lib/rancher/k3s/server/node-token"
+K3S_API_PORT = 6443
+
+RunResult = tuple[bool, str]
+
+
+@dataclass(slots=True)
+class ClusterNodePlan:
+    node: ClusterNode
+    role: str
+    target_host: str
+    node_ips: list[str]
+    tls_sans: list[str]
+    k3s_env: dict[str, str]
+    k3s_args: list[str]
+    command_display: str
+    status: str = "pending"
+    detail: str | None = None
+    local_execution: bool = False
+
+    def to_dict(self) -> dict[str, object]:
+        data = asdict(self)
+        data["node"] = self.node.to_dict()
+        return data
+
+
+@dataclass(slots=True)
+class ClusterPlan:
+    init_node: str
+    nodes: list[ClusterNodePlan] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "init_node": self.init_node,
+            "warnings": list(self.warnings),
+            "nodes": [item.to_dict() for item in self.nodes],
+        }
+
+
+def _k3s_network_args(config: dict[str, Any]) -> list[str]:
+    cluster = config.get("cluster", {})
+    network = config.get("network", {})
+    mode = cluster.get("mode", "dual-stack")
+    args: list[str] = []
+
+    if mode in {"dual-stack", "ipv4-only"}:
+        pod_ipv4 = network.get("pod_ipv4")
+        service_ipv4 = network.get("service_ipv4")
+        if isinstance(pod_ipv4, str):
+            args.extend(["--cluster-cidr", pod_ipv4])
+        if isinstance(service_ipv4, str):
+            args.extend(["--service-cidr", service_ipv4])
+
+    if mode in {"dual-stack", "ipv6-only"}:
+        pod_ipv6 = network.get("pod_ipv6")
+        service_ipv6 = network.get("service_ipv6")
+        if isinstance(pod_ipv6, str):
+            args.extend(["--cluster-cidr-v6", pod_ipv6])
+        if isinstance(service_ipv6, str):
+            args.extend(["--service-cidr-v6", service_ipv6])
+    return args
+
+
+def k3s_install_spec(
+    config: dict[str, Any],
+    node: ClusterNode,
+    *,
+    all_nodes: list[ClusterNode],
+    join_url: str | None = None,
+    join_token: str | None = None,
+) -> tuple[dict[str, str], list[str], str]:
+    args = _k3s_network_args(config)
+    env: dict[str, str] = {}
+
+    for ip in node.all_ips():
+        args.extend(["--node-ip", ip])
+    for san in all_node_tls_sans(all_nodes):
+        args.extend(["--tls-san", san])
+
+    if node.role == "init-server":
+        env["INSTALL_K3S_EXEC"] = "server"
+        args.append("--cluster-init")
+        display = (
+            "curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='server' sh -s - "
+            + " ".join(args)
+        )
+    elif node.role == "server":
+        env["INSTALL_K3S_EXEC"] = "server"
+        if join_url:
+            env["K3S_URL"] = join_url
+        if join_token:
+            env["K3S_TOKEN"] = join_token
+        display = (
+            f"curl -sfL https://get.k3s.io | K3S_URL={join_url or '<init-url>'} "
+            f"K3S_TOKEN=<token> INSTALL_K3S_EXEC='server' sh -s - "
+            + " ".join(args)
+        )
+    else:
+        env["INSTALL_K3S_EXEC"] = "agent"
+        if join_url:
+            env["K3S_URL"] = join_url
+        if join_token:
+            env["K3S_TOKEN"] = join_token
+        display = (
+            f"curl -sfL https://get.k3s.io | K3S_URL={join_url or '<init-url>'} "
+            f"K3S_TOKEN=<token> INSTALL_K3S_EXEC='agent' sh -s - "
+            + " ".join(args)
+        )
+    return env, args, display
+
+
+def build_cluster_plan(
+    config: dict[str, Any],
+    *,
+    local_node: ClusterNode | None = None,
+    join_url: str | None = None,
+    join_token: str | None = None,
+) -> ClusterPlan:
+    nodes = parse_nodes(config)
+    init_node = init_server_node(nodes)
+    if init_node is None:
+        return ClusterPlan(init_node="unknown", warnings=["no init-server node defined"])
+
+    if join_url is None and init_node.primary_ip:
+        join_url = f"https://{init_node.primary_ip}:{K3S_API_PORT}"
+
+    plans: list[ClusterNodePlan] = []
+    for node in sort_nodes_for_install(nodes):
+        env, args, display = k3s_install_spec(
+            config,
+            node,
+            all_nodes=nodes,
+            join_url=join_url if node.role != "init-server" else None,
+            join_token=join_token if node.role != "init-server" else None,
+        )
+        target = node.primary_ip or node.name
+        plans.append(
+            ClusterNodePlan(
+                node=node,
+                role=node.role,
+                target_host=target,
+                node_ips=node.all_ips(),
+                tls_sans=all_node_tls_sans(nodes),
+                k3s_env=env,
+                k3s_args=args,
+                command_display=display,
+                local_execution=local_node is not None and local_node.name == node.name,
+            )
+        )
+
+    return ClusterPlan(init_node=init_node.name, nodes=plans)
+
+
+def _ssh_target(node: ClusterNode, fallback_user: str | None) -> str:
+    user = node.ssh_user or fallback_user
+    host = node.primary_ip or node.name
+    return f"{user}@{host}" if user else host
+
+
+def _run_ssh_command(
+    target: str,
+    remote_command: str,
+    *,
+    timeout: float = 900.0,
+) -> RunResult:
+    if shutil.which("ssh") is None:
+        return False, "ssh command not found"
+    try:
+        completed = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", target, remote_command],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"ssh timed out after {timeout} seconds"
+    except OSError as exc:
+        return False, str(exc)
+
+    detail = (completed.stderr or completed.stdout or "").strip()
+    if completed.returncode == 0:
+        return True, detail or "ok"
+    return False, detail or f"ssh exit code {completed.returncode}"
+
+
+def fetch_join_token_from_init(
+    init_node: ClusterNode,
+    *,
+    ssh_user: str | None = None,
+    runner: Callable[[str, str], RunResult] = _run_ssh_command,
+) -> RunResult:
+    target = _ssh_target(init_node, ssh_user)
+    return runner(target, f"sudo cat {K3S_TOKEN_PATH}")
+
+
+def _remote_k3s_install_command(env: dict[str, str], args: list[str]) -> str:
+    env_exports = " ".join(f"{key}='{value}'" for key, value in env.items())
+    arg_text = " ".join(args)
+    return f"curl -sfL https://get.k3s.io | {env_exports} sh -s - {arg_text}"
+
+
+def apply_cluster_node_plan(
+    plan: ClusterNodePlan,
+    *,
+    ssh_user: str | None,
+    runner: Callable[[str, str], RunResult] = _run_ssh_command,
+) -> ClusterNodePlan:
+    if plan.local_execution:
+        plan.status = "skipped"
+        plan.detail = "local node handled by install local"
+        return plan
+
+    target = _ssh_target(plan.node, ssh_user)
+    remote_command = _remote_k3s_install_command(plan.k3s_env, plan.k3s_args)
+    ok, detail = runner(target, remote_command)
+    plan.status = "installed" if ok else "failed"
+    plan.detail = detail
+    return plan
+
+
+def assess_cluster_nodes(
+    config: dict[str, Any],
+    *,
+    inventory: SystemInventory | None = None,
+    ssh_user: str | None = None,
+    runner: Callable[[str, str], RunResult] = _run_ssh_command,
+) -> dict[str, Any]:
+    nodes = parse_nodes(config)
+    init_node = init_server_node(nodes)
+    results: list[dict[str, Any]] = []
+    issues: list[str] = []
+
+    kubectl_nodes: list[str] = []
+    if init_node and init_node.primary_ip:
+        target = _ssh_target(init_node, ssh_user)
+        ok, detail = runner(target, "sudo kubectl get nodes -o json")
+        if ok:
+            try:
+                payload = json.loads(detail)
+                for item in payload.get("items", []):
+                    name = item.get("metadata", {}).get("name")
+                    ready = any(
+                        condition.get("type") == "Ready" and condition.get("status") == "True"
+                        for condition in item.get("status", {}).get("conditions", [])
+                    )
+                    kubectl_nodes.append(name or "unknown")
+                    if not ready:
+                        issues.append(f"kubectl reports node {name} not Ready")
+            except json.JSONDecodeError:
+                issues.append("could not parse kubectl get nodes output from init server")
+        else:
+            issues.append(f"could not query kubectl on init server: {detail}")
+
+    for node in nodes:
+        target = _ssh_target(node, ssh_user)
+        ok, detail = runner(target, "sudo systemctl is-active k3s || sudo systemctl is-active k3s-agent")
+        entry = {
+            "name": node.name,
+            "role": node.role,
+            "ipv4": node.ipv4,
+            "ipv6": node.ipv6,
+            "reachable": ok,
+            "k3s_active": detail.strip() == "active" if ok else False,
+            "detail": detail,
+        }
+        results.append(entry)
+        if not ok:
+            issues.append(f"node {node.name} ({node.primary_ip}) is not reachable or k3s is not active")
+
+    expected = {node.name for node in nodes}
+    if kubectl_nodes and expected - set(kubectl_nodes):
+        missing = ", ".join(sorted(expected - set(kubectl_nodes)))
+        issues.append(f"cluster missing kubectl nodes: {missing}")
+
+    healthy = not issues and len(results) == len(nodes) and all(item["k3s_active"] for item in results)
+    return {
+        "healthy": healthy,
+        "init_node": init_node.name if init_node else None,
+        "kubectl_nodes": kubectl_nodes,
+        "nodes": results,
+        "issues": issues,
+    }
+
+
+def local_node_plan_from_cluster(
+    cluster_plan: ClusterPlan,
+    local_node: ClusterNode,
+) -> ClusterNodePlan | None:
+    for item in cluster_plan.nodes:
+        if item.node.name == local_node.name:
+            return item
+    return None
