@@ -6,6 +6,8 @@ from styxctl.inventory import SystemInventory
 from styxctl.nodes import identify_local_node, parse_nodes, validate_nodes
 from styxctl.ports import PortScanResult
 
+from tests.support import EXAMPLE_CONFIG_PATH
+
 
 def _inventory(**overrides) -> SystemInventory:
     base = SystemInventory(
@@ -63,10 +65,9 @@ def _inventory(**overrides) -> SystemInventory:
 
 
 def test_parse_nodes_from_example_config():
-    from pathlib import Path
     from styxctl.config import load_config
 
-    config = load_config(Path("/workspace/styx.yaml.example"))
+    config = load_config(EXAMPLE_CONFIG_PATH)
     nodes = parse_nodes(config)
     assert len(nodes) == 3
     assert nodes[0].name == "pistyx"
@@ -87,10 +88,9 @@ def test_validate_nodes_requires_single_init_server():
 
 
 def test_identify_local_node_by_current_ip():
-    from pathlib import Path
     from styxctl.config import load_config
 
-    config = load_config(Path("/workspace/styx.yaml.example"))
+    config = load_config(EXAMPLE_CONFIG_PATH)
     nodes = parse_nodes(config)
     matched = identify_local_node(nodes, _inventory())
     assert matched is not None

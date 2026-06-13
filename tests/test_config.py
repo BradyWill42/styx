@@ -8,6 +8,8 @@ import yaml
 
 from styxctl.config import config_status, load_config, validate_config
 
+from tests.support import example_config_text
+
 
 def test_validate_empty_config_warns():
     issues = validate_config({})
@@ -18,7 +20,7 @@ def test_validate_empty_config_warns():
 
 def test_validate_example_config(tmp_path):
     config_path = tmp_path / "styx.yaml"
-    config_path.write_text(Path("/workspace/styx.yaml.example").read_text(encoding="utf-8"), encoding="utf-8")
+    config_path.write_text(example_config_text(), encoding="utf-8")
     config = load_config(config_path)
     issues = validate_config(config)
     assert config_status(issues) == "VALID"

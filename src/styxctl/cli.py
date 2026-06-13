@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -47,12 +45,16 @@ app = typer.Typer(
 sysprep_app = typer.Typer(help="Prepare hosts safely before Styx installation.", no_args_is_help=True)
 sysprep_check_app = typer.Typer(help="Read-only sysprep checks.", no_args_is_help=True)
 sysprep_safe_app = typer.Typer(help="Known-safe local cleanup before install.", no_args_is_help=True)
+sysprep_safe_plan_app = typer.Typer(help="Preview safe local cleanup without changing the host.", no_args_is_help=True)
+sysprep_safe_apply_app = typer.Typer(help="Apply safe local cleanup without confirmation.", no_args_is_help=True)
 sysprep_reset_app = typer.Typer(help="Interactive cleanup modes. MVP3 placeholder.", no_args_is_help=True)
 sysprep_nuke_app = typer.Typer(help="Destructive cleanup modes. MVP3 placeholder.", no_args_is_help=True)
 ports_app = typer.Typer(help="Inspect the Styx reserved port range.", no_args_is_help=True)
 ports_check_app = typer.Typer(help="Check Styx reserved ports.", no_args_is_help=True)
 ports_list_app = typer.Typer(help="List the Styx reserved port plan.", no_args_is_help=True)
 ports_clear_app = typer.Typer(help="Clear safe Styx reserved port conflicts.", no_args_is_help=True)
+ports_clear_plan_app = typer.Typer(help="Preview safe port cleanup without changing the host.", no_args_is_help=True)
+ports_clear_apply_app = typer.Typer(help="Apply safe port cleanup without confirmation.", no_args_is_help=True)
 config_app = typer.Typer(help="Inspect and validate styx.yaml.", no_args_is_help=True)
 report_app = typer.Typer(help="Inspect saved sysprep reports.", no_args_is_help=True)
 install_app = typer.Typer(help="Install Styx prerequisites on local gateway nodes.", no_args_is_help=True)
@@ -125,7 +127,7 @@ def sysprep_check_local() -> None:
     console.print(f"  Text: {paths['text']}")
 
     if report["status"] == "BLOCKED":
-        console.print("[yellow]Hint:[/yellow] try `styxctl sysprep safe local --dry-run` to preview safe cleanup.")
+        console.print("[yellow]Hint:[/yellow] try `styxctl sysprep safe plan local` to preview safe cleanup.")
         raise typer.Exit(code=1)
 
 
@@ -141,18 +143,39 @@ def sysprep_check_node() -> None:
     console.print("MVP4 placeholder: no remote node check was run.")
 
 
+@sysprep_safe_plan_app.command("local")
+def sysprep_safe_plan_local() -> None:
+    """Preview known-safe Styx/k3s cleanup without changing the host."""
+    _run_remediation(
+        title="Styx Safe Sysprep Remediation",
+        build_plan=build_safe_sysprep_plan,
+        apply_plan=apply_safe_sysprep,
+        dry_run=True,
+        yes=False,
+    )
+
+
+@sysprep_safe_apply_app.command("local")
+def sysprep_safe_apply_local() -> None:
+    """Apply known-safe Styx/k3s cleanup without confirmation."""
+    _run_remediation(
+        title="Styx Safe Sysprep Remediation",
+        build_plan=build_safe_sysprep_plan,
+        apply_plan=apply_safe_sysprep,
+        dry_run=False,
+        yes=True,
+    )
+
+
 @sysprep_safe_app.command("local")
-def sysprep_safe_local(
-    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show planned actions without changing the host."),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Apply planned actions without confirmation."),
-) -> None:
+def sysprep_safe_local() -> None:
     """Stop/disable known-safe Styx/k3s leftovers and clear safe reserved-port conflicts."""
     _run_remediation(
         title="Styx Safe Sysprep Remediation",
         build_plan=build_safe_sysprep_plan,
         apply_plan=apply_safe_sysprep,
-        dry_run=dry_run,
-        yes=yes,
+        dry_run=False,
+        yes=False,
     )
 
 
@@ -223,27 +246,46 @@ def ports_list_local() -> None:
     console.print(table)
 
 
+@ports_clear_plan_app.command("local")
+def ports_clear_plan_local() -> None:
+    """Preview safe Styx reserved port cleanup without changing the host."""
+    _run_remediation(
+        title="Styx Reserved Port Cleanup",
+        build_plan=build_port_clear_plan,
+        apply_plan=apply_port_clear,
+        dry_run=True,
+        yes=False,
+    )
+
+
+@ports_clear_apply_app.command("local")
+def ports_clear_apply_local() -> None:
+    """Clear safe Styx reserved port conflicts without confirmation."""
+    _run_remediation(
+        title="Styx Reserved Port Cleanup",
+        build_plan=build_port_clear_plan,
+        apply_plan=apply_port_clear,
+        dry_run=False,
+        yes=True,
+    )
+
+
 @ports_clear_app.command("local")
-def ports_clear_local(
-    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show planned actions without changing the host."),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Apply planned actions without confirmation."),
-) -> None:
+def ports_clear_local() -> None:
     """Clear only safe Styx reserved port conflicts in 47800-47850."""
     _run_remediation(
         title="Styx Reserved Port Cleanup",
         build_plan=build_port_clear_plan,
         apply_plan=apply_port_clear,
-        dry_run=dry_run,
-        yes=yes,
+        dry_run=False,
+        yes=False,
     )
 
 
 @config_app.command("show")
-def config_show(
-    path: Path | None = typer.Option(None, "--path", help="Path to styx.yaml or styx.yml."),
-) -> None:
+def config_show() -> None:
     """Show the active Styx config summary."""
-    config_path = Path(path) if path else find_config()
+    config_path = find_config()
     try:
         config = load_config(config_path)
     except ConfigError as exc:
@@ -253,11 +295,9 @@ def config_show(
 
 
 @config_app.command("validate")
-def config_validate(
-    path: Path | None = typer.Option(None, "--path", help="Path to styx.yaml or styx.yml."),
-) -> None:
+def config_validate() -> None:
     """Validate styx.yaml structure for Styx."""
-    config_path = Path(path) if path else find_config()
+    config_path = find_config()
     try:
         config = load_config(config_path)
     except ConfigError as exc:
@@ -285,16 +325,25 @@ def config_validate(
 
 @report_app.command("show")
 def report_show_local(
-    hostname: str | None = typer.Option(None, "--hostname", help="Hostname report directory to display."),
-    json_output: bool = typer.Option(False, "--json", help="Print saved JSON instead of text report."),
+    hostname: str | None = typer.Argument(None, help="Hostname report directory to display."),
 ) -> None:
     """Show the latest saved local sysprep report."""
     try:
-        if json_output:
-            report = load_saved_report(hostname=hostname)
-            console.print_json(data=report)
-        else:
-            console.print(load_saved_report_text(hostname=hostname), end="")
+        console.print(load_saved_report_text(hostname=hostname), end="")
+    except FileNotFoundError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        console.print("Run `styxctl sysprep check local` first.")
+        raise typer.Exit(code=1) from exc
+
+
+@report_app.command("json")
+def report_json_local(
+    hostname: str | None = typer.Argument(None, help="Hostname report directory to display."),
+) -> None:
+    """Print the latest saved local sysprep report as JSON."""
+    try:
+        report = load_saved_report(hostname=hostname)
+        console.print_json(data=report)
     except FileNotFoundError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         console.print("Run `styxctl sysprep check local` first.")
@@ -541,11 +590,15 @@ def _future_app(label: str, milestone: str) -> typer.Typer:
 
 sysprep_app.add_typer(sysprep_check_app, name="check")
 sysprep_app.add_typer(sysprep_safe_app, name="safe")
+sysprep_safe_app.add_typer(sysprep_safe_plan_app, name="plan")
+sysprep_safe_app.add_typer(sysprep_safe_apply_app, name="apply")
 sysprep_app.add_typer(sysprep_reset_app, name="reset")
 sysprep_app.add_typer(sysprep_nuke_app, name="nuke")
 ports_app.add_typer(ports_check_app, name="check")
 ports_app.add_typer(ports_list_app, name="list")
 ports_app.add_typer(ports_clear_app, name="clear")
+ports_clear_app.add_typer(ports_clear_plan_app, name="plan")
+ports_clear_app.add_typer(ports_clear_apply_app, name="apply")
 
 install_app.add_typer(install_status_app, name="status")
 install_app.add_typer(install_doctor_app, name="doctor")

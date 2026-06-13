@@ -20,6 +20,8 @@ from styxctl.k3s_cluster import build_cluster_plan
 from styxctl.inventory import SystemInventory
 from styxctl.ports import PortScanResult
 
+from tests.support import example_config_text
+
 runner = CliRunner()
 
 
@@ -88,7 +90,7 @@ def _base_inventory(**overrides) -> SystemInventory:
 
 def _write_example_config(tmp_path: Path) -> Path:
     config_path = tmp_path / "styx.yaml"
-    config_path.write_text(Path("/workspace/styx.yaml.example").read_text(encoding="utf-8"), encoding="utf-8")
+    config_path.write_text(example_config_text(), encoding="utf-8")
     return config_path
 
 

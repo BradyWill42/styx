@@ -10,6 +10,8 @@ from typer.testing import CliRunner
 
 from styxctl.cli import app
 
+from tests.support import example_config_text
+
 runner = CliRunner()
 
 
@@ -122,7 +124,7 @@ def test_sysprep_check_local_blocked_exits_nonzero(tmp_path, monkeypatch):
     result = runner.invoke(app, ["sysprep", "check", "local"])
     assert result.exit_code == 1
     assert "Status: BLOCKED" in result.stdout
-    assert "sysprep safe local --dry-run" in result.stdout
+    assert "sysprep safe plan local" in result.stdout
 
 
 def test_ports_list_local():
@@ -138,15 +140,15 @@ def test_ports_check_local():
     assert "Styx Reserved Port Conflicts" in result.stdout
 
 
-def test_sysprep_safe_local_dry_run():
-    result = runner.invoke(app, ["sysprep", "safe", "local", "--dry-run"])
+def test_sysprep_safe_plan_local():
+    result = runner.invoke(app, ["sysprep", "safe", "plan", "local"])
     assert result.exit_code == 0
     assert "Mode: dry-run" in result.stdout
     assert "Planned actions:" in result.stdout
 
 
-def test_ports_clear_local_dry_run():
-    result = runner.invoke(app, ["ports", "clear", "local", "--dry-run"])
+def test_ports_clear_plan_local():
+    result = runner.invoke(app, ["ports", "clear", "plan", "local"])
     assert result.exit_code == 0
     assert "Mode: dry-run" in result.stdout
 
@@ -154,7 +156,7 @@ def test_ports_clear_local_dry_run():
 def test_config_validate_example(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config_path = tmp_path / "styx.yaml"
-    config_path.write_text(Path("/workspace/styx.yaml.example").read_text(encoding="utf-8"), encoding="utf-8")
+    config_path.write_text(example_config_text(), encoding="utf-8")
     result = runner.invoke(app, ["config", "validate"])
     assert result.exit_code == 0
     assert "Config status: VALID" in result.stdout
@@ -163,7 +165,7 @@ def test_config_validate_example(tmp_path, monkeypatch):
 def test_config_show_example(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config_path = tmp_path / "styx.yaml"
-    config_path.write_text(Path("/workspace/styx.yaml.example").read_text(encoding="utf-8"), encoding="utf-8")
+    config_path.write_text(example_config_text(), encoding="utf-8")
     result = runner.invoke(app, ["config", "show"])
     assert result.exit_code == 0
     assert "Cluster: styx" in result.stdout
@@ -179,7 +181,7 @@ def test_report_show_local(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "Styx Sysprep Report" in result.stdout
 
-    json_result = runner.invoke(app, ["report", "show", "--json"])
+    json_result = runner.invoke(app, ["report", "json"])
     assert json_result.exit_code == 0
     payload = json.loads(json_result.stdout)
     assert payload["tool"] == "styxctl"

@@ -8,16 +8,16 @@ MVP1 covers local assessment and safe remediation on a single Linux gateway node
 
 ```bash
 styxctl sysprep check local
-styxctl sysprep safe local --dry-run
-styxctl sysprep safe local --yes
+styxctl sysprep safe plan local
+styxctl sysprep safe apply local
 styxctl sysprep check local
 ```
 
 Typical flow:
 
 1. **Check** the node read-only
-2. **Preview** safe cleanup with `--dry-run`
-3. **Apply** safe cleanup with `--yes`
+2. **Preview** safe cleanup with `sysprep safe plan local`
+3. **Apply** safe cleanup with `sysprep safe apply local`
 4. **Re-check** until status is `READY` or only non-blocking warnings remain
 
 ## Install for local development
@@ -59,10 +59,12 @@ Readiness status:
 ### Safe remediation
 
 ```bash
-styxctl sysprep safe local --dry-run
-styxctl sysprep safe local --yes
-styxctl ports clear local --dry-run
-styxctl ports clear local --yes
+styxctl sysprep safe plan local
+styxctl sysprep safe apply local
+styxctl sysprep safe local
+styxctl ports clear plan local
+styxctl ports clear apply local
+styxctl ports clear local
 ```
 
 Safe remediation only acts on items already identified as safe:
@@ -78,7 +80,7 @@ It never touches:
 - unsafe port conflicts
 - deeper k3s state directories (reserved for MVP3 reset)
 
-Use `--dry-run` first. Without `--yes`, styxctl asks for confirmation before changing the host.
+Use `sysprep safe plan local` first. `sysprep safe local` asks for confirmation before changing the host; `sysprep safe apply local` skips the prompt.
 
 ### Config and reports
 
@@ -86,7 +88,7 @@ Use `--dry-run` first. Without `--yes`, styxctl asks for confirmation before cha
 styxctl config show
 styxctl config validate
 styxctl report show
-styxctl report show --json
+styxctl report json
 ```
 
 Copy `styx.yaml.example` to `styx.yaml` when you want config validation before MVP2.
@@ -214,7 +216,7 @@ python -m pip install -e ".[dev]"
 python -m pytest
 python -m styxctl.cli --help
 styxctl sysprep check local
-styxctl sysprep safe local --dry-run
+styxctl sysprep safe plan local
 styxctl config validate
 styxctl install plan local
 styxctl install apply local
