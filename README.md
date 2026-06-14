@@ -2,7 +2,7 @@
 
 **The control CLI for [Styx](https://github.com/BradyWill42/styx)** — a k3s-native, dual-stack WireGuard mesh and access gateway platform.
 
-`styxctl` prepares Linux gateway nodes, installs the k3s foundation, and (in future milestones) deploys the full Styx mesh. Every command is **command-discovery-first**: no flags, just composable subcommands with shell tab completion.
+`styxctl` prepares Linux gateway nodes, installs the k3s foundation, and (in future milestones) deploys the full Styx mesh. The CLI is **command-discovery-first**: composable subcommands, minimal options, and shell tab completion.
 
 | | |
 |---|---|
@@ -95,7 +95,7 @@ flowchart TB
 | `server` | Additional k3s control-plane / server node |
 | `agent` | k3s worker node |
 
-Each node's `ipv4` / `ipv6` in config becomes its k3s `--node-ip`. The init-server node is joined over SSH by all other nodes using their configured addresses.
+Each node's `ipv4` / `ipv6` in config becomes its k3s `--node-ip`. Cluster orchestration reaches configured nodes over SSH and has them join the init-server in role order.
 
 ---
 
@@ -104,10 +104,10 @@ Each node's `ipv4` / `ipv6` in config becomes its k3s `--node-ip`. The init-serv
 | Branch | Contents | Use when |
 |--------|----------|----------|
 | [`main`](https://github.com/BradyWill42/styx/tree/main) | MVP1 + MVP2 (current release) | Default — full platform prep and install |
-| [`MVP1`](https://github.com/BradyWill42/styx/tree/MVP1) | Assessment and safe remediation only | You only need sysprep on a single node |
-| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP1 + k3s / WireGuard install | Feature development on install path |
+| [`MVP1`](https://github.com/BradyWill42/styx/tree/MVP1) | Assessment and safe remediation milestone | You only need the MVP1 sysprep snapshot |
+| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | k3s / WireGuard install milestone | You need the MVP2 install-path snapshot |
 
-All branches share the same CLI design and safety rules. `main` is the integration branch; feature branches merge into `MVP1` or `MVP2` first, then into `main`.
+All branches share the same CLI design and safety rules. `main` is the current integration branch; `MVP1` and `MVP2` preserve milestone snapshots.
 
 ---
 
@@ -117,7 +117,7 @@ All branches share the same CLI design and safety rules. `main` is the integrati
 
 ```bash
 git clone https://github.com/BradyWill42/styx.git
-cd styxctl
+cd styx
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -152,7 +152,7 @@ styxctl install plan local
 styxctl install apply local          # on every node
 
 styxctl install plan cluster
-styxctl install apply cluster        # init + join from init-server over SSH
+styxctl install apply cluster        # orchestrate init + join over SSH
 
 styxctl install doctor local
 styxctl install doctor cluster
@@ -166,7 +166,7 @@ styxctl install doctor cluster
 | Python 3.10+ (for CLI) | Yes | Yes |
 | `sudo` (non-interactive for mutating commands) | Recommended | Required |
 | `ss` / `iproute2` | Recommended | Installed by MVP2 |
-| Passwordless SSH between nodes | No | Required for `install cluster` |
+| Passwordless SSH to configured nodes | No | Required for `install cluster` |
 | `styx.yaml` | Optional | Required |
 
 ---
@@ -210,7 +210,7 @@ styxctl sysprep check local
 - Processes and systemd units listening on ports `47800–47850`
 - k3s / flannel / CNI artifacts and leftover services
 - Sudo availability, time sync, disk and memory snapshot
-- Detected binaries (`k3s`, `kubectl`, `wg`, etc.)
+- Detected binaries (`k3s`, `kubectl`, `wg`, `ss`, etc.)
 
 ### Readiness status
 
@@ -264,7 +264,7 @@ styxctl config validate
 styxctl install plan local
 styxctl install apply local
 
-# Cluster join from init-server (SSH to all nodes)
+# Cluster join orchestration (SSH to configured nodes)
 styxctl install plan cluster
 styxctl install apply cluster
 
@@ -279,9 +279,10 @@ styxctl install doctor cluster
 
 | Component | Detail |
 |-----------|--------|
-| **Packages** | `iproute2`, `wireguard`, `wireguard-tools`, `curl`, `ca-certificates` |
+| **Packages** | `iproute2`, WireGuard tools, `curl`, `ca-certificates` via supported `apt`, `dnf`, or `yum` hosts |
 | **k3s** | Server or agent role per `styx.yaml`; dual-stack pod/service CIDRs |
 | **WireGuard** | `Styx` interface on UDP `47800` (never `wg0`) |
+| **Firewall** | Minimal allowance for Styx WireGuard UDP when `ufw`, `firewalld`, or `nftables` is detected |
 | **Preservation** | `wg0` config hash/mtime snapshotted before and verified after |
 
 ### Install gates
@@ -301,7 +302,7 @@ Always run `install plan` before `install apply`. Interactive commands (`install
 2. `server` nodes — join with token from init-server
 3. `agent` nodes — join as k3s agents
 
-Remote steps use the `ssh_user` from `cluster.ssh_user` (default in example: `ubuntu`). Ensure key-based SSH works from the init-server to every node IP in config.
+Remote steps use each node's `ssh_user` when set, otherwise `cluster.ssh_user` (default in example: `ubuntu`). Ensure key-based SSH works from the machine running `styxctl` to every node IP in config. You can also set `cluster.join_token` when a non-init node must join without fetching the token from the init-server over SSH.
 
 ### Health checks
 
@@ -340,10 +341,19 @@ cluster:
 network:
   ipv4_supernet: 10.0.0.0/14
   ipv6_supernet: fd00:cafe::/48
-  mesh_ipv4: 10.0.0.0/16
-  pod_ipv4: 10.2.0.0/16     # k3s --cluster-cidr
+
+  mesh_ipv4: 10.0.0.0/16    # Styx WireGuard address space
+  infra_ipv4: 10.1.0.0/16
+  pod_ipv4: 10.2.0.0/16     # k3s pods
   service_ipv4: 10.3.0.0/16
-  # ... matching IPv6 CIDRs for dual-stack
+
+  mesh_ipv6: fd00:cafe:0::/48
+  infra_ipv6: fd00:cafe:1::/56
+  pod_ipv6: fd00:cafe:2::/56
+  service_ipv6: fd00:cafe:3::/112
+
+  roadwarrior_ipv4: 10.0.250.0/24
+  roadwarrior_ipv6: fd00:cafe:0:250::/64
 
 wireguard:
   interface: Styx           # must NOT be wg0
@@ -367,13 +377,18 @@ nodes:
 dns:
   provider: duckdns
   auto_endpoint: pistyx
+  fixed_endpoints:
+    pegasus: pipegasus
+    hydra: pihydra
 
 siem:
   enabled: true
   provider: wazuh           # MVP4 placeholder
+  namespace: wazuh
+  profile: small-lab
 ```
 
-**Important:** node `ipv4` / `ipv6` values must match each machine's **current reachable addresses** — they drive k3s `--node-ip`, TLS SANs, and SSH targets during cluster join.
+**Important:** node `ipv4` / `ipv6` values must match each machine's **current reachable addresses** — they drive k3s `--node-ip`, TLS SANs, and SSH targets during cluster join. The `mesh_*` CIDRs are used for Styx WireGuard addressing.
 
 Config validation status:
 
@@ -420,11 +435,13 @@ Styx is designed for gateway nodes that may already run critical services. `styx
 
 | Command class | Mutates host? | Scope |
 |---------------|---------------|-------|
-| `sysprep check`, `ports check`, `ports list`, `config show`, `install plan`, `report` | No | Read-only |
+| `sysprep check`, `ports check`, `ports list`, `config show`, `install plan`, `install status`, `install doctor`, `report`, `version`, `completion` | No | Read-only host inspection |
 | `sysprep safe`, `ports clear`, `install apply` | Yes | Only pre-identified safe targets |
 | `sysprep reset`, `sysprep nuke`, `deploy` | MVP3 | Not implemented yet |
 
 **`wg0` is sacred.** It is inventoried, reported, and hash-verified — never removed or modified by MVP1 or MVP2.
+
+Read-only planning and reporting commands may write local artifacts under `reports/styx/`; they do not mutate gateway services or networking.
 
 Every mutating command follows **plan → confirm → apply**:
 
@@ -484,7 +501,7 @@ styxctl install <TAB>
 | `install doctor local` | Actionable local health diagnosis |
 | `install doctor cluster` | Cluster-wide health diagnosis |
 
-### Config, reports, and shell
+### Config, sysprep reports, and shell
 
 | Command | Description |
 |---------|-------------|
@@ -525,14 +542,14 @@ styxctl siem soon        # MVP4
 ./reports/styx/<hostname>/install-report.txt
 ```
 
-Inspect saved reports:
+Inspect saved sysprep reports:
 
 ```bash
 styxctl report show
 styxctl report json
 ```
 
-Reports include timestamps, readiness status, warnings, blocking reasons, inventory snapshots, and planned/applied action outcomes.
+Sysprep reports include timestamps, readiness status, warnings, blocking reasons, inventory snapshots, and planned/applied action outcomes. Install plan/apply commands also save `install-report.*` artifacts in the same host report directory; the `report` subcommands currently read the sysprep report bundle.
 
 ---
 
@@ -637,10 +654,10 @@ styx.yaml.example     # Reference cluster configuration
 
 ## Continuous integration
 
-Every push and pull request to `main`, `MVP1`, or `MVP2` runs two jobs:
+Every pull request to `main`, `MVP1`, or `MVP2` runs CI. Pushes to those branches and automation branches also run CI:
 
 1. **Test matrix** — Python 3.10, 3.11, 3.12: pytest, CLI smoke, wheel build
-2. **Sysprep smoke** — read-only `sysprep check` on a GitHub-hosted Ubuntu runner; uploads report artifacts
+2. **Sysprep/install smoke** — read-only `sysprep`, `ports`, `config`, and `install plan/status/doctor` checks on a GitHub-hosted Ubuntu runner; uploads report artifacts
 
 View results in the repository **Actions** tab. Download the **sysprep-report-github-hosted** artifact to inspect JSON and text reports from CI.
 
