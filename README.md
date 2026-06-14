@@ -2,14 +2,14 @@
 
 **The control CLI for [Styx](https://github.com/BradyWill42/styx)** — a k3s-native, dual-stack WireGuard mesh and access gateway platform.
 
-`styxctl` prepares Linux gateway nodes, installs the k3s foundation, and (in future milestones) deploys the full Styx mesh. The CLI is **command-discovery-first**: composable subcommands, minimal options, and shell tab completion.
+`styxctl` prepares Linux gateway nodes, installs the k3s foundation, and (in future milestones) deploys the full Styx mesh. The CLI is **command-discovery-first**: composable subcommands, no workflow flags, and shell tab completion.
 
 | | |
 |---|---|
 | **Version** | `0.3.0` |
 | **Python** | 3.10+ |
 | **License** | MIT |
-| **Status** | MVP1 + MVP2 shipped on `main` |
+| **Status** | MVP1 + MVP2 shipped on `main`; milestone branches carry newer targeted work |
 
 ---
 
@@ -103,11 +103,17 @@ Each node's `ipv4` / `ipv6` in config becomes its k3s `--node-ip`. Cluster orche
 
 | Branch | Contents | Use when |
 |--------|----------|----------|
-| [`main`](https://github.com/BradyWill42/styx/tree/main) | MVP1 + MVP2 (current release) | Default — full platform prep and install |
-| [`MVP1`](https://github.com/BradyWill42/styx/tree/MVP1) | Assessment and safe remediation milestone | You only need the MVP1 sysprep snapshot |
-| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | k3s / WireGuard install milestone | You need the MVP2 install-path snapshot |
+| [`main`](https://github.com/BradyWill42/styx/tree/main) | MVP1 + MVP2 integrated release | Default — full platform prep and install |
+| [`MVP1`](https://github.com/BradyWill42/styx/tree/MVP1) | MVP1-only sysprep snapshot; latest branch refreshes plan/apply subcommands and port docs | You only need assessment and safe remediation |
+| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP1 + install path; latest branch adds DuckDNS hostnames, gateway SSH/k3s ports, and LAN leader election | You need the newest install-path work before it lands on `main` |
 
-All branches share the same CLI design and safety rules. `main` is the current integration branch; `MVP1` and `MVP2` preserve milestone snapshots.
+All branches share the same CLI design and safety rules. `main` is the integration branch; feature work lands on `MVP1` or `MVP2` first, then merges into `main`.
+
+Current branch notes:
+
+- `main` currently uses configured node IPs for SSH orchestration and k3s joins.
+- The latest `MVP2` branch resolves `nodes[].hostname` values, updates DuckDNS before install operations, and uses gateway ports `47810/tcp` for SSH plus `47811/tcp` for the k3s API.
+- The latest `MVP2` branch can elect a strongest co-located LAN peer with UDP `47802` before install planning or apply.
 
 ---
 
@@ -275,6 +281,17 @@ styxctl install doctor local
 styxctl install doctor cluster
 ```
 
+### Latest MVP2 branch additions
+
+The `MVP2` branch has newer install-path work that is not yet merged into `main`:
+
+- `nodes[].hostname` stores each node's DuckDNS name for cross-site SSH and k3s joins.
+- `dns.token_env` defaults the DuckDNS token source to an environment variable such as `DUCKDNS_TOKEN`; install operations publish the node's current public IPv4 before connecting.
+- `gateway.ssh_port` and `gateway.k3s_api_port` default to `47810` and `47811`; local install configures sshd and k3s to listen on those node ports.
+- `cluster.leader: lan-elected` enables LAN leader election over UDP `47802`; use `styxctl install plan lan` and `styxctl install status lan` on that branch to preview or inspect election.
+
+If multiple Styx gateways share a LAN and the configured `init-server` is on that same LAN, the elected strongest peer is promoted to `init-server` and the previous init-server becomes a `server`. If the init-server is remote, election is reported for visibility without changing k3s roles.
+
 ### What MVP2 installs
 
 | Component | Detail |
@@ -302,7 +319,9 @@ Always run `install plan` before `install apply`. Interactive commands (`install
 2. `server` nodes — join with token from init-server
 3. `agent` nodes — join as k3s agents
 
-Remote steps use each node's `ssh_user` when set, otherwise `cluster.ssh_user` (default in example: `ubuntu`). Ensure key-based SSH works from the machine running `styxctl` to every node IP in config. You can also set `cluster.join_token` when a non-init node must join without fetching the token from the init-server over SSH.
+Remote steps on `main` use each node's `ssh_user` when set, otherwise `cluster.ssh_user` (default in example: `ubuntu`). Ensure key-based SSH works from the machine running `styxctl` to every node IP in config. You can also set `cluster.join_token` when a non-init node must join without fetching the token from the init-server over SSH.
+
+On the latest `MVP2` branch, remote steps resolve `nodes[].hostname`, connect to SSH on `gateway.ssh_port` (`47810` by default), and join k3s at `https://<hostname>:47811` by default.
 
 ### Health checks
 
@@ -337,6 +356,16 @@ cluster:
   domain: styx.net
   mode: dual-stack          # dual-stack | ipv4-only | ipv6-only
   ssh_user: ubuntu          # default SSH user for cluster join
+  # Latest MVP2 branch:
+  # leader: lan-elected
+  # lan_election:
+  #   port: 47802
+  #   collect_sec: 3
+
+# Latest MVP2 branch:
+# gateway:
+#   ssh_port: 47810
+#   k3s_api_port: 47811
 
 network:
   ipv4_supernet: 10.0.0.0/14
@@ -362,20 +391,26 @@ wireguard:
 
 nodes:
   - name: pistyx
+    # Latest MVP2 branch: hostname: pistyx.duckdns.org
     ipv4: 10.0.0.1          # set to this node's current LAN IP
     ipv6: fd00:cafe::1
     role: init-server
   - name: pegasus
+    # Latest MVP2 branch: hostname: pipegasus.duckdns.org
     ipv4: 10.0.0.2
     ipv6: fd00:cafe::2
     role: server
   - name: hydra
+    # Latest MVP2 branch: hostname: pihydra.duckdns.org
     ipv4: 10.0.0.3
     ipv6: fd00:cafe::3
     role: agent
 
 dns:
   provider: duckdns
+  # Latest MVP2 branch:
+  # domain: duckdns.org
+  # token_env: DUCKDNS_TOKEN
   auto_endpoint: pistyx
   fixed_endpoints:
     pegasus: pipegasus
@@ -388,7 +423,7 @@ siem:
   profile: small-lab
 ```
 
-**Important:** node `ipv4` / `ipv6` values must match each machine's **current reachable addresses** — they drive k3s `--node-ip`, TLS SANs, and SSH targets during cluster join. The `mesh_*` CIDRs are used for Styx WireGuard addressing.
+**Important:** on `main`, node `ipv4` / `ipv6` values must match each machine's **current reachable addresses** — they drive k3s `--node-ip`, TLS SANs, and SSH targets during cluster join. On the latest `MVP2` branch, `hostname` drives cross-site SSH/k3s reachability while `ipv4` / `ipv6` remain the k3s node IPs. The `mesh_*` CIDRs are used for Styx WireGuard addressing.
 
 Config validation status:
 
@@ -408,7 +443,7 @@ Only ports `47800–47850` are managed by `styxctl`. Critical production ports `
 |------|----------|---------|
 | 47800 | UDP | Styx production WireGuard gateway |
 | 47801 | TCP | Styx gateway health API |
-| 47802 | TCP | Styx director API |
+| 47802 | UDP | Styx director API / LAN leader election (`MVP2` branch) |
 | 47803 | TCP | Styx status dashboard/API |
 | 47804 | TCP | Styx node agent API |
 | 47805 | TCP | Styx Ansible controller API |
@@ -416,7 +451,9 @@ Only ports `47800–47850` are managed by `styxctl`. Critical production ports `
 | 47807 | TCP | Styx local diagnostics API |
 | 47808 | TCP | Styx metrics exporter |
 | 47809 | any | Reserved |
-| 47810–47819 | any | Site/gateway testing |
+| 47810 | TCP | SSH gateway listen (`MVP2` branch) |
+| 47811 | TCP | k3s API gateway listen (`MVP2` branch) |
+| 47812–47819 | any | Site/gateway spare |
 | 47820–47829 | any | Client/profile testing |
 | 47830–47839 | any | Development/debug |
 | 47840–47850 | any | Reserved future |
@@ -492,12 +529,14 @@ styxctl install <TAB>
 |---------|-------------|
 | `install plan local` | Preview local install steps |
 | `install plan cluster` | Preview cluster join steps |
+| `install plan lan` | Preview LAN leader election (`MVP2` branch) |
 | `install local` | Local install with confirm |
 | `install apply local` | Local install without confirm |
 | `install cluster` | Cluster install with confirm |
 | `install apply cluster` | Cluster install without confirm |
 | `install status local` | k3s + WireGuard status table |
 | `install status cluster` | All nodes reachability table |
+| `install status lan` | Show LAN peers and elected leader (`MVP2` branch) |
 | `install doctor local` | Actionable local health diagnosis |
 | `install doctor cluster` | Cluster-wide health diagnosis |
 
