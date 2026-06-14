@@ -119,7 +119,7 @@ def test_run_install_cluster_mocked_ssh(tmp_path, monkeypatch):
     config_path = _write_example_config(tmp_path)
     monkeypatch.setattr("styxctl.install.collect_inventory", make_inventory)
 
-    def fake_ssh(target: str, command: str) -> tuple[bool, str]:
+    def fake_ssh(target: str, command: str, **kwargs) -> tuple[bool, str]:
         if "node-token" in command:
             return True, "test-token"
         if "kubectl get nodes" in command:
@@ -130,6 +130,10 @@ def test_run_install_cluster_mocked_ssh(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "styxctl.install._run_pipeline",
         lambda *args, **kwargs: (True, "local k3s installed"),
+    )
+    monkeypatch.setattr(
+        "styxctl.k3s_cluster.refresh_node_duckdns",
+        lambda config, node: (False, "mocked"),
     )
     monkeypatch.setattr(
         "styxctl.k3s_cluster._run_ssh_command",

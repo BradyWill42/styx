@@ -10,7 +10,8 @@ from typing import Any
 import yaml
 
 from .ports import RESERVED_PORT_END, RESERVED_PORT_START
-from .nodes import parse_nodes, validate_nodes
+from .gateway import parse_gateway_ports
+from .nodes import node_hostname, parse_nodes, validate_nodes
 
 
 DEFAULT_CONFIG_FILENAMES = ("styx.yaml", "styx.yml")
@@ -148,6 +149,10 @@ def validate_config(config: dict[str, Any]) -> list[ValidationIssue]:
                 )
             )
 
+    gateway = parse_gateway_ports(config)
+    for message in gateway.validate():
+        issues.append(ValidationIssue("error", "gateway", message))
+
     dns = config.get("dns")
     if dns is not None:
         dns_map = _require_mapping(dns, "dns", issues)
@@ -162,7 +167,7 @@ def validate_config(config: dict[str, Any]) -> list[ValidationIssue]:
 
     nodes = parse_nodes(config)
     if nodes:
-        for message in validate_nodes(nodes):
+        for message in validate_nodes(nodes, config):
             issues.append(ValidationIssue("error", "nodes", message))
     else:
         issues.append(
@@ -194,11 +199,13 @@ def format_config_summary(config: dict[str, Any], config_path: Path | None) -> s
     lines.append(f"Config file: {config_path}")
     cluster = config.get("cluster", {})
     wireguard = config.get("wireguard", {})
+    gateway = parse_gateway_ports(config)
     lines.append(f"Cluster: {cluster.get('name', 'unknown')} ({cluster.get('mode', 'unknown')})")
     lines.append(
         "WireGuard: "
         f"{wireguard.get('interface', 'unknown')} on port {wireguard.get('port', 'unknown')}"
     )
+    lines.append(f"Gateway ports: SSH {gateway.ssh}, k3s API {gateway.k3s_api}")
     dns = config.get("dns", {})
     if dns:
         lines.append(f"DNS provider: {dns.get('provider', 'unknown')}")
@@ -211,6 +218,7 @@ def format_config_summary(config: dict[str, Any], config_path: Path | None) -> s
     if nodes:
         lines.append(f"Nodes: {len(nodes)} configured")
         for node in nodes:
+            host = node_hostname(config, node) or "-"
             ips = ", ".join(filter(None, (node.ipv4, node.ipv6)))
-            lines.append(f"  - {node.name} ({node.role}) {ips}")
+            lines.append(f"  - {node.name} ({node.role}) {host} mesh {ips}")
     return "\n".join(lines).rstrip() + "\n"

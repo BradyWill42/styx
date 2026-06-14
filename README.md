@@ -95,7 +95,7 @@ flowchart TB
 | `server` | Additional k3s control-plane / server node |
 | `agent` | k3s worker node |
 
-Each node's `ipv4` / `ipv6` in config becomes its k3s `--node-ip`. The init-server node is joined over SSH by all other nodes using their configured addresses.
+Each node uses a DuckDNS `hostname` for cross-site SSH/k3s join and mesh `ipv4` / `ipv6` for k3s `--node-ip`. The init-server node is joined over SSH on gateway port `47810` by all other nodes using their configured hostnames.
 
 ---
 
@@ -145,15 +145,18 @@ styxctl sysprep check local          # re-check until READY
 
 ```bash
 cp styx.yaml.example styx.yaml
-# Edit nodes: set each node's ipv4/ipv6 to its current LAN addresses
+# Set each node's DuckDNS hostname and mesh ipv4/ipv6 for k3s --node-ip
+# Export DUCKDNS_TOKEN before install so styxctl can publish your public IP
+export DUCKDNS_TOKEN=your-token
 styxctl config validate
 
 styxctl install plan local
 styxctl install apply local          # on every node
 
-styxctl install plan cluster
 styxctl install apply cluster        # init + join from init-server over SSH
 
+styxctl install status local
+styxctl install status cluster
 styxctl install doctor local
 styxctl install doctor cluster
 ```
@@ -257,14 +260,16 @@ After MVP1 reports `READY` or `READY_WITH_WARNINGS`, MVP2 installs the local fou
 
 ```bash
 cp styx.yaml.example styx.yaml
-# Set each node's ipv4/ipv6 to its current LAN addresses
+# Set each node's DuckDNS hostname and mesh ipv4/ipv6 for k3s --node-ip
+# Export DUCKDNS_TOKEN before install so styxctl can publish your public IP
+export DUCKDNS_TOKEN=your-token
 styxctl config validate
 
 # Per-node local install (run on every gateway)
 styxctl install plan local
 styxctl install apply local
 
-# Cluster join from init-server (SSH to all nodes)
+# Cluster join from init-server (SSH over gateway port 47810)
 styxctl install plan cluster
 styxctl install apply cluster
 
@@ -275,7 +280,24 @@ styxctl install doctor local
 styxctl install doctor cluster
 ```
 
-### What MVP2 installs
+Each node uses:
+
+- `hostname` — DuckDNS name for cross-site SSH and k3s join (resolved on every connect)
+- `ipv4` / `ipv6` — mesh addresses passed to k3s as `--node-ip` (internal overlay, not your public IP)
+
+`install apply local` and `install apply cluster` update DuckDNS with the node's current public IPv4 before connecting. Set `dns.token_env` (recommended) or `dns.token` in `styx.yaml`.
+
+### Port forwards (router)
+
+Forward the Styx reserved range on each gateway node's router to that node:
+
+| External (DuckDNS) | Forward to node | Service |
+|---|---|---|
+| `47800/udp` | `47800/udp` | Styx WireGuard |
+| `47810/tcp` | `22/tcp` | SSH (cluster install) |
+| `47811/tcp` | `6443/tcp` | k3s API (cluster join) |
+
+Defaults live in `gateway.ssh_port` and `gateway.k3s_api_port` inside `styx.yaml`. styxctl connects to `hostname:47810` for SSH and `https://hostname:47811` for k3s join — not port 22 or 6443 on the public side.
 
 | Component | Detail |
 |-----------|--------|
@@ -401,7 +423,9 @@ Only ports `47800–47850` are managed by `styxctl`. Critical production ports `
 | 47807 | TCP | Styx local diagnostics API |
 | 47808 | TCP | Styx metrics exporter |
 | 47809 | any | Reserved |
-| 47810–47819 | any | Site/gateway testing |
+| 47810 | TCP | SSH gateway port-forward |
+| 47811 | TCP | k3s API gateway port-forward |
+| 47812–47819 | any | Site/gateway spare |
 | 47820–47829 | any | Client/profile testing |
 | 47830–47839 | any | Development/debug |
 | 47840–47850 | any | Reserved future |
@@ -555,7 +579,7 @@ If a non-Styx process holds a critical port, stop it manually — MVP1 will not 
 styxctl config validate
 ```
 
-Common fixes: set node IPs to real LAN addresses, ensure exactly one `init-server`, and keep `wireguard.interface` as `Styx` (not `wg0`).
+Common fixes: set node `hostname` to the correct DuckDNS name, mesh IPs for k3s `--node-ip`, ensure exactly one `init-server`, port-forward `47810`/`47811`, and keep `wireguard.interface` as `Styx` (not `wg0`).
 
 ### Install blocked: sudo unavailable
 
@@ -576,8 +600,8 @@ styxctl install apply local
 ### Cluster join failures
 
 ```bash
-# From init-server, verify SSH to each node IP
-ssh ubuntu@<node-ip> true
+# From init-server, verify SSH to each node hostname on gateway port 47810
+ssh -p 47810 ubuntu@<node-hostname> true
 
 styxctl install status cluster
 styxctl install doctor cluster

@@ -18,6 +18,8 @@ import subprocess
 from typing import Any, Callable
 
 from .config import config_status, find_config, load_config, validate_config
+from .dns_update import refresh_local_node_duckdns
+from .gateway import k3s_join_url, parse_gateway_ports
 from .inventory import SystemInventory, collect_inventory, safe_run
 from .k3s_cluster import (
     ClusterPlan,
@@ -26,9 +28,10 @@ from .k3s_cluster import (
     build_cluster_plan,
     fetch_join_token_from_init,
     k3s_install_spec,
+    refresh_cluster_duckdns,
     _run_ssh_command,
 )
-from .nodes import identify_local_node, init_server_node, parse_nodes, validate_nodes
+from .nodes import identify_local_node, init_server_node, node_hostname, parse_nodes, validate_nodes
 from .remediation import _run_mutating
 from .reports import CRITICAL_PORTS, evaluate_readiness
 
@@ -285,15 +288,17 @@ def _missing_packages(inventory: SystemInventory, package_manager: str | None) -
 
 def _join_credentials(config: dict[str, Any], nodes: list) -> tuple[str | None, str | None]:
     init = init_server_node(nodes)
-    if init is None or not init.primary_ip:
+    init_host = node_hostname(config, init) if init else None
+    if init is None or not (init_host or init.primary_ip):
         return None, None
-    join_url = f"https://{init.primary_ip}:6443"
+    gateway = parse_gateway_ports(config)
+    join_url = k3s_join_url(init_host or init.primary_ip, gateway)
     cluster = config.get("cluster", {})
     token = cluster.get("join_token")
     if isinstance(token, str) and token.strip():
         return join_url, token.strip()
     ssh_user = cluster.get("ssh_user") if isinstance(cluster.get("ssh_user"), str) else None
-    ok, detail = fetch_join_token_from_init(init, ssh_user=ssh_user)
+    ok, detail = fetch_join_token_from_init(init, config=config, ssh_user=ssh_user)
     if ok:
         return join_url, detail.strip()
     return join_url, None
@@ -301,7 +306,7 @@ def _join_credentials(config: dict[str, Any], nodes: list) -> tuple[str | None, 
 
 def _k3s_install_command_display(config: dict[str, Any], inventory: SystemInventory) -> str:
     nodes = parse_nodes(config)
-    local_node = identify_local_node(nodes, inventory)
+    local_node = identify_local_node(nodes, inventory, config)
     all_nodes = nodes or []
     if local_node and all_nodes:
         join_url, join_token = _join_credentials(config, all_nodes)
@@ -419,7 +424,7 @@ def build_install_plan(
     steps: list[InstallStep] = []
     interface, port = _wireguard_settings(config)
     nodes = parse_nodes(config)
-    local_node = identify_local_node(nodes, inventory)
+    local_node = identify_local_node(nodes, inventory, config)
     cluster_plan = build_cluster_plan(config, local_node=local_node) if nodes else None
 
     missing_packages = _missing_packages(inventory, package_manager)
@@ -830,7 +835,7 @@ def _execute_step(
         )
     elif step.name == "k3s":
         nodes = parse_nodes(config)
-        local_node = identify_local_node(nodes, inventory)
+        local_node = identify_local_node(nodes, inventory, config)
         if local_node and nodes:
             join_url, join_token = _join_credentials(config, nodes)
             env, args, _ = k3s_install_spec(
@@ -1004,7 +1009,7 @@ def assess_install_health(
         health_issues.append("critical Styx ports 47800-47808 have conflicts")
 
     cluster_nodes = parse_nodes(config)
-    local_node = identify_local_node(cluster_nodes, inventory)
+    local_node = identify_local_node(cluster_nodes, inventory, config)
     healthy = not health_issues
     return InstallHealth(
         healthy=healthy,
@@ -1131,6 +1136,11 @@ def run_install_local(
         report["pending_count"] = len(pending)
         return report, 0
 
+    dns_update: dict[str, object] | None = None
+    if not dry_run:
+        ok, detail = refresh_local_node_duckdns(gate.config, pre_inventory.hostname)
+        dns_update = {"ok": ok, "detail": detail}
+
     applied_plan = apply_install_plan(
         plan,
         config=gate.config,
@@ -1153,6 +1163,8 @@ def run_install_local(
         pre_inventory=pre_inventory,
         post_inventory=post_inventory,
     )
+    if dns_update is not None:
+        report["dns_update"] = dns_update
 
     if dry_run:
         return report, 0
@@ -1196,7 +1208,7 @@ def check_cluster_gate(
         return gate
 
     nodes = parse_nodes(gate.config)
-    node_errors = validate_nodes(nodes)
+    node_errors = validate_nodes(nodes, gate.config)
     if not nodes:
         return InstallGateResult(
             ok=False,
@@ -1237,7 +1249,7 @@ def run_install_cluster(
         require_sudo=not dry_run,
     )
     nodes = parse_nodes(gate.config) if gate.ok else []
-    local_node = identify_local_node(nodes, pre_inventory) if nodes else None
+    local_node = identify_local_node(nodes, pre_inventory, gate.config) if nodes else None
     cluster_plan = build_cluster_plan(gate.config, local_node=local_node) if gate.ok else ClusterPlan(init_node="unknown")
 
     base_plan = InstallPlan(
@@ -1289,8 +1301,10 @@ def run_install_cluster(
         report["cluster"] = cluster_plan.to_dict()
         return report, 0
 
+    gateway = parse_gateway_ports(gate.config)
+    dns_messages = refresh_cluster_duckdns(gate.config, nodes)
     ssh_user = gate.config.get("cluster", {}).get("ssh_user")
-    join_url: str | None = None
+    join_url: str | None = cluster_plan.join_url
     join_token: str | None = None
     ssh_runner = runner or _run_ssh_command
 
@@ -1314,10 +1328,16 @@ def run_install_cluster(
             if node_plan.role != "init-server" and not join_token:
                 init = init_server_node(nodes)
                 if init:
-                    token_ok, token_detail = fetch_join_token_from_init(init, ssh_user=ssh_user, runner=ssh_runner)
+                    token_ok, token_detail = fetch_join_token_from_init(
+                        init,
+                        config=gate.config,
+                        ssh_user=ssh_user,
+                        runner=ssh_runner,
+                    )
                     if token_ok:
                         join_token = token_detail.strip()
-                        join_url = f"https://{init.primary_ip}:6443"
+                        init_host = node_hostname(gate.config, init) or init.primary_ip
+                        join_url = k3s_join_url(init_host, gateway) if init_host else join_url
                         env, args, _ = k3s_install_spec(
                             gate.config,
                             node_plan.node,
@@ -1327,15 +1347,27 @@ def run_install_cluster(
                         )
                         node_plan.k3s_env = env
                         node_plan.k3s_args = args
-            apply_cluster_node_plan(node_plan, ssh_user=ssh_user, runner=ssh_runner)
+            apply_cluster_node_plan(
+                node_plan,
+                config=gate.config,
+                ssh_user=ssh_user,
+                runner=ssh_runner,
+            )
 
         if node_plan.role == "init-server" and node_plan.status == "installed":
             init = init_server_node(nodes)
             if init:
-                token_ok, token_detail = fetch_join_token_from_init(init, ssh_user=ssh_user, runner=ssh_runner)
+                token_ok, token_detail = fetch_join_token_from_init(
+                    init,
+                    config=gate.config,
+                    ssh_user=ssh_user,
+                    runner=ssh_runner,
+                )
                 if token_ok:
                     join_token = token_detail.strip()
-                    join_url = f"https://{init.primary_ip}:6443"
+                    init_host = node_hostname(gate.config, init) or init.primary_ip
+                    if init_host:
+                        join_url = k3s_join_url(init_host, gateway)
 
     cluster_health = assess_cluster_nodes(gate.config, ssh_user=ssh_user, runner=ssh_runner)
     report = build_install_report(
@@ -1348,6 +1380,7 @@ def run_install_cluster(
     )
     report["cluster"] = cluster_plan.to_dict()
     report["cluster_health"] = cluster_health
+    report["dns_updates"] = dns_messages
     report["status"] = "INSTALLED" if cluster_health.get("healthy") else "INSTALLED_WITH_ISSUES"
 
     if any(item.status == "failed" for item in cluster_plan.nodes):
