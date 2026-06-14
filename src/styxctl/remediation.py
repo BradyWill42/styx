@@ -350,7 +350,7 @@ def render_remediation_summary(result: RemediationResult, *, title: str) -> str:
     lines = [title, "=" * len(title), ""]
 
     if result.dry_run:
-        lines.append("Mode: dry-run (no changes made)")
+        lines.append("Mode: plan (no changes made)")
     else:
         lines.append("Mode: apply")
 

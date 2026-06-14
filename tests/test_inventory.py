@@ -53,4 +53,6 @@ def test_parse_ss_output_ignores_non_styx_range():
 
 
 def test_port_purpose_block():
-    assert port_purpose(47830) == "development/debug"
+    assert port_purpose(47810) == "SSH gateway listen (MVP2 configures on Pi)"
+    assert port_purpose(47811) == "k3s API gateway listen (MVP2 configures on Pi)"
+    assert port_purpose(47830) == "spare / future"

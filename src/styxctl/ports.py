@@ -15,7 +15,7 @@ RESERVED_PORT_END = 47850
 RESERVED_PORT_RANGE = range(RESERVED_PORT_START, RESERVED_PORT_END + 1)
 
 PORT_PLAN: dict[int, dict[str, str]] = {
-    47800: {"protocol": "udp", "purpose": "Styx production WireGuard gateway"},
+    47800: {"protocol": "udp", "purpose": "Styx WireGuard"},
     47801: {"protocol": "tcp", "purpose": "Styx gateway health API"},
     47802: {"protocol": "tcp", "purpose": "Styx director API"},
     47803: {"protocol": "tcp", "purpose": "Styx status dashboard/API"},
@@ -24,14 +24,12 @@ PORT_PLAN: dict[int, dict[str, str]] = {
     47806: {"protocol": "tcp", "purpose": "Styx watchdog agent API"},
     47807: {"protocol": "tcp", "purpose": "Styx local diagnostics API"},
     47808: {"protocol": "tcp", "purpose": "Styx metrics exporter"},
-    47809: {"protocol": "any", "purpose": "reserved"},
+    47810: {"protocol": "tcp", "purpose": "SSH gateway listen (MVP2 configures on Pi)"},
+    47811: {"protocol": "tcp", "purpose": "k3s API gateway listen (MVP2 configures on Pi)"},
 }
 
 PORT_BLOCKS: tuple[tuple[str, int, int], ...] = (
-    ("site/gateway testing", 47810, 47819),
-    ("client/profile testing", 47820, 47829),
-    ("development/debug", 47830, 47839),
-    ("reserved future", 47840, 47850),
+    ("spare / future", 47812, 47850),
 )
 
 

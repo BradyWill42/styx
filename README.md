@@ -131,7 +131,7 @@ styxctl --help
 
 ```bash
 styxctl sysprep check local
-styxctl sysprep safe plan local      # preview only
+styxctl sysprep safe plan local      # plan only
 styxctl sysprep safe apply local     # apply without prompt
 styxctl sysprep check local          # re-check until READY
 ```
@@ -175,7 +175,7 @@ styxctl sysprep check local
 ```
 
 1. **Check** — read-only inventory and port scan
-2. **Plan** — preview safe cleanup actions (no changes)
+2. **Plan** — show safe cleanup actions (no changes)
 3. **Apply** — execute safe cleanup (or use `sysprep safe local` for interactive confirm)
 4. **Re-check** — repeat until `READY` or `READY_WITH_WARNINGS`
 
@@ -197,7 +197,7 @@ styxctl sysprep check local
 | `READY_WITH_WARNINGS` | Usable; review warnings first | `0` |
 | `BLOCKED` | Critical ports `47800–47808` occupied | `1` |
 
-When blocked, try `styxctl sysprep safe plan local` to preview cleanup, or `styxctl ports check local` to inspect conflicts.
+When blocked, try `styxctl sysprep safe plan local` first, or `styxctl ports check local` to inspect conflicts.
 
 ### Safe remediation scope
 
@@ -219,7 +219,7 @@ When blocked, try `styxctl sysprep safe plan local` to preview cleanup, or `styx
 ```bash
 styxctl ports check local          # conflicts in 47800–47850
 styxctl ports list local           # full port plan
-styxctl ports clear plan local     # preview safe port cleanup
+styxctl ports clear plan local     # plan safe port cleanup
 styxctl ports clear apply local    # apply safe port cleanup
 styxctl ports clear local          # interactive confirm
 ```
@@ -321,8 +321,8 @@ Styx is designed for gateway nodes that may already run critical services. `styx
 Every mutating command follows **plan → confirm → apply**:
 
 ```bash
-styxctl sysprep safe plan local     # dry-run
-styxctl sysprep safe local          # preview + confirm
+styxctl sysprep safe plan local     # plan only (no changes)
+styxctl sysprep safe local          # plan + confirm
 styxctl sysprep safe apply local    # apply without confirm
 ```
 
@@ -345,9 +345,9 @@ styxctl ports <TAB>
 | `sysprep check local` | Read-only MVP1 assessment |
 | `sysprep check all` | MVP4 placeholder |
 | `sysprep check node` | MVP4 placeholder |
-| `sysprep safe plan local` | Preview safe cleanup |
+| `sysprep safe plan local` | Plan safe cleanup (read-only) |
 | `sysprep safe apply local` | Apply safe cleanup (no prompt) |
-| `sysprep safe local` | Preview + interactive confirm |
+| `sysprep safe local` | Plan + interactive confirm |
 | `sysprep reset local` | MVP3 placeholder |
 | `sysprep nuke local` | MVP3 placeholder |
 
@@ -357,7 +357,7 @@ styxctl ports <TAB>
 |---------|-------------|
 | `ports check local` | Show conflicts in reserved range |
 | `ports list local` | Show full port plan |
-| `ports clear plan local` | Preview safe port cleanup |
+| `ports clear plan local` | Plan safe port cleanup |
 | `ports clear apply local` | Apply safe port cleanup |
 | `ports clear local` | Interactive port cleanup |
 
@@ -376,13 +376,15 @@ styxctl ports <TAB>
 ### Future (placeholders on this branch)
 
 ```bash
-styxctl deploy soon      # MVP3 — on main/MVP2 branches
-styxctl gateway soon     # MVP3
-styxctl client soon      # MVP4
-styxctl siem soon        # MVP4
+styxctl install plan local   # MVP2 placeholder
+styxctl install apply local  # MVP2 placeholder
+styxctl deploy soon          # MVP3
+styxctl gateway soon         # MVP3
+styxctl client soon          # MVP4
+styxctl siem soon            # MVP4
 ```
 
-Install commands (`install plan`, `install apply`, etc.) are available on the **`MVP2`** and **`main`** branches only.
+Full install implementation is on the **`MVP2`** and **`main`** branches.
 
 ---
 

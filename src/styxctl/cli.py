@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import typer
 from rich.console import Console
@@ -47,18 +47,21 @@ app = typer.Typer(
 sysprep_app = typer.Typer(help="Prepare hosts safely before Styx installation.", no_args_is_help=True)
 sysprep_check_app = typer.Typer(help="Read-only sysprep checks.", no_args_is_help=True)
 sysprep_safe_app = typer.Typer(help="Known-safe local cleanup before install.", no_args_is_help=True)
-sysprep_safe_preview_app = typer.Typer(help="Preview safe cleanup without changing the host.", no_args_is_help=True)
+sysprep_safe_plan_app = typer.Typer(help="Plan safe cleanup without changing the host.", no_args_is_help=True)
+sysprep_safe_apply_app = typer.Typer(help="Apply safe cleanup without a prompt.", no_args_is_help=True)
 sysprep_reset_app = typer.Typer(help="Interactive cleanup modes. MVP3 placeholder.", no_args_is_help=True)
 sysprep_nuke_app = typer.Typer(help="Destructive cleanup modes. MVP3 placeholder.", no_args_is_help=True)
 ports_app = typer.Typer(help="Inspect the Styx reserved port range.", no_args_is_help=True)
 ports_check_app = typer.Typer(help="Check Styx reserved ports.", no_args_is_help=True)
 ports_list_app = typer.Typer(help="List the Styx reserved port plan.", no_args_is_help=True)
 ports_clear_app = typer.Typer(help="Clear safe Styx reserved port conflicts.", no_args_is_help=True)
-ports_clear_preview_app = typer.Typer(help="Preview port cleanup without changing the host.", no_args_is_help=True)
+ports_clear_plan_app = typer.Typer(help="Plan port cleanup without changing the host.", no_args_is_help=True)
+ports_clear_apply_app = typer.Typer(help="Apply port cleanup without a prompt.", no_args_is_help=True)
 config_app = typer.Typer(help="Inspect and validate styx.yaml.", no_args_is_help=True)
 report_app = typer.Typer(help="Inspect saved sysprep reports.", no_args_is_help=True)
-report_show_app = typer.Typer(help="Show saved sysprep reports.", no_args_is_help=True)
-report_json_app = typer.Typer(help="Show saved sysprep reports as JSON.", no_args_is_help=True)
+install_app = typer.Typer(help="Install Styx prerequisites (MVP2).", no_args_is_help=True)
+install_plan_app = typer.Typer(help="Plan install steps.", no_args_is_help=True)
+install_apply_app = typer.Typer(help="Apply install steps.", no_args_is_help=True)
 completion_app = typer.Typer(help="Shell completion helpers.", no_args_is_help=True)
 
 
@@ -71,22 +74,6 @@ def main() -> None:
 def version() -> None:
     """Print the styxctl version."""
     console.print(__version__)
-
-
-def _confirm_or_exit(planned_count: int) -> None:
-    if planned_count == 0:
-        console.print("[green]Nothing to do.[/green]")
-        raise typer.Exit(code=0)
-    if not typer.confirm(f"Apply {planned_count} planned action(s)?", default=False):
-        console.print("No changes were made.")
-        raise typer.Exit(code=0)
-
-
-def _preview_remediation(*, title: str, build_plan) -> None:
-    inventory = collect_inventory()
-    result = build_plan(inventory)
-    result.dry_run = True
-    console.print(render_remediation_summary(result, title=title))
 
 
 def _load_config_or_exit() -> tuple[dict[str, Any], Path | None]:
@@ -104,15 +91,69 @@ def _report_missing(exc: FileNotFoundError) -> None:
     raise typer.Exit(code=1) from exc
 
 
-def _apply_remediation(*, title: str, build_plan, apply_plan) -> None:
+def _plan_remediation(*, title: str, build_plan: Callable) -> None:
+    inventory = collect_inventory()
+    result = build_plan(inventory)
+    result.dry_run = True
+    console.print(render_remediation_summary(result, title=title))
+
+
+def _apply_remediation(*, title: str, build_plan: Callable, apply_plan: Callable, confirm: bool) -> None:
     inventory = collect_inventory()
     plan = build_plan(inventory)
-    console.print(render_remediation_summary(plan, title=f"{title} (preview)"))
-    _confirm_or_exit(len(plan.planned))
+    if confirm:
+        console.print(render_remediation_summary(plan, title=f"{title} (plan)"))
+        if not plan.planned:
+            console.print("[green]Nothing to do.[/green]")
+            raise typer.Exit(code=0)
+        if not typer.confirm(f"Apply {len(plan.planned)} planned action(s)?", default=False):
+            console.print("No changes were made.")
+            raise typer.Exit(code=0)
+    elif not plan.planned:
+        console.print("[green]Nothing to do.[/green]")
+        raise typer.Exit(code=0)
 
     result = apply_plan(inventory, dry_run=False)
     console.print(render_remediation_summary(result, title=f"{title} (results)"))
     console.print("[bold green]Re-run recommended:[/bold green] styxctl sysprep check local")
+
+
+def _register_local_remediation(
+    plan_app: typer.Typer,
+    apply_app: typer.Typer,
+    parent_app: typer.Typer,
+    *,
+    title: str,
+    build_plan: Callable,
+    apply_plan: Callable,
+    plan_doc: str,
+    apply_doc: str,
+    local_doc: str,
+) -> None:
+    @plan_app.command("local")
+    def plan_local() -> None:
+        _plan_remediation(title=title, build_plan=build_plan)
+
+    @apply_app.command("local")
+    def apply_local() -> None:
+        _apply_remediation(title=title, build_plan=build_plan, apply_plan=apply_plan, confirm=False)
+
+    @parent_app.command("local")
+    def local() -> None:
+        _apply_remediation(title=title, build_plan=build_plan, apply_plan=apply_plan, confirm=True)
+
+    plan_local.__doc__ = plan_doc
+    apply_local.__doc__ = apply_doc
+    local.__doc__ = local_doc
+
+
+def _not_implemented(command_name: str, milestone: str) -> None:
+    console.print(f"{command_name} is not implemented in {milestone}.")
+    console.print("No changes were made.")
+
+
+def _mvp4_placeholder(message: str) -> None:
+    console.print(f"MVP4 placeholder: {message}")
 
 
 @sysprep_check_app.command("local")
@@ -124,17 +165,13 @@ def sysprep_check_local() -> None:
     paths = save_report_bundle(report, text)
 
     console.print(text)
-    console.print(f"[bold green]Reports saved[/bold green]")
+    console.print("[bold green]Reports saved[/bold green]")
     console.print(f"  JSON: {paths['json']}")
     console.print(f"  Text: {paths['text']}")
 
     if report["status"] == "BLOCKED":
-        console.print("[yellow]Hint:[/yellow] try `styxctl sysprep safe preview local` to preview safe cleanup.")
+        console.print("[yellow]Hint:[/yellow] try `styxctl sysprep safe plan local` first.")
         raise typer.Exit(code=1)
-
-
-def _mvp4_placeholder(message: str) -> None:
-    console.print(f"MVP4 placeholder: {message}")
 
 
 @sysprep_check_app.command("all")
@@ -149,28 +186,17 @@ def sysprep_check_node() -> None:
     _mvp4_placeholder("no remote node check was run.")
 
 
-@sysprep_safe_preview_app.command("local")
-def sysprep_safe_preview_local() -> None:
-    """Preview known-safe Styx/k3s cleanup on this machine."""
-    _preview_remediation(
-        title="Styx Safe Sysprep Remediation",
-        build_plan=build_safe_sysprep_plan,
-    )
-
-
-@sysprep_safe_app.command("local")
-def sysprep_safe_local() -> None:
-    """Apply known-safe Styx/k3s cleanup on this machine."""
-    _apply_remediation(
-        title="Styx Safe Sysprep Remediation",
-        build_plan=build_safe_sysprep_plan,
-        apply_plan=apply_safe_sysprep,
-    )
-
-
-def _not_implemented(command_name: str, milestone: str) -> None:
-    console.print(f"{command_name} is not implemented in {milestone}.")
-    console.print("No changes were made.")
+_register_local_remediation(
+    sysprep_safe_plan_app,
+    sysprep_safe_apply_app,
+    sysprep_safe_app,
+    title="Styx Safe Sysprep Remediation",
+    build_plan=build_safe_sysprep_plan,
+    apply_plan=apply_safe_sysprep,
+    plan_doc="Plan known-safe Styx/k3s cleanup on this machine.",
+    apply_doc="Apply known-safe Styx/k3s cleanup on this machine without a prompt.",
+    local_doc="Plan, confirm, and apply known-safe Styx/k3s cleanup on this machine.",
+)
 
 
 @sysprep_reset_app.command("local")
@@ -190,13 +216,8 @@ def ports_check_local() -> None:
     """Read-only check of occupied ports in 47800-47850."""
     scan = check_reserved_ports()
     table = Table(title="Styx Reserved Port Conflicts")
-    table.add_column("Protocol")
-    table.add_column("Port")
-    table.add_column("Process")
-    table.add_column("PID")
-    table.add_column("Systemd Unit")
-    table.add_column("Safe To Stop")
-    table.add_column("Purpose")
+    for column in ("Protocol", "Port", "Process", "PID", "Systemd Unit", "Safe To Stop", "Purpose"):
+        table.add_column(column)
 
     if scan.conflicts:
         for conflict in scan.conflicts:
@@ -221,9 +242,8 @@ def ports_check_local() -> None:
 def ports_list_local() -> None:
     """List the Styx reserved port plan."""
     table = Table(title="Styx Reserved Port Plan")
-    table.add_column("Port(s)")
-    table.add_column("Protocol")
-    table.add_column("Purpose")
+    for column in ("Port(s)", "Protocol", "Purpose"):
+        table.add_column(column)
 
     for port in sorted(PORT_PLAN):
         item = PORT_PLAN[port]
@@ -235,23 +255,17 @@ def ports_list_local() -> None:
     console.print(table)
 
 
-@ports_clear_preview_app.command("local")
-def ports_clear_preview_local() -> None:
-    """Preview safe reserved-port cleanup on this machine."""
-    _preview_remediation(
-        title="Styx Reserved Port Cleanup",
-        build_plan=build_port_clear_plan,
-    )
-
-
-@ports_clear_app.command("local")
-def ports_clear_local() -> None:
-    """Clear safe Styx reserved port conflicts on this machine."""
-    _apply_remediation(
-        title="Styx Reserved Port Cleanup",
-        build_plan=build_port_clear_plan,
-        apply_plan=apply_port_clear,
-    )
+_register_local_remediation(
+    ports_clear_plan_app,
+    ports_clear_apply_app,
+    ports_clear_app,
+    title="Styx Reserved Port Cleanup",
+    build_plan=build_port_clear_plan,
+    apply_plan=apply_port_clear,
+    plan_doc="Plan safe reserved-port cleanup on this machine.",
+    apply_doc="Apply safe reserved-port cleanup on this machine without a prompt.",
+    local_doc="Plan, confirm, and apply safe reserved-port cleanup on this machine.",
+)
 
 
 @config_app.command("show")
@@ -269,10 +283,7 @@ def config_validate() -> None:
     issues = validate_config(config)
     status = config_status(issues)
     console.print(f"Config status: {status}")
-    if config_path:
-        console.print(f"Config file: {config_path}")
-    else:
-        console.print("Config file: not found")
+    console.print(f"Config file: {config_path or 'not found'}")
 
     if issues:
         for issue in issues:
@@ -285,8 +296,8 @@ def config_validate() -> None:
         raise typer.Exit(code=1)
 
 
-@report_show_app.command("local")
-def report_show_local() -> None:
+@report_app.command("show")
+def report_show() -> None:
     """Show the latest saved local sysprep report."""
     try:
         console.print(load_saved_report_text(), end="")
@@ -294,13 +305,25 @@ def report_show_local() -> None:
         _report_missing(exc)
 
 
-@report_json_app.command("local")
-def report_json_local() -> None:
+@report_app.command("json")
+def report_json() -> None:
     """Show the latest saved local sysprep report as JSON."""
     try:
         console.print_json(data=load_saved_report())
     except FileNotFoundError as exc:
         _report_missing(exc)
+
+
+@install_plan_app.command("local")
+def install_plan_local() -> None:
+    """Future: plan MVP2 install steps on this machine."""
+    _not_implemented("styxctl install plan local", "MVP2")
+
+
+@install_apply_app.command("local")
+def install_apply_local() -> None:
+    """Future: apply MVP2 install steps on this machine."""
+    _not_implemented("styxctl install apply local", "MVP2")
 
 
 def _emit_completion(shell: str) -> None:
@@ -345,20 +368,22 @@ def _future_app(label: str, milestone: str) -> typer.Typer:
 
 
 sysprep_app.add_typer(sysprep_check_app, name="check")
-sysprep_safe_app.add_typer(sysprep_safe_preview_app, name="preview")
+sysprep_safe_app.add_typer(sysprep_safe_plan_app, name="plan")
+sysprep_safe_app.add_typer(sysprep_safe_apply_app, name="apply")
 sysprep_app.add_typer(sysprep_safe_app, name="safe")
 sysprep_app.add_typer(sysprep_reset_app, name="reset")
 sysprep_app.add_typer(sysprep_nuke_app, name="nuke")
 ports_app.add_typer(ports_check_app, name="check")
 ports_app.add_typer(ports_list_app, name="list")
-ports_clear_app.add_typer(ports_clear_preview_app, name="preview")
+ports_clear_app.add_typer(ports_clear_plan_app, name="plan")
+ports_clear_app.add_typer(ports_clear_apply_app, name="apply")
 ports_app.add_typer(ports_clear_app, name="clear")
-report_app.add_typer(report_show_app, name="show")
-report_app.add_typer(report_json_app, name="json")
+install_app.add_typer(install_plan_app, name="plan")
+install_app.add_typer(install_apply_app, name="apply")
 
 app.add_typer(sysprep_app, name="sysprep")
 app.add_typer(ports_app, name="ports")
-app.add_typer(_future_app("install", "MVP2"), name="install")
+app.add_typer(install_app, name="install")
 app.add_typer(_future_app("deploy", "MVP3"), name="deploy")
 app.add_typer(_future_app("status", "MVP3"), name="status")
 app.add_typer(_future_app("doctor", "MVP3"), name="doctor")
