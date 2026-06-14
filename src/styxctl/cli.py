@@ -26,6 +26,8 @@ from .install import (
     run_install_doctor,
     run_install_local,
     run_install_plan_preview,
+    run_lan_election_preview,
+    run_lan_election_status,
 )
 from .install_report import render_install_text, save_install_report
 from .ports import PORT_BLOCKS, PORT_PLAN, check_reserved_ports, port_purpose
@@ -435,6 +437,14 @@ def install_plan_cluster() -> None:
     _finish_install_report(report, exit_code)
 
 
+@install_plan_app.command("lan")
+def install_plan_lan() -> None:
+    """Preview LAN leader election without changing the host."""
+    report, exit_code = run_lan_election_preview(config_path=None)
+    console.print_json(data=report)
+    raise typer.Exit(code=exit_code)
+
+
 @install_app.command("cluster")
 def install_cluster() -> None:
     """Install and join all k3s nodes listed in styx.yaml using their configured IPs."""
@@ -477,6 +487,45 @@ def install_status_cluster() -> None:
         for issue in health["issues"]:
             console.print(f"  - {issue}")
         raise typer.Exit(code=1)
+
+
+@install_status_app.command("lan")
+def install_status_lan() -> None:
+    """Show LAN peers and elected leader for this subnet."""
+    election = run_lan_election_status(config_path=None)
+    table = Table(title="Styx LAN Leader Election")
+    table.add_column("Field")
+    table.add_column("Value")
+    table.add_row("enabled", "yes" if election.get("enabled") else "no")
+    table.add_row("subnet", election.get("subnet") or "-")
+    leader = election.get("leader") or {}
+    table.add_row("leader", leader.get("node_name") or "-")
+    table.add_row("leader strength", str(leader.get("strength") or "-"))
+    table.add_row("promote to init-server", "yes" if election.get("promote_to_init_server") else "no")
+    if election.get("previous_init_server"):
+        table.add_row("previous init-server", election["previous_init_server"])
+    console.print(table)
+
+    peers = election.get("peers") or []
+    if peers:
+        peer_table = Table(title="LAN Peers")
+        peer_table.add_column("Node")
+        peer_table.add_column("LAN IP")
+        peer_table.add_column("Strength")
+        peer_table.add_column("Hostname")
+        for peer in peers:
+            peer_table.add_row(
+                peer.get("node_name", "-"),
+                peer.get("lan_ip", "-"),
+                str(peer.get("strength", "-")),
+                peer.get("hostname", "-"),
+            )
+        console.print(peer_table)
+
+    if election.get("warnings"):
+        console.print("[yellow]Warnings:[/yellow]")
+        for warning in election["warnings"]:
+            console.print(f"  - {warning}")
 
 
 @install_doctor_app.command("cluster")

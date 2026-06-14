@@ -3,6 +3,10 @@ cluster:
   domain: styx.net
   mode: dual-stack
   ssh_user: ubuntu
+  leader: lan-elected
+  lan_election:
+    port: 47802
+    collect_sec: 3
 
 gateway:
   ssh_port: 47810

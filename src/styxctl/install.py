@@ -31,6 +31,7 @@ from .k3s_cluster import (
     refresh_cluster_duckdns,
     _run_ssh_command,
 )
+from .lan_election import LanElectionResult, apply_lan_election_roles, resolve_lan_leadership, run_lan_election
 from .nodes import identify_local_node, init_server_node, node_hostname, parse_nodes, validate_nodes
 from .remediation import _run_mutating
 from .reports import CRITICAL_PORTS, evaluate_readiness
@@ -85,6 +86,7 @@ class InstallPlan:
     wg0_before: Wg0Snapshot
     local_node: str | None = None
     cluster_plan: ClusterPlan | None = None
+    lan_election: LanElectionResult | None = None
     steps: list[InstallStep] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
@@ -98,6 +100,7 @@ class InstallPlan:
             "wg0_before": self.wg0_before.to_dict(),
             "local_node": self.local_node,
             "cluster_plan": self.cluster_plan.to_dict() if self.cluster_plan else None,
+            "lan_election": self.lan_election.to_dict() if self.lan_election else None,
             "steps": [step.to_dict() for step in self.steps],
         }
 
@@ -414,13 +417,26 @@ def check_install_gate(
     )
 
 
+def _effective_config(gate: InstallGateResult, lan_election: LanElectionResult | None) -> dict[str, Any]:
+    if lan_election is None:
+        return gate.config
+    return apply_lan_election_roles(gate.config, lan_election)
+
+
 def build_install_plan(
     gate: InstallGateResult,
     *,
     inventory: SystemInventory | None = None,
+    lan_election: LanElectionResult | None = None,
 ) -> InstallPlan:
     inventory = inventory or gate.inventory
-    config = gate.config
+    if lan_election is None:
+        config, lan_election = resolve_lan_leadership(gate.config, inventory)
+    else:
+        config = _effective_config(gate, lan_election)
+    plan_warnings = list(gate.warnings)
+    if lan_election.warnings:
+        plan_warnings.extend(lan_election.warnings)
     package_manager = detect_package_manager()
     wg0_before = capture_wg0_snapshot(inventory)
     steps: list[InstallStep] = []
@@ -638,11 +654,12 @@ def build_install_plan(
         config_path=str(gate.config_path) if gate.config_path else None,
         config_status=gate.config_status_value,
         sysprep_status=gate.sysprep_status,
-        warnings=gate.warnings,
+        warnings=plan_warnings,
         blocking=gate.blocking,
         wg0_before=wg0_before,
         local_node=local_node.name if local_node else None,
         cluster_plan=cluster_plan,
+        lan_election=lan_election,
         steps=steps,
     )
 
@@ -1068,6 +1085,9 @@ def apply_install_plan(
         warnings=plan.warnings,
         blocking=plan.blocking,
         wg0_before=plan.wg0_before,
+        local_node=plan.local_node,
+        cluster_plan=plan.cluster_plan,
+        lan_election=plan.lan_election,
         steps=updated_steps,
     )
 
@@ -1260,6 +1280,7 @@ def run_install_local(
         wg0_before=capture_wg0_snapshot(pre_inventory),
         steps=[],
     )
+    effective_config = _effective_config(gate, plan.lan_election)
 
     if not gate.ok:
         report = build_install_report(
@@ -1291,7 +1312,7 @@ def run_install_local(
 
     applied_plan = apply_install_plan(
         plan,
-        config=gate.config,
+        config=effective_config,
         inventory=pre_inventory,
         dry_run=dry_run,
     )
@@ -1396,20 +1417,25 @@ def run_install_cluster(
         config_path=config_path,
         require_sudo=not dry_run,
     )
-    nodes = parse_nodes(gate.config) if gate.ok else []
-    local_node = identify_local_node(nodes, pre_inventory, gate.config) if nodes else None
-    cluster_plan = build_cluster_plan(gate.config, local_node=local_node) if gate.ok else ClusterPlan(init_node="unknown")
+    effective_config, lan_election = resolve_lan_leadership(gate.config, pre_inventory) if gate.ok else (gate.config, None)
+    nodes = parse_nodes(effective_config) if gate.ok else []
+    local_node = identify_local_node(nodes, pre_inventory, effective_config) if nodes else None
+    cluster_plan = build_cluster_plan(effective_config, local_node=local_node) if gate.ok else ClusterPlan(init_node="unknown")
+    plan_warnings = list(gate.warnings)
+    if lan_election and lan_election.warnings:
+        plan_warnings.extend(lan_election.warnings)
 
     base_plan = InstallPlan(
         hostname=pre_inventory.hostname,
         config_path=str(gate.config_path) if gate.config_path else None,
         config_status=gate.config_status_value,
         sysprep_status=gate.sysprep_status,
-        warnings=gate.warnings,
+        warnings=plan_warnings,
         blocking=gate.blocking,
         wg0_before=capture_wg0_snapshot(pre_inventory),
         local_node=local_node.name if local_node else None,
         cluster_plan=cluster_plan,
+        lan_election=lan_election,
         steps=[],
     )
 
@@ -1449,9 +1475,9 @@ def run_install_cluster(
         report["cluster"] = cluster_plan.to_dict()
         return report, 0
 
-    gateway = parse_gateway_ports(gate.config)
-    dns_messages = refresh_cluster_duckdns(gate.config, nodes)
-    ssh_user = gate.config.get("cluster", {}).get("ssh_user")
+    gateway = parse_gateway_ports(effective_config)
+    dns_messages = refresh_cluster_duckdns(effective_config, nodes)
+    ssh_user = effective_config.get("cluster", {}).get("ssh_user")
     join_url: str | None = cluster_plan.join_url
     join_token: str | None = None
     ssh_runner = runner or _run_ssh_command
@@ -1459,7 +1485,7 @@ def run_install_cluster(
     for node_plan in cluster_plan.nodes:
         if node_plan.local_execution and local_node:
             env, args, _ = k3s_install_spec(
-                gate.config,
+                effective_config,
                 local_node,
                 all_nodes=nodes,
                 join_url=join_url,
@@ -1478,16 +1504,16 @@ def run_install_cluster(
                 if init:
                     token_ok, token_detail = fetch_join_token_from_init(
                         init,
-                        config=gate.config,
+                        config=effective_config,
                         ssh_user=ssh_user,
                         runner=ssh_runner,
                     )
                     if token_ok:
                         join_token = token_detail.strip()
-                        init_host = node_hostname(gate.config, init) or init.primary_ip
+                        init_host = node_hostname(effective_config, init) or init.primary_ip
                         join_url = k3s_join_url(init_host, gateway) if init_host else join_url
                         env, args, _ = k3s_install_spec(
-                            gate.config,
+                            effective_config,
                             node_plan.node,
                             all_nodes=nodes,
                             join_url=join_url,
@@ -1497,7 +1523,7 @@ def run_install_cluster(
                         node_plan.k3s_args = args
             apply_cluster_node_plan(
                 node_plan,
-                config=gate.config,
+                config=effective_config,
                 ssh_user=ssh_user,
                 runner=ssh_runner,
             )
@@ -1507,17 +1533,17 @@ def run_install_cluster(
             if init:
                 token_ok, token_detail = fetch_join_token_from_init(
                     init,
-                    config=gate.config,
+                    config=effective_config,
                     ssh_user=ssh_user,
                     runner=ssh_runner,
                 )
                 if token_ok:
                     join_token = token_detail.strip()
-                    init_host = node_hostname(gate.config, init) or init.primary_ip
+                    init_host = node_hostname(effective_config, init) or init.primary_ip
                     if init_host:
                         join_url = k3s_join_url(init_host, gateway)
 
-    cluster_health = assess_cluster_nodes(gate.config, ssh_user=ssh_user, runner=ssh_runner)
+    cluster_health = assess_cluster_nodes(effective_config, ssh_user=ssh_user, runner=ssh_runner)
     report = build_install_report(
         command="styxctl install cluster",
         plan=base_plan,
@@ -1542,3 +1568,21 @@ def run_cluster_doctor(*, config_path: str | Path | None = None) -> dict[str, An
     config = load_config(config_path) if config_path else load_config(find_config())
     ssh_user = config.get("cluster", {}).get("ssh_user") if isinstance(config.get("cluster"), dict) else None
     return assess_cluster_nodes(config, ssh_user=ssh_user)
+
+
+def run_lan_election_preview(*, config_path: str | Path | None = None) -> tuple[dict[str, Any], int]:
+    pre_inventory = collect_inventory()
+    gate = check_install_gate(config_path=config_path, inventory=pre_inventory, require_sudo=False)
+    election = run_lan_election(gate.config, pre_inventory) if gate.config else run_lan_election({}, pre_inventory)
+    report = {
+        "command": "styxctl install plan lan",
+        "lan_election": election.to_dict(),
+        "config_path": str(gate.config_path) if gate.config_path else None,
+    }
+    return report, 0
+
+
+def run_lan_election_status(*, config_path: str | Path | None = None) -> dict[str, Any]:
+    pre_inventory = collect_inventory()
+    config = load_config(config_path) if config_path else load_config(find_config())
+    return run_lan_election(config, pre_inventory).to_dict()

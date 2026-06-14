@@ -287,6 +287,34 @@ Each node uses:
 
 `install apply local` and `install apply cluster` update DuckDNS with the node's current public IPv4 before connecting. Set `dns.token_env` (recommended) or `dns.token` in `styx.yaml`.
 
+### LAN leader election
+
+When multiple Styx gateways share a LAN, enable automatic leader election in `styx.yaml`:
+
+```yaml
+cluster:
+  leader: lan-elected
+  lan_election:
+    port: 47802
+    collect_sec: 3
+```
+
+Before `install plan local`, `install apply local`, and `install apply cluster`, styxctl:
+
+1. Broadcasts on the local subnet (UDP port `47802`, Styx director API)
+2. Collects peer announcements from other Styx nodes on the same LAN
+3. Scores each peer by RAM, CPU cores, architecture, disk, and existing k3s
+4. Elects the strongest peer as that LAN's leader
+
+If the configured `init-server` is on the same LAN and two or more peers are present, the elected leader is promoted to `init-server` and the previous init-server is demoted to `server`. If the init-server lives on a different site, election still picks a LAN leader for visibility but k3s roles stay unchanged.
+
+Preview or inspect election without installing:
+
+```bash
+styxctl install plan lan
+styxctl install status lan
+```
+
 ### Port forwards (router)
 
 Forward the Styx reserved range on each gateway node's router to that node:

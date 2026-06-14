@@ -104,6 +104,29 @@ def validate_config(config: dict[str, Any]) -> list[ValidationIssue]:
                     "expected dual-stack, ipv4-only, or ipv6-only",
                 )
             )
+        leader = cluster.get("leader")
+        if leader is not None and leader not in {"static", "lan-elected"}:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "cluster.leader",
+                    "expected static or lan-elected",
+                )
+            )
+        lan_election = cluster.get("lan_election")
+        if lan_election is not None:
+            lan_map = _require_mapping(lan_election, "cluster.lan_election", issues)
+            if lan_map:
+                port = lan_map.get("port")
+                if port is not None and (not isinstance(port, int) or not (1 <= port <= 65535)):
+                    issues.append(
+                        ValidationIssue("error", "cluster.lan_election.port", "expected integer port 1-65535")
+                    )
+                collect_sec = lan_map.get("collect_sec")
+                if collect_sec is not None and (not isinstance(collect_sec, (int, float)) or collect_sec <= 0):
+                    issues.append(
+                        ValidationIssue("error", "cluster.lan_election.collect_sec", "expected positive number")
+                    )
 
     network = _require_mapping(config.get("network"), "network", issues)
     if network:

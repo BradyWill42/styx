@@ -17,7 +17,7 @@ RESERVED_PORT_RANGE = range(RESERVED_PORT_START, RESERVED_PORT_END + 1)
 PORT_PLAN: dict[int, dict[str, str]] = {
     47800: {"protocol": "udp", "purpose": "Styx production WireGuard gateway"},
     47801: {"protocol": "tcp", "purpose": "Styx gateway health API"},
-    47802: {"protocol": "tcp", "purpose": "Styx director API"},
+    47802: {"protocol": "udp", "purpose": "Styx director API / LAN leader election"},
     47803: {"protocol": "tcp", "purpose": "Styx status dashboard/API"},
     47804: {"protocol": "tcp", "purpose": "Styx node agent API"},
     47805: {"protocol": "tcp", "purpose": "Styx Ansible controller API"},
