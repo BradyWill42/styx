@@ -45,3 +45,11 @@ def parse_gateway_ports(config: dict[str, Any]) -> GatewayPorts:
 
 def k3s_join_url(hostname: str, ports: GatewayPorts) -> str:
     return f"https://{hostname}:{ports.k3s_api}"
+
+
+def k3s_gateway_listen_args(config: dict[str, Any], *, server_role: bool) -> list[str]:
+    """k3s server/API listen port on the node itself."""
+    if not server_role:
+        return []
+    gateway = parse_gateway_ports(config)
+    return ["--https-listen-port", str(gateway.k3s_api)]

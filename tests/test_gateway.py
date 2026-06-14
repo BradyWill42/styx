@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from styxctl.config import load_config, validate_config
 from styxctl.nodes import node_hostname, node_subdomain
-from styxctl.gateway import k3s_join_url, parse_gateway_ports
+from styxctl.gateway import k3s_gateway_listen_args, k3s_join_url, parse_gateway_ports
 from styxctl.k3s_cluster import build_cluster_plan
 from styxctl.nodes import parse_nodes
 
@@ -46,3 +46,10 @@ def test_validate_gateway_ports_in_reserved_range(tmp_path):
 def test_k3s_join_url_helper():
     ports = parse_gateway_ports({"gateway": {"ssh_port": 47810, "k3s_api_port": 47811}})
     assert k3s_join_url("pistyx.duckdns.org", ports) == "https://pistyx.duckdns.org:47811"
+
+
+def test_k3s_gateway_listen_args():
+    config = load_config(EXAMPLE_CONFIG_PATH)
+    args = k3s_gateway_listen_args(config, server_role=True)
+    assert args == ["--https-listen-port", "47811"]
+    assert k3s_gateway_listen_args(config, server_role=False) == []

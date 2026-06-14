@@ -9,7 +9,7 @@ import subprocess
 from typing import Any, Callable
 
 from .dns_update import refresh_node_duckdns
-from .gateway import k3s_join_url, parse_gateway_ports
+from .gateway import k3s_join_url, k3s_gateway_listen_args, parse_gateway_ports
 from .nodes import ClusterNode, all_node_tls_sans, init_server_node, node_hostname, parse_nodes, resolve_hostname, sort_nodes_for_install
 
 K3S_TOKEN_PATH = "/var/lib/rancher/k3s/server/node-token"
@@ -88,6 +88,7 @@ def k3s_install_spec(
     join_token: str | None = None,
 ) -> tuple[dict[str, str], list[str], str]:
     args = _k3s_network_args(config)
+    args.extend(k3s_gateway_listen_args(config, server_role=node.role in {"init-server", "server"}))
     env: dict[str, str] = {}
 
     for ip in node.all_ips():

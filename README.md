@@ -294,10 +294,10 @@ Forward the Styx reserved range on each gateway node's router to that node:
 | External (DuckDNS) | Forward to node | Service |
 |---|---|---|
 | `47800/udp` | `47800/udp` | Styx WireGuard |
-| `47810/tcp` | `22/tcp` | SSH (cluster install) |
-| `47811/tcp` | `6443/tcp` | k3s API (cluster join) |
+| `47810/tcp` | `47810/tcp` | SSH (sshd listens on Pi) |
+| `47811/tcp` | `47811/tcp` | k3s API (k3s listens on Pi) |
 
-Defaults live in `gateway.ssh_port` and `gateway.k3s_api_port` inside `styx.yaml`. styxctl connects to `hostname:47810` for SSH and `https://hostname:47811` for k3s join — not port 22 or 6443 on the public side.
+`install apply local` configures sshd and k3s to listen on `gateway.ssh_port` and `gateway.k3s_api_port` on the Pi itself. Router forwards are 1:1 — same port outside and inside. styxctl connects to `hostname:47810` for SSH and `https://hostname:47811` for k3s join.
 
 | Component | Detail |
 |-----------|--------|
@@ -423,8 +423,8 @@ Only ports `47800–47850` are managed by `styxctl`. Critical production ports `
 | 47807 | TCP | Styx local diagnostics API |
 | 47808 | TCP | Styx metrics exporter |
 | 47809 | any | Reserved |
-| 47810 | TCP | SSH gateway port-forward |
-| 47811 | TCP | k3s API gateway port-forward |
+| 47810 | TCP | SSH gateway listen |
+| 47811 | TCP | k3s API gateway listen |
 | 47812–47819 | any | Site/gateway spare |
 | 47820–47829 | any | Client/profile testing |
 | 47830–47839 | any | Development/debug |

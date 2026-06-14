@@ -25,8 +25,8 @@ PORT_PLAN: dict[int, dict[str, str]] = {
     47807: {"protocol": "tcp", "purpose": "Styx local diagnostics API"},
     47808: {"protocol": "tcp", "purpose": "Styx metrics exporter"},
     47809: {"protocol": "any", "purpose": "reserved"},
-    47810: {"protocol": "tcp", "purpose": "SSH gateway port-forward"},
-    47811: {"protocol": "tcp", "purpose": "k3s API gateway port-forward"},
+    47810: {"protocol": "tcp", "purpose": "SSH gateway listen"},
+    47811: {"protocol": "tcp", "purpose": "k3s API gateway listen"},
 }
 
 PORT_BLOCKS: tuple[tuple[str, int, int], ...] = (

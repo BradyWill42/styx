@@ -38,6 +38,8 @@ from .reports import CRITICAL_PORTS, evaluate_readiness
 PRESERVED_INTERFACES = frozenset({"wg0"})
 WG0_CONFIG_PATH = Path("/etc/wireguard/wg0.conf")
 STYX_WG_DIR = Path("/etc/wireguard")
+STYX_SSHD_DROPIN_DIR = Path("/etc/ssh/sshd_config.d")
+STYX_SSHD_DROPIN = STYX_SSHD_DROPIN_DIR / "styx-gateway.conf"
 
 APT_PACKAGES = ("iproute2", "wireguard", "wireguard-tools", "curl", "ca-certificates")
 DNF_PACKAGES = APT_PACKAGES
@@ -497,6 +499,39 @@ def build_install_plan(
         )
     )
 
+    gateway = parse_gateway_ports(config)
+    steps.append(
+        InstallStep(
+            name="gateway-ssh",
+            category="gateway",
+            action="configure",
+            status="pending",
+            reason=f"Configure sshd to listen on Styx gateway port {gateway.ssh}/tcp",
+            command_display=(
+                f"write {STYX_SSHD_DROPIN} with Port {gateway.ssh}; "
+                "sudo sshd -t && sudo systemctl reload ssh"
+            ),
+            requires_sudo=True,
+        )
+    )
+    steps.append(
+        InstallStep(
+            name="gateway-firewall",
+            category="firewall",
+            action="allow",
+            status="pending",
+            reason=(
+                f"Allow Styx gateway ports on this node: "
+                f"{port}/udp, {gateway.ssh}/tcp, {gateway.k3s_api}/tcp"
+            ),
+            command_display=(
+                f"open {port}/udp, {gateway.ssh}/tcp, {gateway.k3s_api}/tcp "
+                "(ufw/nft/firewalld if backend detected)"
+            ),
+            requires_sudo=True,
+        )
+    )
+
     if inventory.detected_binaries.get("k3s"):
         steps.append(
             InstallStep(
@@ -551,7 +586,7 @@ def build_install_plan(
                 status="pending",
                 reason=(
                     f"Install k3s {'init-server' if local_node and local_node.role == 'init-server' else 'server'} "
-                    "with Styx dual-stack CIDRs and node IPs from styx.yaml"
+                    f"with dual-stack CIDRs, node IPs, and API listen port {gateway.k3s_api}"
                 ),
                 command=["curl", "-sfL", "https://get.k3s.io"],
                 command_display=_k3s_install_command_display(config, inventory),
@@ -597,19 +632,6 @@ def build_install_plan(
                 ),
             )
         )
-
-    steps.append(
-        InstallStep(
-            name="firewall",
-            category="firewall",
-            action="allow",
-            status="pending",
-            reason=f"Allow {port}/udp for Styx WireGuard and k3s service ports",
-            command_display=(
-                f"allow {port}/udp (ufw/nft/firewalld minimal rule if backend detected)"
-            ),
-        )
-    )
 
     return InstallPlan(
         hostname=inventory.hostname,
@@ -752,30 +774,98 @@ def _write_styx_wireguard_config(
     return True, f"wrote {styx_conf}"
 
 
-def _apply_firewall_allowance(
-    port: int,
-    inventory: SystemInventory,
-) -> RunResult:
+def _configure_gateway_ssh(gateway_ssh_port: int, inventory: SystemInventory) -> RunResult:
+    content = (
+        "# Managed by styxctl - Styx gateway SSH listen port\n"
+        f"Port {gateway_ssh_port}\n"
+    )
+    temp_path = Path("/tmp") / "styx-sshd-gateway.conf"
+    try:
+        temp_path.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        return False, str(exc)
+
+    ok, detail = _run_mutating(
+        ["mkdir", "-p", str(STYX_SSHD_DROPIN_DIR)],
+        use_sudo=True,
+        sudo_available=inventory.sudo_available,
+    )
+    if not ok:
+        return False, detail
+
+    ok, detail = _run_mutating(
+        ["cp", str(temp_path), str(STYX_SSHD_DROPIN)],
+        use_sudo=True,
+        sudo_available=inventory.sudo_available,
+    )
+    if not ok:
+        return False, detail
+
+    ok, detail = _run_mutating(
+        ["chmod", "644", str(STYX_SSHD_DROPIN)],
+        use_sudo=True,
+        sudo_available=inventory.sudo_available,
+    )
+    if not ok:
+        return False, detail
+
+    ok, detail = _run_mutating(
+        ["sshd", "-t"],
+        use_sudo=True,
+        sudo_available=inventory.sudo_available,
+    )
+    if not ok:
+        return False, f"sshd config test failed: {detail}"
+
+    for unit in ("ssh", "sshd"):
+        ok, detail = _run_mutating(
+            ["systemctl", "reload", unit],
+            use_sudo=True,
+            sudo_available=inventory.sudo_available,
+        )
+        if ok:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return True, f"sshd listening on port {gateway_ssh_port} via {STYX_SSHD_DROPIN}"
+
+    try:
+        temp_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return False, detail or "could not reload ssh/sshd"
+
+
+def _allow_firewall_port(port: int, protocol: str, inventory: SystemInventory) -> RunResult:
     binaries = inventory.firewall_backend.get("binaries", {})
     services = inventory.firewall_backend.get("services", {})
+    label = f"{port}/{protocol}"
 
     ufw_active = (services.get("ufw", {}).get("active") or "").lower() == "active"
     if binaries.get("ufw") and ufw_active:
         return _run_mutating(
-            ["ufw", "allow", f"{port}/udp"],
+            ["ufw", "allow", label],
             use_sudo=True,
             sudo_available=inventory.sudo_available,
         )
 
     firewalld_active = (services.get("firewalld", {}).get("active") or "").lower() == "active"
     if binaries.get("firewall-cmd") and firewalld_active:
+        ok, detail = _run_mutating(
+            ["firewall-cmd", "--permanent", "--add-port", label],
+            use_sudo=True,
+            sudo_available=inventory.sudo_available,
+        )
+        if not ok:
+            return ok, detail
         return _run_mutating(
-            ["firewall-cmd", "--permanent", "--add-port", f"{port}/udp"],
+            ["firewall-cmd", "--reload"],
             use_sudo=True,
             sudo_available=inventory.sudo_available,
         )
 
-    if binaries.get("nft"):
+    if binaries.get("nft") and protocol == "udp":
         return _run_mutating(
             [
                 "nft",
@@ -792,8 +882,51 @@ def _apply_firewall_allowance(
             use_sudo=True,
             sudo_available=inventory.sudo_available,
         )
+    if binaries.get("nft") and protocol == "tcp":
+        return _run_mutating(
+            [
+                "nft",
+                "add",
+                "rule",
+                "inet",
+                "filter",
+                "input",
+                "tcp",
+                "dport",
+                str(port),
+                "accept",
+            ],
+            use_sudo=True,
+            sudo_available=inventory.sudo_available,
+        )
 
-    return True, "no active firewall backend detected; skipped explicit rule"
+    return True, f"no active firewall backend detected; skipped {label}"
+
+
+def _apply_gateway_firewall(
+    wireguard_port: int,
+    gateway_ssh_port: int,
+    gateway_k3s_port: int,
+    inventory: SystemInventory,
+) -> RunResult:
+    results: list[str] = []
+    for port, protocol in (
+        (wireguard_port, "udp"),
+        (gateway_ssh_port, "tcp"),
+        (gateway_k3s_port, "tcp"),
+    ):
+        ok, detail = _allow_firewall_port(port, protocol, inventory)
+        results.append(f"{port}/{protocol}: {detail}")
+        if not ok:
+            return False, "; ".join(results)
+    return True, "; ".join(results)
+
+
+def _apply_firewall_allowance(
+    port: int,
+    inventory: SystemInventory,
+) -> RunResult:
+    return _allow_firewall_port(port, "udp", inventory)
 
 
 def _execute_step(
@@ -806,6 +939,7 @@ def _execute_step(
         return step
 
     interface, port = _wireguard_settings(config)
+    gateway = parse_gateway_ports(config)
 
     if step.name == "system-packages":
         package_manager = detect_package_manager()
@@ -832,6 +966,15 @@ def _execute_step(
             ["modprobe", "wireguard"],
             use_sudo=True,
             sudo_available=inventory.sudo_available,
+        )
+    elif step.name == "gateway-ssh":
+        ok, detail = _configure_gateway_ssh(gateway.ssh, inventory)
+    elif step.name == "gateway-firewall":
+        ok, detail = _apply_gateway_firewall(
+            port,
+            gateway.ssh,
+            gateway.k3s_api,
+            inventory,
         )
     elif step.name == "k3s":
         nodes = parse_nodes(config)
@@ -872,7 +1015,12 @@ def _execute_step(
             )
             ok, detail = up_ok, f"{detail}; {up_detail}"
     elif step.name == "firewall":
-        ok, detail = _apply_firewall_allowance(port, inventory)
+        ok, detail = _apply_gateway_firewall(
+            port,
+            gateway.ssh,
+            gateway.k3s_api,
+            inventory,
+        )
     else:
         step.status = "skipped"
         step.detail = "no executor"
