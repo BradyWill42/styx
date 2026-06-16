@@ -111,7 +111,7 @@ All branches share the same CLI design and safety rules. `main` is the integrati
 
 Current branch notes:
 
-- Documentation audit `2026-06-16 03:00 UTC`: fetched all remote branches (`main`, `MVP1`, and `MVP2`); no feature branch tips changed since the 02:00 README audit after its push (`main` at `18ddd79`, `MVP1` at `b55002b`, `MVP2` at `75ab2c6`) before this README-only edit, so the branch-only notes below remain current.
+- Documentation audit `2026-06-16 04:00 UTC`: fetched all remote branches (`main`, `MVP1`, and `MVP2`); no branch tips changed since the 03:00 README audit after its push (`main` at `ec742bf`, `MVP1` at `b55002b`, `MVP2` at `75ab2c6`) before this README-only edit, so the branch-only notes below remain current.
 - `main` currently uses configured node IPs for SSH orchestration and k3s joins.
 - The latest `MVP2` branch resolves `nodes[].hostname` values, updates DuckDNS before install operations, and uses gateway ports `47810/tcp` for SSH plus `47811/tcp` for the k3s API.
 - The latest `MVP2` branch can elect a strongest co-located LAN peer with UDP `47802` before install planning or apply.
