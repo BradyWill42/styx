@@ -18,6 +18,8 @@ import subprocess
 from typing import Any, Callable
 
 from .config import config_status, find_config, load_config, validate_config
+from .dns_update import refresh_local_node_duckdns
+from .gateway import k3s_join_url, parse_gateway_ports
 from .inventory import SystemInventory, collect_inventory, safe_run
 from .k3s_cluster import (
     ClusterPlan,
@@ -26,15 +28,19 @@ from .k3s_cluster import (
     build_cluster_plan,
     fetch_join_token_from_init,
     k3s_install_spec,
+    refresh_cluster_duckdns,
     _run_ssh_command,
 )
-from .nodes import identify_local_node, init_server_node, parse_nodes, validate_nodes
+from .lan_election import LanElectionResult, apply_lan_election_roles, resolve_lan_leadership, run_lan_election
+from .nodes import identify_local_node, init_server_node, node_hostname, parse_nodes, validate_nodes
 from .remediation import _run_mutating
 from .reports import CRITICAL_PORTS, evaluate_readiness
 
 PRESERVED_INTERFACES = frozenset({"wg0"})
 WG0_CONFIG_PATH = Path("/etc/wireguard/wg0.conf")
 STYX_WG_DIR = Path("/etc/wireguard")
+STYX_SSHD_DROPIN_DIR = Path("/etc/ssh/sshd_config.d")
+STYX_SSHD_DROPIN = STYX_SSHD_DROPIN_DIR / "styx-gateway.conf"
 
 APT_PACKAGES = ("iproute2", "wireguard", "wireguard-tools", "curl", "ca-certificates")
 DNF_PACKAGES = APT_PACKAGES
@@ -80,6 +86,7 @@ class InstallPlan:
     wg0_before: Wg0Snapshot
     local_node: str | None = None
     cluster_plan: ClusterPlan | None = None
+    lan_election: LanElectionResult | None = None
     steps: list[InstallStep] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
@@ -93,6 +100,7 @@ class InstallPlan:
             "wg0_before": self.wg0_before.to_dict(),
             "local_node": self.local_node,
             "cluster_plan": self.cluster_plan.to_dict() if self.cluster_plan else None,
+            "lan_election": self.lan_election.to_dict() if self.lan_election else None,
             "steps": [step.to_dict() for step in self.steps],
         }
 
@@ -285,15 +293,17 @@ def _missing_packages(inventory: SystemInventory, package_manager: str | None) -
 
 def _join_credentials(config: dict[str, Any], nodes: list) -> tuple[str | None, str | None]:
     init = init_server_node(nodes)
-    if init is None or not init.primary_ip:
+    init_host = node_hostname(config, init) if init else None
+    if init is None or not (init_host or init.primary_ip):
         return None, None
-    join_url = f"https://{init.primary_ip}:6443"
+    gateway = parse_gateway_ports(config)
+    join_url = k3s_join_url(init_host or init.primary_ip, gateway)
     cluster = config.get("cluster", {})
     token = cluster.get("join_token")
     if isinstance(token, str) and token.strip():
         return join_url, token.strip()
     ssh_user = cluster.get("ssh_user") if isinstance(cluster.get("ssh_user"), str) else None
-    ok, detail = fetch_join_token_from_init(init, ssh_user=ssh_user)
+    ok, detail = fetch_join_token_from_init(init, config=config, ssh_user=ssh_user)
     if ok:
         return join_url, detail.strip()
     return join_url, None
@@ -301,7 +311,7 @@ def _join_credentials(config: dict[str, Any], nodes: list) -> tuple[str | None, 
 
 def _k3s_install_command_display(config: dict[str, Any], inventory: SystemInventory) -> str:
     nodes = parse_nodes(config)
-    local_node = identify_local_node(nodes, inventory)
+    local_node = identify_local_node(nodes, inventory, config)
     all_nodes = nodes or []
     if local_node and all_nodes:
         join_url, join_token = _join_credentials(config, all_nodes)
@@ -407,19 +417,32 @@ def check_install_gate(
     )
 
 
+def _effective_config(gate: InstallGateResult, lan_election: LanElectionResult | None) -> dict[str, Any]:
+    if lan_election is None:
+        return gate.config
+    return apply_lan_election_roles(gate.config, lan_election)
+
+
 def build_install_plan(
     gate: InstallGateResult,
     *,
     inventory: SystemInventory | None = None,
+    lan_election: LanElectionResult | None = None,
 ) -> InstallPlan:
     inventory = inventory or gate.inventory
-    config = gate.config
+    if lan_election is None:
+        config, lan_election = resolve_lan_leadership(gate.config, inventory)
+    else:
+        config = _effective_config(gate, lan_election)
+    plan_warnings = list(gate.warnings)
+    if lan_election.warnings:
+        plan_warnings.extend(lan_election.warnings)
     package_manager = detect_package_manager()
     wg0_before = capture_wg0_snapshot(inventory)
     steps: list[InstallStep] = []
     interface, port = _wireguard_settings(config)
     nodes = parse_nodes(config)
-    local_node = identify_local_node(nodes, inventory)
+    local_node = identify_local_node(nodes, inventory, config)
     cluster_plan = build_cluster_plan(config, local_node=local_node) if nodes else None
 
     missing_packages = _missing_packages(inventory, package_manager)
@@ -492,6 +515,39 @@ def build_install_plan(
         )
     )
 
+    gateway = parse_gateway_ports(config)
+    steps.append(
+        InstallStep(
+            name="gateway-ssh",
+            category="gateway",
+            action="configure",
+            status="pending",
+            reason=f"Configure sshd to listen on Styx gateway port {gateway.ssh}/tcp",
+            command_display=(
+                f"write {STYX_SSHD_DROPIN} with Port {gateway.ssh}; "
+                "sudo sshd -t && sudo systemctl reload ssh"
+            ),
+            requires_sudo=True,
+        )
+    )
+    steps.append(
+        InstallStep(
+            name="gateway-firewall",
+            category="firewall",
+            action="allow",
+            status="pending",
+            reason=(
+                f"Allow Styx gateway ports on this node: "
+                f"{port}/udp, {gateway.ssh}/tcp, {gateway.k3s_api}/tcp"
+            ),
+            command_display=(
+                f"open {port}/udp, {gateway.ssh}/tcp, {gateway.k3s_api}/tcp "
+                "(ufw/nft/firewalld if backend detected)"
+            ),
+            requires_sudo=True,
+        )
+    )
+
     if inventory.detected_binaries.get("k3s"):
         steps.append(
             InstallStep(
@@ -546,7 +602,7 @@ def build_install_plan(
                 status="pending",
                 reason=(
                     f"Install k3s {'init-server' if local_node and local_node.role == 'init-server' else 'server'} "
-                    "with Styx dual-stack CIDRs and node IPs from styx.yaml"
+                    f"with dual-stack CIDRs, node IPs, and API listen port {gateway.k3s_api}"
                 ),
                 command=["curl", "-sfL", "https://get.k3s.io"],
                 command_display=_k3s_install_command_display(config, inventory),
@@ -593,29 +649,17 @@ def build_install_plan(
             )
         )
 
-    steps.append(
-        InstallStep(
-            name="firewall",
-            category="firewall",
-            action="allow",
-            status="pending",
-            reason=f"Allow {port}/udp for Styx WireGuard and k3s service ports",
-            command_display=(
-                f"allow {port}/udp (ufw/nft/firewalld minimal rule if backend detected)"
-            ),
-        )
-    )
-
     return InstallPlan(
         hostname=inventory.hostname,
         config_path=str(gate.config_path) if gate.config_path else None,
         config_status=gate.config_status_value,
         sysprep_status=gate.sysprep_status,
-        warnings=gate.warnings,
+        warnings=plan_warnings,
         blocking=gate.blocking,
         wg0_before=wg0_before,
         local_node=local_node.name if local_node else None,
         cluster_plan=cluster_plan,
+        lan_election=lan_election,
         steps=steps,
     )
 
@@ -747,30 +791,98 @@ def _write_styx_wireguard_config(
     return True, f"wrote {styx_conf}"
 
 
-def _apply_firewall_allowance(
-    port: int,
-    inventory: SystemInventory,
-) -> RunResult:
+def _configure_gateway_ssh(gateway_ssh_port: int, inventory: SystemInventory) -> RunResult:
+    content = (
+        "# Managed by styxctl - Styx gateway SSH listen port\n"
+        f"Port {gateway_ssh_port}\n"
+    )
+    temp_path = Path("/tmp") / "styx-sshd-gateway.conf"
+    try:
+        temp_path.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        return False, str(exc)
+
+    ok, detail = _run_mutating(
+        ["mkdir", "-p", str(STYX_SSHD_DROPIN_DIR)],
+        use_sudo=True,
+        sudo_available=inventory.sudo_available,
+    )
+    if not ok:
+        return False, detail
+
+    ok, detail = _run_mutating(
+        ["cp", str(temp_path), str(STYX_SSHD_DROPIN)],
+        use_sudo=True,
+        sudo_available=inventory.sudo_available,
+    )
+    if not ok:
+        return False, detail
+
+    ok, detail = _run_mutating(
+        ["chmod", "644", str(STYX_SSHD_DROPIN)],
+        use_sudo=True,
+        sudo_available=inventory.sudo_available,
+    )
+    if not ok:
+        return False, detail
+
+    ok, detail = _run_mutating(
+        ["sshd", "-t"],
+        use_sudo=True,
+        sudo_available=inventory.sudo_available,
+    )
+    if not ok:
+        return False, f"sshd config test failed: {detail}"
+
+    for unit in ("ssh", "sshd"):
+        ok, detail = _run_mutating(
+            ["systemctl", "reload", unit],
+            use_sudo=True,
+            sudo_available=inventory.sudo_available,
+        )
+        if ok:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return True, f"sshd listening on port {gateway_ssh_port} via {STYX_SSHD_DROPIN}"
+
+    try:
+        temp_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return False, detail or "could not reload ssh/sshd"
+
+
+def _allow_firewall_port(port: int, protocol: str, inventory: SystemInventory) -> RunResult:
     binaries = inventory.firewall_backend.get("binaries", {})
     services = inventory.firewall_backend.get("services", {})
+    label = f"{port}/{protocol}"
 
     ufw_active = (services.get("ufw", {}).get("active") or "").lower() == "active"
     if binaries.get("ufw") and ufw_active:
         return _run_mutating(
-            ["ufw", "allow", f"{port}/udp"],
+            ["ufw", "allow", label],
             use_sudo=True,
             sudo_available=inventory.sudo_available,
         )
 
     firewalld_active = (services.get("firewalld", {}).get("active") or "").lower() == "active"
     if binaries.get("firewall-cmd") and firewalld_active:
+        ok, detail = _run_mutating(
+            ["firewall-cmd", "--permanent", "--add-port", label],
+            use_sudo=True,
+            sudo_available=inventory.sudo_available,
+        )
+        if not ok:
+            return ok, detail
         return _run_mutating(
-            ["firewall-cmd", "--permanent", "--add-port", f"{port}/udp"],
+            ["firewall-cmd", "--reload"],
             use_sudo=True,
             sudo_available=inventory.sudo_available,
         )
 
-    if binaries.get("nft"):
+    if binaries.get("nft") and protocol == "udp":
         return _run_mutating(
             [
                 "nft",
@@ -787,8 +899,51 @@ def _apply_firewall_allowance(
             use_sudo=True,
             sudo_available=inventory.sudo_available,
         )
+    if binaries.get("nft") and protocol == "tcp":
+        return _run_mutating(
+            [
+                "nft",
+                "add",
+                "rule",
+                "inet",
+                "filter",
+                "input",
+                "tcp",
+                "dport",
+                str(port),
+                "accept",
+            ],
+            use_sudo=True,
+            sudo_available=inventory.sudo_available,
+        )
 
-    return True, "no active firewall backend detected; skipped explicit rule"
+    return True, f"no active firewall backend detected; skipped {label}"
+
+
+def _apply_gateway_firewall(
+    wireguard_port: int,
+    gateway_ssh_port: int,
+    gateway_k3s_port: int,
+    inventory: SystemInventory,
+) -> RunResult:
+    results: list[str] = []
+    for port, protocol in (
+        (wireguard_port, "udp"),
+        (gateway_ssh_port, "tcp"),
+        (gateway_k3s_port, "tcp"),
+    ):
+        ok, detail = _allow_firewall_port(port, protocol, inventory)
+        results.append(f"{port}/{protocol}: {detail}")
+        if not ok:
+            return False, "; ".join(results)
+    return True, "; ".join(results)
+
+
+def _apply_firewall_allowance(
+    port: int,
+    inventory: SystemInventory,
+) -> RunResult:
+    return _allow_firewall_port(port, "udp", inventory)
 
 
 def _execute_step(
@@ -801,6 +956,7 @@ def _execute_step(
         return step
 
     interface, port = _wireguard_settings(config)
+    gateway = parse_gateway_ports(config)
 
     if step.name == "system-packages":
         package_manager = detect_package_manager()
@@ -828,9 +984,18 @@ def _execute_step(
             use_sudo=True,
             sudo_available=inventory.sudo_available,
         )
+    elif step.name == "gateway-ssh":
+        ok, detail = _configure_gateway_ssh(gateway.ssh, inventory)
+    elif step.name == "gateway-firewall":
+        ok, detail = _apply_gateway_firewall(
+            port,
+            gateway.ssh,
+            gateway.k3s_api,
+            inventory,
+        )
     elif step.name == "k3s":
         nodes = parse_nodes(config)
-        local_node = identify_local_node(nodes, inventory)
+        local_node = identify_local_node(nodes, inventory, config)
         if local_node and nodes:
             join_url, join_token = _join_credentials(config, nodes)
             env, args, _ = k3s_install_spec(
@@ -867,7 +1032,12 @@ def _execute_step(
             )
             ok, detail = up_ok, f"{detail}; {up_detail}"
     elif step.name == "firewall":
-        ok, detail = _apply_firewall_allowance(port, inventory)
+        ok, detail = _apply_gateway_firewall(
+            port,
+            gateway.ssh,
+            gateway.k3s_api,
+            inventory,
+        )
     else:
         step.status = "skipped"
         step.detail = "no executor"
@@ -915,6 +1085,9 @@ def apply_install_plan(
         warnings=plan.warnings,
         blocking=plan.blocking,
         wg0_before=plan.wg0_before,
+        local_node=plan.local_node,
+        cluster_plan=plan.cluster_plan,
+        lan_election=plan.lan_election,
         steps=updated_steps,
     )
 
@@ -1004,7 +1177,7 @@ def assess_install_health(
         health_issues.append("critical Styx ports 47800-47808 have conflicts")
 
     cluster_nodes = parse_nodes(config)
-    local_node = identify_local_node(cluster_nodes, inventory)
+    local_node = identify_local_node(cluster_nodes, inventory, config)
     healthy = not health_issues
     return InstallHealth(
         healthy=healthy,
@@ -1107,6 +1280,7 @@ def run_install_local(
         wg0_before=capture_wg0_snapshot(pre_inventory),
         steps=[],
     )
+    effective_config = _effective_config(gate, plan.lan_election)
 
     if not gate.ok:
         report = build_install_report(
@@ -1131,9 +1305,14 @@ def run_install_local(
         report["pending_count"] = len(pending)
         return report, 0
 
+    dns_update: dict[str, object] | None = None
+    if not dry_run:
+        ok, detail = refresh_local_node_duckdns(gate.config, pre_inventory.hostname)
+        dns_update = {"ok": ok, "detail": detail}
+
     applied_plan = apply_install_plan(
         plan,
-        config=gate.config,
+        config=effective_config,
         inventory=pre_inventory,
         dry_run=dry_run,
     )
@@ -1153,6 +1332,8 @@ def run_install_local(
         pre_inventory=pre_inventory,
         post_inventory=post_inventory,
     )
+    if dns_update is not None:
+        report["dns_update"] = dns_update
 
     if dry_run:
         return report, 0
@@ -1196,7 +1377,7 @@ def check_cluster_gate(
         return gate
 
     nodes = parse_nodes(gate.config)
-    node_errors = validate_nodes(nodes)
+    node_errors = validate_nodes(nodes, gate.config)
     if not nodes:
         return InstallGateResult(
             ok=False,
@@ -1236,20 +1417,25 @@ def run_install_cluster(
         config_path=config_path,
         require_sudo=not dry_run,
     )
-    nodes = parse_nodes(gate.config) if gate.ok else []
-    local_node = identify_local_node(nodes, pre_inventory) if nodes else None
-    cluster_plan = build_cluster_plan(gate.config, local_node=local_node) if gate.ok else ClusterPlan(init_node="unknown")
+    effective_config, lan_election = resolve_lan_leadership(gate.config, pre_inventory) if gate.ok else (gate.config, None)
+    nodes = parse_nodes(effective_config) if gate.ok else []
+    local_node = identify_local_node(nodes, pre_inventory, effective_config) if nodes else None
+    cluster_plan = build_cluster_plan(effective_config, local_node=local_node) if gate.ok else ClusterPlan(init_node="unknown")
+    plan_warnings = list(gate.warnings)
+    if lan_election and lan_election.warnings:
+        plan_warnings.extend(lan_election.warnings)
 
     base_plan = InstallPlan(
         hostname=pre_inventory.hostname,
         config_path=str(gate.config_path) if gate.config_path else None,
         config_status=gate.config_status_value,
         sysprep_status=gate.sysprep_status,
-        warnings=gate.warnings,
+        warnings=plan_warnings,
         blocking=gate.blocking,
         wg0_before=capture_wg0_snapshot(pre_inventory),
         local_node=local_node.name if local_node else None,
         cluster_plan=cluster_plan,
+        lan_election=lan_election,
         steps=[],
     )
 
@@ -1289,15 +1475,17 @@ def run_install_cluster(
         report["cluster"] = cluster_plan.to_dict()
         return report, 0
 
-    ssh_user = gate.config.get("cluster", {}).get("ssh_user")
-    join_url: str | None = None
+    gateway = parse_gateway_ports(effective_config)
+    dns_messages = refresh_cluster_duckdns(effective_config, nodes)
+    ssh_user = effective_config.get("cluster", {}).get("ssh_user")
+    join_url: str | None = cluster_plan.join_url
     join_token: str | None = None
     ssh_runner = runner or _run_ssh_command
 
     for node_plan in cluster_plan.nodes:
         if node_plan.local_execution and local_node:
             env, args, _ = k3s_install_spec(
-                gate.config,
+                effective_config,
                 local_node,
                 all_nodes=nodes,
                 join_url=join_url,
@@ -1314,12 +1502,18 @@ def run_install_cluster(
             if node_plan.role != "init-server" and not join_token:
                 init = init_server_node(nodes)
                 if init:
-                    token_ok, token_detail = fetch_join_token_from_init(init, ssh_user=ssh_user, runner=ssh_runner)
+                    token_ok, token_detail = fetch_join_token_from_init(
+                        init,
+                        config=effective_config,
+                        ssh_user=ssh_user,
+                        runner=ssh_runner,
+                    )
                     if token_ok:
                         join_token = token_detail.strip()
-                        join_url = f"https://{init.primary_ip}:6443"
+                        init_host = node_hostname(effective_config, init) or init.primary_ip
+                        join_url = k3s_join_url(init_host, gateway) if init_host else join_url
                         env, args, _ = k3s_install_spec(
-                            gate.config,
+                            effective_config,
                             node_plan.node,
                             all_nodes=nodes,
                             join_url=join_url,
@@ -1327,17 +1521,29 @@ def run_install_cluster(
                         )
                         node_plan.k3s_env = env
                         node_plan.k3s_args = args
-            apply_cluster_node_plan(node_plan, ssh_user=ssh_user, runner=ssh_runner)
+            apply_cluster_node_plan(
+                node_plan,
+                config=effective_config,
+                ssh_user=ssh_user,
+                runner=ssh_runner,
+            )
 
         if node_plan.role == "init-server" and node_plan.status == "installed":
             init = init_server_node(nodes)
             if init:
-                token_ok, token_detail = fetch_join_token_from_init(init, ssh_user=ssh_user, runner=ssh_runner)
+                token_ok, token_detail = fetch_join_token_from_init(
+                    init,
+                    config=effective_config,
+                    ssh_user=ssh_user,
+                    runner=ssh_runner,
+                )
                 if token_ok:
                     join_token = token_detail.strip()
-                    join_url = f"https://{init.primary_ip}:6443"
+                    init_host = node_hostname(effective_config, init) or init.primary_ip
+                    if init_host:
+                        join_url = k3s_join_url(init_host, gateway)
 
-    cluster_health = assess_cluster_nodes(gate.config, ssh_user=ssh_user, runner=ssh_runner)
+    cluster_health = assess_cluster_nodes(effective_config, ssh_user=ssh_user, runner=ssh_runner)
     report = build_install_report(
         command="styxctl install cluster",
         plan=base_plan,
@@ -1348,6 +1554,7 @@ def run_install_cluster(
     )
     report["cluster"] = cluster_plan.to_dict()
     report["cluster_health"] = cluster_health
+    report["dns_updates"] = dns_messages
     report["status"] = "INSTALLED" if cluster_health.get("healthy") else "INSTALLED_WITH_ISSUES"
 
     if any(item.status == "failed" for item in cluster_plan.nodes):
@@ -1361,3 +1568,21 @@ def run_cluster_doctor(*, config_path: str | Path | None = None) -> dict[str, An
     config = load_config(config_path) if config_path else load_config(find_config())
     ssh_user = config.get("cluster", {}).get("ssh_user") if isinstance(config.get("cluster"), dict) else None
     return assess_cluster_nodes(config, ssh_user=ssh_user)
+
+
+def run_lan_election_preview(*, config_path: str | Path | None = None) -> tuple[dict[str, Any], int]:
+    pre_inventory = collect_inventory()
+    gate = check_install_gate(config_path=config_path, inventory=pre_inventory, require_sudo=False)
+    election = run_lan_election(gate.config, pre_inventory) if gate.config else run_lan_election({}, pre_inventory)
+    report = {
+        "command": "styxctl install plan lan",
+        "lan_election": election.to_dict(),
+        "config_path": str(gate.config_path) if gate.config_path else None,
+    }
+    return report, 0
+
+
+def run_lan_election_status(*, config_path: str | Path | None = None) -> dict[str, Any]:
+    pre_inventory = collect_inventory()
+    config = load_config(config_path) if config_path else load_config(find_config())
+    return run_lan_election(config, pre_inventory).to_dict()

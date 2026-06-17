@@ -143,12 +143,16 @@ def test_build_install_plan_includes_k3s_and_styx_wireguard(tmp_path, monkeypatc
     gate = check_install_gate(inventory=_base_inventory(), config_path=config_path)
     plan = build_install_plan(gate)
     names = [step.name for step in plan.steps]
+    assert "gateway-ssh" in names
+    assert "gateway-firewall" in names
     assert "k3s" in names
     assert "styx-wireguard" in names
     k3s_step = next(step for step in plan.steps if step.name == "k3s")
     assert k3s_step.status == "pending"
     assert "--cluster-cidr" in (k3s_step.command_display or "")
     assert "--cluster-init" in (k3s_step.command_display or "")
+    assert "--https-listen-port" in (k3s_step.command_display or "")
+    assert "47811" in (k3s_step.command_display or "")
     assert plan.local_node == "pistyx"
     assert plan.cluster_plan is not None
     assert len(plan.cluster_plan.nodes) == 3
@@ -167,6 +171,7 @@ def test_build_cluster_plan_uses_node_ips(tmp_path, monkeypatch):
     assert "10.0.0.1" in init_plan.node_ips
     assert "--node-ip" in init_plan.command_display
     assert "--tls-san" in init_plan.command_display
+    assert "--https-listen-port" in init_plan.command_display
 
 
 def test_install_cluster_dry_run(tmp_path, monkeypatch):
@@ -183,7 +188,7 @@ def test_run_install_cluster_mocked_ssh(tmp_path, monkeypatch):
     config_path = _write_example_config(tmp_path)
     monkeypatch.setattr("styxctl.install.collect_inventory", _base_inventory)
 
-    def fake_ssh(target: str, command: str) -> tuple[bool, str]:
+    def fake_ssh(target: str, command: str, **kwargs) -> tuple[bool, str]:
         if "node-token" in command:
             return True, "test-token"
         if "kubectl get nodes" in command:
@@ -194,6 +199,10 @@ def test_run_install_cluster_mocked_ssh(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "styxctl.install._run_pipeline",
         lambda *args, **kwargs: (True, "local k3s installed"),
+    )
+    monkeypatch.setattr(
+        "styxctl.k3s_cluster.refresh_node_duckdns",
+        lambda config, node: (False, "mocked"),
     )
     monkeypatch.setattr(
         "styxctl.k3s_cluster._run_ssh_command",

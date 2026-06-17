@@ -3,6 +3,14 @@ cluster:
   domain: styx.net
   mode: dual-stack
   ssh_user: ubuntu
+  leader: lan-elected
+  lan_election:
+    port: 47802
+    collect_sec: 3
+
+gateway:
+  ssh_port: 47810
+  k3s_api_port: 47811
 
 network:
   ipv4_supernet: 10.0.0.0/14
@@ -28,20 +36,25 @@ wireguard:
 
 nodes:
   - name: pistyx
+    hostname: pistyx.duckdns.org
     ipv4: 10.0.0.1
     ipv6: fd00:cafe::1
     role: init-server
   - name: pegasus
+    hostname: pipegasus.duckdns.org
     ipv4: 10.0.0.2
     ipv6: fd00:cafe::2
     role: server
   - name: hydra
+    hostname: pihydra.duckdns.org
     ipv4: 10.0.0.3
     ipv6: fd00:cafe::3
     role: agent
 
 dns:
   provider: duckdns
+  domain: duckdns.org
+  token_env: DUCKDNS_TOKEN
   auto_endpoint: pistyx
   fixed_endpoints:
     pegasus: pipegasus
