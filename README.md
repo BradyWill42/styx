@@ -111,7 +111,7 @@ All branches share the same CLI design and safety rules. `main` is the integrati
 
 Current branch notes:
 
-- Documentation audit `2026-06-17 02:47 UTC`: fetched all remote branches (`main`, `MVP1`, and `MVP2`) before README propagation; since the 02:00 README audit after its push (`main` at `335d223`, `MVP1` at `b55002b`, `MVP2` at `75ab2c6`), only `MVP2` had new functional changes, advancing to `aa13882` with LAN leader election restricted to peers declared in `styx.yaml`.
+- Documentation audit `2026-06-17 03:01 UTC`: fetched remote heads (`main` at `1b125ca`, `MVP1` at `5d59f43`, and `MVP2` at `30d6801`) before this README-only propagation. Since the 02:47 audit, `main` merged the already-documented `MVP1` and `MVP2` branch histories; `MVP1` and `MVP2` had no new functional commits.
 - The latest `MVP2` branch ignores discovered LAN peers that are not listed in `styx.yaml` `nodes`, and the local host must match a configured node before participating in election.
 
 ---
