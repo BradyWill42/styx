@@ -9,7 +9,7 @@
 | **Version** | `0.3.0` |
 | **Python** | 3.10+ |
 | **License** | MIT |
-| **Status** | MVP1 + MVP2 shipped on `main`; milestone branches carry newer targeted work |
+| **Status** | MVP1 + MVP2 shipped on `main` |
 
 ---
 
@@ -95,7 +95,7 @@ flowchart TB
 | `server` | Additional k3s control-plane / server node |
 | `agent` | k3s worker node |
 
-Each node's `ipv4` / `ipv6` in config becomes its k3s `--node-ip`. Cluster orchestration reaches configured nodes over SSH and has them join the init-server in role order.
+Each node uses a DuckDNS `hostname` for cross-site SSH/k3s join and mesh `ipv4` / `ipv6` for k3s `--node-ip`. The init-server node is joined over SSH on gateway port `47810` by all other nodes using their configured hostnames.
 
 ---
 
@@ -103,18 +103,11 @@ Each node's `ipv4` / `ipv6` in config becomes its k3s `--node-ip`. Cluster orche
 
 | Branch | Contents | Use when |
 |--------|----------|----------|
-| [`main`](https://github.com/BradyWill42/styx/tree/main) | MVP1 + MVP2 integrated release | Default — full platform prep and install |
-| [`MVP1`](https://github.com/BradyWill42/styx/tree/MVP1) | MVP1-only sysprep snapshot; latest branch refreshes plan/apply subcommands and port docs | You only need assessment and safe remediation |
-| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP1 + install path; latest branch adds DuckDNS hostnames, gateway SSH/k3s ports, and configured-node LAN leader election | You need the newest install-path work before it lands on `main` |
+| [`main`](https://github.com/BradyWill42/styx/tree/main) | MVP1 + MVP2 integrated release with DuckDNS, gateway ports, and LAN leader election | Default — full platform prep and install |
+| [`MVP1`](https://github.com/BradyWill42/styx/tree/MVP1) | MVP1-only sysprep snapshot | You only need assessment and safe remediation |
+| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP2 milestone snapshot with install-path features | Preserved for milestone development |
 
-All branches share the same CLI design and safety rules. `main` is the integration branch; feature work lands on `MVP1` or `MVP2` first, then merges into `main`.
-
-Current branch notes:
-
-- Documentation audit `2026-06-17 02:47 UTC`: fetched all remote branches (`main`, `MVP1`, and `MVP2`); since the 02:00 README audit after its push (`main` at `335d223`, `MVP1` at `b55002b`, `MVP2` at `75ab2c6`), only `MVP2` changed, advancing to `aa13882` with LAN leader election restricted to peers declared in `styx.yaml`.
-- `main` currently uses configured node IPs for SSH orchestration and k3s joins.
-- The latest `MVP2` branch resolves `nodes[].hostname` values, updates DuckDNS before install operations, and uses gateway ports `47810/tcp` for SSH plus `47811/tcp` for the k3s API.
-- The latest `MVP2` branch can elect the strongest configured co-located LAN peer with UDP `47802` before install planning or apply, ignoring peers not listed in `styx.yaml`.
+All branches share the same CLI design and safety rules. `main` is the integration branch; `MVP1` and `MVP2` are preserved as milestone snapshots.
 
 ---
 
@@ -152,15 +145,19 @@ styxctl sysprep check local          # re-check until READY
 
 ```bash
 cp styx.yaml.example styx.yaml
-# Edit nodes: set each node's ipv4/ipv6 to its current LAN addresses
+# Set each node's DuckDNS hostname and mesh ipv4/ipv6 for k3s --node-ip
+# Export DUCKDNS_TOKEN before install so styxctl can publish your public IP
+export DUCKDNS_TOKEN=your-token
 styxctl config validate
 
 styxctl install plan local
 styxctl install apply local          # on every node
 
 styxctl install plan cluster
-styxctl install apply cluster        # orchestrate init + join over SSH
+styxctl install apply cluster        # init + join from init-server over SSH (port 47810)
 
+styxctl install status local
+styxctl install status cluster
 styxctl install doctor local
 styxctl install doctor cluster
 ```
@@ -264,14 +261,16 @@ After MVP1 reports `READY` or `READY_WITH_WARNINGS`, MVP2 installs the local fou
 
 ```bash
 cp styx.yaml.example styx.yaml
-# Set each node's ipv4/ipv6 to its current LAN addresses
+# Set each node's DuckDNS hostname and mesh ipv4/ipv6 for k3s --node-ip
+# Export DUCKDNS_TOKEN before install so styxctl can publish your public IP
+export DUCKDNS_TOKEN=your-token
 styxctl config validate
 
 # Per-node local install (run on every gateway)
 styxctl install plan local
 styxctl install apply local
 
-# Cluster join orchestration (SSH to configured nodes)
+# Cluster join from init-server (SSH over gateway port 47810)
 styxctl install plan cluster
 styxctl install apply cluster
 
@@ -282,16 +281,53 @@ styxctl install doctor local
 styxctl install doctor cluster
 ```
 
-### Latest MVP2 branch additions
+Each node uses:
 
-The `MVP2` branch has newer install-path work that is not yet merged into `main`:
+- `hostname` — DuckDNS name for cross-site SSH and k3s join (resolved on every connect)
+- `ipv4` / `ipv6` — mesh addresses passed to k3s as `--node-ip` (internal overlay, not your public IP)
 
-- `nodes[].hostname` stores each node's DuckDNS name for cross-site SSH and k3s joins.
-- `dns.token_env` defaults the DuckDNS token source to an environment variable such as `DUCKDNS_TOKEN`; install operations publish the node's current public IPv4 before connecting.
-- `gateway.ssh_port` and `gateway.k3s_api_port` default to `47810` and `47811`; local install configures sshd and k3s to listen on those node ports.
-- `cluster.leader: lan-elected` enables configured-node LAN leader election over UDP `47802`; use `styxctl install plan lan` and `styxctl install status lan` on that branch to preview or inspect election.
+`install apply local` and `install apply cluster` update DuckDNS with the node's current public IPv4 before connecting. Set `dns.token_env` (recommended) or `dns.token` in `styx.yaml`.
 
-If multiple configured Styx gateways share a LAN and the configured `init-server` is on that same LAN, the elected strongest peer is promoted to `init-server` and the previous init-server becomes a `server`. If the init-server is remote, election is reported for visibility without changing k3s roles.
+### LAN leader election
+
+When multiple Styx gateways share a LAN, enable automatic leader election in `styx.yaml`:
+
+```yaml
+cluster:
+  leader: lan-elected
+  lan_election:
+    port: 47802
+    collect_sec: 3
+```
+
+Before `install plan local`, `install apply local`, and `install apply cluster`, styxctl:
+
+1. Broadcasts on the local subnet (UDP port `47802`, Styx director API)
+2. Collects peer announcements from other Styx nodes on the same LAN
+3. Keeps only peers listed in `styx.yaml` `nodes`
+4. Scores each remaining peer by RAM, CPU cores, architecture, disk, and existing k3s
+5. Elects the strongest configured peer on this LAN as leader
+
+If the configured `init-server` is on the same LAN and two or more peers are present, the elected leader is promoted to `init-server` and the previous init-server is demoted to `server`. If the init-server lives on a different site, election still picks a LAN leader for visibility but k3s roles stay unchanged.
+
+Preview or inspect election without installing:
+
+```bash
+styxctl install plan lan
+styxctl install status lan
+```
+
+### Port forwards (router)
+
+Forward the Styx reserved range on each gateway node's router to that node:
+
+| External (DuckDNS) | Forward to node | Service |
+|---|---|---|
+| `47800/udp` | `47800/udp` | Styx WireGuard |
+| `47810/tcp` | `47810/tcp` | SSH (sshd listens on Pi) |
+| `47811/tcp` | `47811/tcp` | k3s API (k3s listens on Pi) |
+
+`install apply local` configures sshd and k3s to listen on `gateway.ssh_port` and `gateway.k3s_api_port` on the Pi itself. Router forwards are 1:1 — same port outside and inside. styxctl connects to `hostname:47810` for SSH and `https://hostname:47811` for k3s join.
 
 ### What MVP2 installs
 
@@ -444,7 +480,7 @@ Only ports `47800–47850` are managed by `styxctl`. Critical production ports `
 |------|----------|---------|
 | 47800 | UDP | Styx production WireGuard gateway |
 | 47801 | TCP | Styx gateway health API |
-| 47802 | UDP | Styx director API / configured-node LAN leader election (`MVP2` branch) |
+| 47802 | UDP | Styx director API / configured-node LAN leader election |
 | 47803 | TCP | Styx status dashboard/API |
 | 47804 | TCP | Styx node agent API |
 | 47805 | TCP | Styx Ansible controller API |
@@ -452,8 +488,8 @@ Only ports `47800–47850` are managed by `styxctl`. Critical production ports `
 | 47807 | TCP | Styx local diagnostics API |
 | 47808 | TCP | Styx metrics exporter |
 | 47809 | any | Reserved |
-| 47810 | TCP | SSH gateway listen (`MVP2` branch) |
-| 47811 | TCP | k3s API gateway listen (`MVP2` branch) |
+| 47810 | TCP | SSH gateway listen |
+| 47811 | TCP | k3s API gateway listen |
 | 47812–47819 | any | Site/gateway spare |
 | 47820–47829 | any | Client/profile testing |
 | 47830–47839 | any | Development/debug |
@@ -612,7 +648,7 @@ If a non-Styx process holds a critical port, stop it manually — MVP1 will not 
 styxctl config validate
 ```
 
-Common fixes: set node IPs to real LAN addresses, ensure exactly one `init-server`, and keep `wireguard.interface` as `Styx` (not `wg0`).
+Common fixes: set node `hostname` to the correct DuckDNS name, mesh IPs for k3s `--node-ip`, ensure exactly one `init-server`, port-forward `47810`/`47811`, and keep `wireguard.interface` as `Styx` (not `wg0`).
 
 ### Install blocked: sudo unavailable
 
@@ -633,8 +669,8 @@ styxctl install apply local
 ### Cluster join failures
 
 ```bash
-# From init-server, verify SSH to each node IP
-ssh ubuntu@<node-ip> true
+# From init-server, verify SSH to each node hostname on gateway port 47810
+ssh -p 47810 ubuntu@<node-hostname> true
 
 styxctl install status cluster
 styxctl install doctor cluster
