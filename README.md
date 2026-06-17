@@ -111,7 +111,7 @@ All branches share the same CLI design and safety rules. `main` is the integrati
 
 Current branch notes:
 
-- Documentation audit `2026-06-17 05:03 UTC`: fetched remote heads (`main` at `30d8c06`, `MVP1` at `997bb3a`, and `MVP2` at `f64aa82`) before this README-only propagation. Since the 04:02 audit, no maintained branch has new code or documentation commits, so no feature documentation changes were required.
+- Documentation audit `2026-06-17 06:02 UTC`: fetched remote heads (`main` at `b5822dd`, `MVP1` at `c18d6cf`, and `MVP2` at `14792c8`) before this README-only propagation. Since the 05:03 audit, no maintained branch has new code or documentation commits, so no feature documentation changes were required.
 - `main` remains the integrated release with the DuckDNS hostname workflow, gateway SSH/k3s ports, and configured-node LAN leader election. The latest `MVP2` branch carries the newer `public_ipv4` bootstrap workflow until it is merged back to `main`.
 
 ---
