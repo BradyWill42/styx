@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [MVP1, MVP2, main, "cursor/**"]
+    branches: [main, "cursor/**"]
   pull_request:
-    branches: [MVP1, MVP2, main]
+    branches: [main]
 
 jobs:
   test:
