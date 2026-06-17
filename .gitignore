@@ -219,3 +219,6 @@ __marimo__/
 
 # styxctl generated reports (local sysprep output)
 reports/
+
+# Operator config (copy from styx.yaml.example; may contain secrets)
+styx.yaml

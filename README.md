@@ -432,31 +432,30 @@ wireguard:
   shared_server_identity: true
 
 nodes:
-  - name: pistyx
-    # Latest MVP2 branch: hostname: pistyx.duckdns.org
-    ipv4: 10.0.0.1          # set to this node's current LAN IP
+  - name: node-init
+    hostname: styx-lab-init.duckdns.org   # replace with your DuckDNS subdomain
+    ipv4: 10.0.0.1          # mesh address for k3s --node-ip
     ipv6: fd00:cafe::1
     role: init-server
-  - name: pegasus
-    # Latest MVP2 branch: hostname: pipegasus.duckdns.org
+  - name: node-server
+    hostname: styx-lab-server.duckdns.org
     ipv4: 10.0.0.2
     ipv6: fd00:cafe::2
     role: server
-  - name: hydra
-    # Latest MVP2 branch: hostname: pihydra.duckdns.org
+  - name: node-agent
+    hostname: styx-lab-agent.duckdns.org
     ipv4: 10.0.0.3
     ipv6: fd00:cafe::3
     role: agent
 
 dns:
   provider: duckdns
-  # Latest MVP2 branch:
-  # domain: duckdns.org
-  # token_env: DUCKDNS_TOKEN
-  auto_endpoint: pistyx
+  domain: duckdns.org
+  token_env: DUCKDNS_TOKEN
+  auto_endpoint: node-init
   fixed_endpoints:
-    pegasus: pipegasus
-    hydra: pihydra
+    node-server: styx-lab-server
+    node-agent: styx-lab-agent
 
 siem:
   enabled: true
@@ -503,7 +502,7 @@ Only ports `47800–47850` are managed by `styxctl`. Critical production ports `
 Planned WireGuard endpoint for production clients:
 
 ```ini
-Endpoint = pistyx.duckdns.org:47800
+Endpoint = styx-lab-init.duckdns.org:47800
 ```
 
 ---

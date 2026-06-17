@@ -35,18 +35,19 @@ wireguard:
   shared_server_identity: true
 
 nodes:
-  - name: pistyx
-    hostname: pistyx.duckdns.org
+  # Replace names and hostnames with your own DuckDNS subdomains before deploy.
+  - name: node-init
+    hostname: styx-lab-init.duckdns.org
     ipv4: 10.0.0.1
     ipv6: fd00:cafe::1
     role: init-server
-  - name: pegasus
-    hostname: pipegasus.duckdns.org
+  - name: node-server
+    hostname: styx-lab-server.duckdns.org
     ipv4: 10.0.0.2
     ipv6: fd00:cafe::2
     role: server
-  - name: hydra
-    hostname: pihydra.duckdns.org
+  - name: node-agent
+    hostname: styx-lab-agent.duckdns.org
     ipv4: 10.0.0.3
     ipv6: fd00:cafe::3
     role: agent
@@ -55,12 +56,10 @@ dns:
   provider: duckdns
   domain: duckdns.org
   token_env: DUCKDNS_TOKEN
-  auto_endpoint: pistyx
+  auto_endpoint: node-init
   fixed_endpoints:
-    pegasus: pipegasus
-    hydra: pihydra
-    kraken: pikraken
-    thor: pithor
+    node-server: styx-lab-server
+    node-agent: styx-lab-agent
 
 siem:
   enabled: true

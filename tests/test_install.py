@@ -153,7 +153,7 @@ def test_build_install_plan_includes_k3s_and_styx_wireguard(tmp_path, monkeypatc
     assert "--cluster-init" in (k3s_step.command_display or "")
     assert "--https-listen-port" in (k3s_step.command_display or "")
     assert "47811" in (k3s_step.command_display or "")
-    assert plan.local_node == "pistyx"
+    assert plan.local_node == "node-init"
     assert plan.cluster_plan is not None
     assert len(plan.cluster_plan.nodes) == 3
 
@@ -165,7 +165,7 @@ def test_build_cluster_plan_uses_node_ips(tmp_path, monkeypatch):
 
     config = load_config(config_path)
     cluster_plan = build_cluster_plan(config)
-    assert cluster_plan.init_node == "pistyx"
+    assert cluster_plan.init_node == "node-init"
     init_plan = cluster_plan.nodes[0]
     assert init_plan.role == "init-server"
     assert "10.0.0.1" in init_plan.node_ips
@@ -192,7 +192,7 @@ def test_run_install_cluster_mocked_ssh(tmp_path, monkeypatch):
         if "node-token" in command:
             return True, "test-token"
         if "kubectl get nodes" in command:
-            return True, '{"items":[{"metadata":{"name":"pistyx"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
+            return True, '{"items":[{"metadata":{"name":"node-init"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
         return True, "active"
 
     monkeypatch.setattr("styxctl.install._run_ssh_command", fake_ssh)
