@@ -9,6 +9,7 @@ from styxctl.lan_election import (
     apply_lan_election_roles,
     compute_node_strength,
     elect_lan_leader,
+    filter_peers_to_configured_nodes,
     local_lan_subnet,
     parse_interface_ipv4,
     parse_lan_election_settings,
@@ -118,6 +119,46 @@ def test_discover_lan_peers_includes_local_peer_when_subnet_unknown():
     peers = discover_lan_peers(settings, inventory, local_peer=local_peer, subnet=None)
     assert len(peers) == 1
     assert peers[0].node_name == "pistyx"
+
+
+def test_filter_peers_to_configured_nodes():
+    config = load_config(EXAMPLE_CONFIG_PATH)
+    peers = [
+        LanPeer("pistyx", "192.168.1.10", 1000, "pistyx", "styx"),
+        LanPeer("pegasus", "192.168.1.11", 5000, "pegasus", "styx"),
+        LanPeer("rogue", "192.168.1.12", 9000, "rogue", "styx"),
+    ]
+    filtered = filter_peers_to_configured_nodes(peers, config)
+    names = {peer.node_name for peer in filtered}
+    assert names == {"pistyx", "pegasus"}
+    assert elect_lan_leader(filtered).node_name == "pegasus"
+
+
+def test_run_lan_election_ignores_unlisted_lan_peers():
+    config = load_config(EXAMPLE_CONFIG_PATH)
+    config["cluster"]["leader"] = "lan-elected"
+    election = run_lan_election(
+        config,
+        make_inventory(hostname="pistyx", primary_lan_ip="192.168.1.10", bootstrap_ipv4="192.168.1.10"),
+    )
+    assert election.enabled is True
+    assert all(peer.node_name in {"pistyx", "pegasus", "hydra"} for peer in election.peers)
+
+
+def test_build_local_peer_requires_configured_node():
+    config = load_config(EXAMPLE_CONFIG_PATH)
+    from styxctl.lan_election import build_local_peer
+
+    peer = build_local_peer(
+        config,
+        make_inventory(
+            hostname="unknown-host",
+            primary_lan_ip="192.168.1.99",
+            bootstrap_ipv4="192.168.1.99",
+            bootstrap_ipv6=None,
+        ),
+    )
+    assert peer is None
 
 
 def test_resolve_lan_leadership_keeps_config_when_static():

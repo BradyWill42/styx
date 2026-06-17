@@ -15,13 +15,12 @@ import json
 import os
 import re
 import socket
-import struct
 import threading
 import time
 from typing import Any
 
 from .inventory import SystemInventory
-from .nodes import ClusterNode, identify_local_node, init_server_node, parse_nodes
+from .nodes import identify_local_node, init_server_node, parse_nodes
 
 DEFAULT_LAN_ELECTION_PORT = 47802
 DEFAULT_COLLECT_SEC = 3.0
@@ -199,6 +198,17 @@ def broadcast_address(subnet: ipaddress.IPv4Network) -> str:
     return str(subnet.broadcast_address)
 
 
+def configured_node_names(config: dict[str, Any]) -> set[str]:
+    return {node.name for node in parse_nodes(config)}
+
+
+def filter_peers_to_configured_nodes(peers: list[LanPeer], config: dict[str, Any]) -> list[LanPeer]:
+    allowed = configured_node_names(config)
+    if not allowed:
+        return []
+    return [peer for peer in peers if peer.node_name in allowed]
+
+
 def build_local_peer(
     config: dict[str, Any],
     inventory: SystemInventory,
@@ -210,8 +220,12 @@ def build_local_peer(
         return None
 
     nodes = parse_nodes(config)
+    if not nodes:
+        return None
+
     local_node = identify_local_node(nodes, inventory, config)
-    node_name = local_node.name if local_node else inventory.hostname
+    if local_node is None:
+        return None
 
     cluster = config.get("cluster", {})
     name = cluster_name
@@ -220,7 +234,7 @@ def build_local_peer(
         name = raw if isinstance(raw, str) and raw.strip() else "styx"
 
     return LanPeer(
-        node_name=node_name,
+        node_name=local_node.name,
         lan_ip=lan_ip,
         strength=compute_node_strength(inventory),
         hostname=inventory.hostname,
@@ -377,15 +391,17 @@ def run_lan_election(
         return LanElectionResult(
             enabled=True,
             settings=settings,
-            warnings=["could not determine local LAN address for election"],
+            warnings=["local host is not listed in styx.yaml nodes or LAN address is unknown"],
         )
 
     peers = discover_lan_peers(settings, inventory, local_peer=local_peer, subnet=subnet)
+    discovered_count = len(peers)
+    peers = filter_peers_to_configured_nodes(peers, config)
     leader = elect_lan_leader(peers)
 
     nodes = parse_nodes(config)
     init_node = init_server_node(nodes)
-    init_on_lan = init_node is not None and any(peer.node_name == init_node.name for peer in peers)
+    init_on_lan = init_node is not None and init_node.name in {peer.node_name for peer in peers}
     promote = len(peers) >= 2 and init_on_lan and leader is not None
 
     result = LanElectionResult(
@@ -399,6 +415,10 @@ def run_lan_election(
         subnet=str(subnet) if subnet else None,
     )
 
+    if discovered_count > len(peers):
+        result.warnings.append(
+            "ignored LAN peer(s) not listed in styx.yaml nodes"
+        )
     if len(peers) < 2:
         result.warnings.append("only one Styx peer on this LAN; keeping configured roles")
     elif not init_on_lan:

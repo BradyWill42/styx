@@ -303,8 +303,9 @@ Before `install plan local`, `install apply local`, and `install apply cluster`,
 
 1. Broadcasts on the local subnet (UDP port `47802`, Styx director API)
 2. Collects peer announcements from other Styx nodes on the same LAN
-3. Scores each peer by RAM, CPU cores, architecture, disk, and existing k3s
-4. Elects the strongest peer as that LAN's leader
+3. Keeps only peers listed in `styx.yaml` `nodes`
+4. Scores each remaining peer by RAM, CPU cores, architecture, disk, and existing k3s
+5. Elects the strongest configured peer on this LAN as leader
 
 If the configured `init-server` is on the same LAN and two or more peers are present, the elected leader is promoted to `init-server` and the previous init-server is demoted to `server`. If the init-server lives on a different site, election still picks a LAN leader for visibility but k3s roles stay unchanged.
 
