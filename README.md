@@ -105,9 +105,14 @@ Each node uses a DuckDNS `hostname` for cross-site SSH/k3s join and mesh `ipv4` 
 |--------|----------|----------|
 | [`main`](https://github.com/BradyWill42/styx/tree/main) | MVP1 + MVP2 (current release) | Default — full platform prep and install |
 | [`MVP1`](https://github.com/BradyWill42/styx/tree/MVP1) | Assessment and safe remediation only | You only need sysprep on a single node |
-| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP1 + k3s / WireGuard install | Feature development on install path |
+| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP1 + k3s / WireGuard install with DuckDNS, gateway ports, and configured-node LAN leader election | Feature development on install path |
 
 All branches share the same CLI design and safety rules. `main` is the integration branch; feature branches merge into `MVP1` or `MVP2` first, then into `main`.
+
+Current branch notes:
+
+- Documentation audit `2026-06-17 02:47 UTC`: fetched all remote branches (`main`, `MVP1`, and `MVP2`) before README propagation; since the 02:00 README audit after its push (`main` at `335d223`, `MVP1` at `b55002b`, `MVP2` at `75ab2c6`), only `MVP2` had new functional changes, advancing to `aa13882` with LAN leader election restricted to peers declared in `styx.yaml`.
+- The latest `MVP2` branch ignores discovered LAN peers that are not listed in `styx.yaml` `nodes`, and the local host must match a configured node before participating in election.
 
 ---
 
