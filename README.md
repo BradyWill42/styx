@@ -98,10 +98,15 @@ Dashed lines indicate milestones not yet available on this branch.
 | Branch | Contents | Use when |
 |--------|----------|----------|
 | **`MVP1` (you are here)** | Assessment and safe remediation | Preparing a single gateway node |
-| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP1 + k3s / WireGuard install | Installing the k3s foundation |
+| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP1 + k3s / WireGuard install, including configured-node LAN leader election on the latest branch | Installing the k3s foundation |
 | [`main`](https://github.com/BradyWill42/styx/tree/main) | MVP1 + MVP2 integrated release | Default — full platform prep and install |
 
 All branches share the same CLI design and safety rules. Feature work lands on `MVP1` or `MVP2` first, then merges into `main`.
+
+Current branch notes:
+
+- Documentation audit `2026-06-17 02:47 UTC`: fetched all remote branches (`main`, `MVP1`, and `MVP2`) before README propagation; since the 02:00 README audit after its push (`main` at `335d223`, `MVP1` at `b55002b`, `MVP2` at `75ab2c6`), only `MVP2` had new functional changes, advancing to `aa13882` with LAN leader election restricted to peers declared in `styx.yaml`.
+- `MVP1` remains the assessment and safe-remediation snapshot; no MVP1 branch code changed since the last README audit.
 
 ---
 
