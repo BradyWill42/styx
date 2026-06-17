@@ -78,13 +78,35 @@ def test_validate_nodes_requires_single_init_server():
     nodes = parse_nodes(
         {
             "nodes": [
-                {"name": "a", "ipv4": "10.0.0.1", "role": "server"},
-                {"name": "b", "ipv4": "10.0.0.2", "role": "server"},
+                {
+                    "name": "a",
+                    "ipv4": "10.0.0.1",
+                    "public_ipv4": "203.0.113.1",
+                    "hostname": "a.duckdns.org",
+                    "role": "server",
+                },
+                {
+                    "name": "b",
+                    "ipv4": "10.0.0.2",
+                    "public_ipv4": "203.0.113.2",
+                    "hostname": "b.duckdns.org",
+                    "role": "server",
+                },
             ]
         }
     )
     errors = validate_nodes(nodes)
     assert any("init-server" in error for error in errors)
+
+
+def test_node_bootstrap_host_uses_public_ipv4():
+    from styxctl.config import load_config
+    from styxctl.nodes import node_bootstrap_host
+
+    config = load_config(EXAMPLE_CONFIG_PATH)
+    nodes = parse_nodes(config)
+    by_name = {node.name: node for node in nodes}
+    assert node_bootstrap_host(config, by_name["node-init"]) == "203.0.113.10"
 
 
 def test_identify_local_node_by_current_ip():

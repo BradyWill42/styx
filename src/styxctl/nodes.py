@@ -11,6 +11,8 @@ from .inventory import SystemInventory
 
 VALID_ROLES = frozenset({"init-server", "server", "agent"})
 DEFAULT_DUCKDNS_DOMAIN = "duckdns.org"
+CONNECTIVITY_BOOTSTRAP = "bootstrap"
+CONNECTIVITY_DUCKDNS = "duckdns"
 
 
 def duckdns_domain(config: dict[str, Any]) -> str:
@@ -69,6 +71,7 @@ class ClusterNode:
     ipv6: str | None
     role: str
     hostname: str | None = None
+    public_ipv4: str | None = None
     ssh_user: str | None = None
 
     def to_dict(self) -> dict[str, object]:
@@ -78,14 +81,32 @@ class ClusterNode:
     def primary_ip(self) -> str | None:
         return self.ipv4 or self.ipv6
 
-    def connectivity_host(self, config: dict[str, Any]) -> str | None:
-        return node_hostname(config, self) or self.primary_ip
+    def connectivity_host(
+        self,
+        config: dict[str, Any],
+        *,
+        mode: str = CONNECTIVITY_BOOTSTRAP,
+        inventory: SystemInventory | None = None,
+        local_node: ClusterNode | None = None,
+    ) -> str | None:
+        return node_connectivity_host(
+            config,
+            self,
+            mode=mode,
+            inventory=inventory,
+            local_node=local_node,
+        )
 
-    def resolved_ipv4(self, config: dict[str, Any]) -> str | None:
-        host = node_hostname(config, self)
-        if host:
+    def resolved_ipv4(self, config: dict[str, Any], *, mode: str = CONNECTIVITY_BOOTSTRAP) -> str | None:
+        host = node_connectivity_host(config, self, mode=mode)
+        if not host:
+            return None
+        if mode == CONNECTIVITY_DUCKDNS and node_hostname(config, self):
             return resolve_hostname(host)
-        return self.ipv4
+        try:
+            return str(ipaddress.ip_address(host.split("%", 1)[0]))
+        except ValueError:
+            return resolve_hostname(host)
 
     def all_ips(self) -> list[str]:
         ips: list[str] = []
@@ -94,6 +115,38 @@ class ClusterNode:
         if self.ipv6:
             ips.append(self.ipv6)
         return ips
+
+
+def node_bootstrap_host(
+    config: dict[str, Any],
+    node: ClusterNode,
+    *,
+    inventory: SystemInventory | None = None,
+    local_node: ClusterNode | None = None,
+) -> str | None:
+    """Router WAN / port-forward target used before DuckDNS is published."""
+    if node.public_ipv4:
+        return node.public_ipv4
+    if inventory is not None and local_node is not None and node.name == local_node.name:
+        from .dns_update import detect_public_ipv4
+
+        return detect_public_ipv4()
+    return None
+
+
+def node_connectivity_host(
+    config: dict[str, Any],
+    node: ClusterNode,
+    *,
+    mode: str = CONNECTIVITY_BOOTSTRAP,
+    inventory: SystemInventory | None = None,
+    local_node: ClusterNode | None = None,
+) -> str | None:
+    if mode == CONNECTIVITY_DUCKDNS:
+        return node_hostname(config, node) or node_bootstrap_host(
+            config, node, inventory=inventory, local_node=local_node
+        )
+    return node_bootstrap_host(config, node, inventory=inventory, local_node=local_node)
 
 
 def parse_nodes(config: dict[str, Any]) -> list[ClusterNode]:
@@ -120,6 +173,7 @@ def parse_nodes(config: dict[str, Any]) -> list[ClusterNode]:
         ipv4 = item.get("ipv4")
         ipv6 = item.get("ipv6")
         host = item.get("hostname")
+        public_ipv4 = item.get("public_ipv4")
         ssh_user = item.get("ssh_user")
         nodes.append(
             ClusterNode(
@@ -128,6 +182,7 @@ def parse_nodes(config: dict[str, Any]) -> list[ClusterNode]:
                 ipv6=ipv6.strip() if isinstance(ipv6, str) and ipv6.strip() else None,
                 role=role.strip(),
                 hostname=host.strip() if isinstance(host, str) and host.strip() else None,
+                public_ipv4=public_ipv4.strip() if isinstance(public_ipv4, str) and public_ipv4.strip() else None,
                 ssh_user=ssh_user.strip() if isinstance(ssh_user, str) and ssh_user.strip() else default_ssh_user,
             )
         )
@@ -149,15 +204,20 @@ def validate_nodes(nodes: list[ClusterNode], config: dict[str, Any] | None = Non
         if node.role not in VALID_ROLES:
             errors.append(f"nodes.{node.name}.role: expected init-server, server, or agent")
 
-        host = node.connectivity_host(config or {}) if config else (node.hostname or node.primary_ip)
+        host = node_bootstrap_host(config or {}, node) if config else node.public_ipv4
         if not host:
             errors.append(
-                f"nodes.{node.name}: set hostname (DuckDNS) or ipv4/ipv6 mesh address"
+                f"nodes.{node.name}: set public_ipv4 (router WAN IP with port forwards) for bootstrap connectivity"
             )
         elif host in seen_hosts:
-            errors.append(f"nodes.{node.name}: duplicate connectivity host {host}")
+            errors.append(f"nodes.{node.name}: duplicate bootstrap host {host}")
         else:
             seen_hosts.add(host)
+
+        if config and not node_hostname(config, node):
+            errors.append(
+                f"nodes.{node.name}: set hostname (DuckDNS) for post-cluster DNS publish"
+            )
 
         if not node.ipv4 and not node.ipv6:
             errors.append(
@@ -219,6 +279,8 @@ def sort_nodes_for_install(nodes: list[ClusterNode]) -> list[ClusterNode]:
 def all_node_tls_sans(nodes: list[ClusterNode], config: dict[str, Any] | None = None) -> list[str]:
     sans: list[str] = []
     for node in nodes:
+        if node.public_ipv4 and node.public_ipv4 not in sans:
+            sans.append(node.public_ipv4)
         if config:
             host = node_hostname(config, node)
             if host and host not in sans:

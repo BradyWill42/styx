@@ -242,6 +242,7 @@ def format_config_summary(config: dict[str, Any], config_path: Path | None) -> s
         lines.append(f"Nodes: {len(nodes)} configured")
         for node in nodes:
             host = node_hostname(config, node) or "-"
+            pub = node.public_ipv4 or "-"
             ips = ", ".join(filter(None, (node.ipv4, node.ipv6)))
-            lines.append(f"  - {node.name} ({node.role}) {host} mesh {ips}")
+            lines.append(f"  - {node.name} ({node.role}) public {pub} dns {host} mesh {ips}")
     return "\n".join(lines).rstrip() + "\n"
