@@ -109,6 +109,11 @@ Each node uses a DuckDNS `hostname` for cross-site SSH/k3s join and mesh `ipv4` 
 
 All branches share the same CLI design and safety rules. `main` is the integration branch; `MVP1` and `MVP2` are preserved as milestone snapshots.
 
+Current branch notes:
+
+- Documentation audit `2026-06-17 03:01 UTC`: fetched remote heads (`main` at `1b125ca`, `MVP1` at `5d59f43`, and `MVP2` at `30d6801`) before this README-only propagation. Since the 02:47 audit, `main` merged the already-documented `MVP1` and `MVP2` branch histories; `MVP1` and `MVP2` had no new functional commits.
+- `main` now carries the integrated DuckDNS hostname workflow, gateway SSH/k3s ports, and configured-node LAN leader election docs as the current release behavior.
+
 ---
 
 ## Quick start
