@@ -103,15 +103,15 @@ Each node uses `public_ipv4` (router WAN IP with port forwards) for bootstrap SS
 
 | Branch | Contents | Use when |
 |--------|----------|----------|
-| [`main`](https://github.com/BradyWill42/styx/tree/main) | MVP1 + MVP2 integrated release with `public_ipv4` bootstrap, DuckDNS post-cluster publish, gateway ports, and LAN leader election | Default — full platform prep and install |
-| [`MVP1`](https://github.com/BradyWill42/styx/tree/MVP1) | MVP1-only sysprep snapshot; latest branch refreshes plan/apply subcommands and port docs | You only need assessment and safe remediation |
-| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP1 + install path with `public_ipv4` bootstrap, DuckDNS post-cluster publish, gateway ports, and LAN leader election | Preserved milestone snapshot; aligned with `main` |
+| [`main`](https://github.com/BradyWill42/styx/tree/main) | MVP1 + MVP2 integrated release with DuckDNS, gateway ports, and LAN leader election | Default — full platform prep and install |
+| [`MVP1`](https://github.com/BradyWill42/styx/tree/MVP1) | MVP1-only sysprep snapshot | You only need assessment and safe remediation |
+| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP2 install-path branch with `public_ipv4` bootstrap, DuckDNS post-cluster publish, gateway ports, and LAN leader election | Preserved for milestone development |
 
-All branches share the same CLI design and safety rules. `main` is the integration branch; feature work lands on `MVP1` or `MVP2` first, then merges into `main`.
+All branches share the same CLI design and safety rules. `main` is the integration branch; `MVP1` and `MVP2` are preserved as milestone snapshots.
 
 Current branch notes:
 
-- Documentation audit `2026-06-17`: merged MVP2 `public_ipv4` bootstrap workflow into `main`. All maintained branches now document the same connectivity model.
+- Documentation audit `2026-06-17 14:00 UTC`: fetched remote heads (`main` at `c1475fb`, `MVP1` at `aa0638c`, and `MVP2` at `c099b04`) before this README-only propagation. Since the 13:00 audit, `main` has no new commits, `MVP1` refreshed branch notes, and `MVP2` reconciled the `public_ipv4` bootstrap workflow with `main`-sourced README/example cleanup on its branch.
 - Bootstrap connectivity uses each node's `public_ipv4` and router 1:1 port forwards (`47810` SSH, `47811` k3s API).
 - DuckDNS (`hostname`) is published only after local networking, LAN leader election, and cluster join succeed.
 - `cluster.leader: lan-elected` elects the strongest configured peer on the local LAN (UDP `47802`), ignoring peers not listed in `styx.yaml`.
