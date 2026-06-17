@@ -572,14 +572,14 @@ styxctl install <TAB>
 |---------|-------------|
 | `install plan local` | Preview local install steps |
 | `install plan cluster` | Preview cluster join steps |
-| `install plan lan` | Preview LAN leader election (`MVP2` branch) |
+| `install plan lan` | Preview LAN leader election |
 | `install local` | Local install with confirm |
 | `install apply local` | Local install without confirm |
 | `install cluster` | Cluster install with confirm |
 | `install apply cluster` | Cluster install without confirm |
 | `install status local` | k3s + WireGuard status table |
 | `install status cluster` | All nodes reachability table |
-| `install status lan` | Show LAN peers and elected leader (`MVP2` branch) |
+| `install status lan` | Show LAN peers and elected leader |
 | `install doctor local` | Actionable local health diagnosis |
 | `install doctor cluster` | Cluster-wide health diagnosis |
 
