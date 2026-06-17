@@ -105,7 +105,7 @@ Each node uses `public_ipv4` (router WAN IP with port forwards) for bootstrap SS
 |--------|----------|----------|
 | [`main`](https://github.com/BradyWill42/styx/tree/main) | MVP1 + MVP2 integrated release | Default — full platform prep and install |
 | [`MVP1`](https://github.com/BradyWill42/styx/tree/MVP1) | MVP1-only sysprep snapshot; latest branch refreshes plan/apply subcommands and port docs | You only need assessment and safe remediation |
-| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP1 + install path; latest branch adds DuckDNS hostnames, gateway SSH/k3s ports, and configured-node LAN leader election | You need the newest install-path work before it lands on `main` |
+| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP1 + install path with `public_ipv4` bootstrap, DuckDNS post-cluster publish, gateway ports, and LAN leader election | Feature development on install path |
 
 All branches share the same CLI design and safety rules. `main` is the integration branch; feature work lands on `MVP1` or `MVP2` first, then merges into `main`.
 
@@ -114,6 +114,11 @@ Current branch notes:
 - Bootstrap connectivity uses each node's `public_ipv4` and router 1:1 port forwards (`47810` SSH, `47811` k3s API).
 - DuckDNS (`hostname`) is published only after local networking, LAN leader election, and cluster join succeed.
 - `cluster.leader: lan-elected` elects the strongest configured peer on the local LAN (UDP `47802`), ignoring peers not listed in `styx.yaml`.
+
+Current branch notes:
+
+- Documentation audit `2026-06-17 03:01 UTC`: fetched remote heads (`main` at `1b125ca`, `MVP1` at `5d59f43`, and `MVP2` at `30d6801`) before this README-only propagation. Since the 02:47 audit, `main` merged the already-documented `MVP1` and `MVP2` branch histories; `MVP1` and `MVP2` had no new functional commits.
+- The latest `MVP2` branch ignores discovered LAN peers that are not listed in `styx.yaml` `nodes`, and the local host must match a configured node before participating in election.
 
 ---
 
