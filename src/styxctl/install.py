@@ -33,6 +33,7 @@ from .k3s_cluster import (
 from .lan_election import LanElectionResult, apply_lan_election_roles, resolve_lan_leadership, run_lan_election
 from .nodes import (
     CONNECTIVITY_BOOTSTRAP,
+    CONNECTIVITY_DUCKDNS,
     ClusterNode,
     identify_local_node,
     init_server_node,
@@ -1598,11 +1599,30 @@ def run_install_cluster(
         ssh_user=ssh_user,
         runner=ssh_runner,
         local_node=local_node,
+        connectivity_mode=CONNECTIVITY_BOOTSTRAP,
     )
     dns_messages: list[str] = []
     cluster_installed = not any(item.status == "failed" for item in cluster_plan.nodes)
+    cluster_health_duckdns: dict[str, Any] | None = None
     if cluster_installed and cluster_health.get("healthy"):
-        dns_messages = refresh_cluster_duckdns(effective_config, nodes)
+        dns_messages = refresh_cluster_duckdns(
+            effective_config,
+            nodes,
+            inventory=pre_inventory,
+            local_node=local_node,
+            ssh_user=ssh_user,
+            runner=ssh_runner,
+            connectivity_mode=CONNECTIVITY_BOOTSTRAP,
+        )
+        cluster_health_duckdns = assess_cluster_nodes(
+            effective_config,
+            inventory=pre_inventory,
+            ssh_user=ssh_user,
+            runner=ssh_runner,
+            local_node=local_node,
+            connectivity_mode=CONNECTIVITY_DUCKDNS,
+        )
+        cluster_health = cluster_health_duckdns
     report = build_install_report(
         command="styxctl install cluster",
         plan=base_plan,
@@ -1613,7 +1633,11 @@ def run_install_cluster(
     )
     report["cluster"] = cluster_plan.to_dict()
     report["cluster_health"] = cluster_health
+    report["cluster_health_duckdns"] = cluster_health_duckdns
     report["dns_updates"] = dns_messages
+    report["connectivity_mode"] = (
+        CONNECTIVITY_DUCKDNS if cluster_health_duckdns and cluster_health_duckdns.get("healthy") else CONNECTIVITY_BOOTSTRAP
+    )
     report["status"] = "INSTALLED" if cluster_health.get("healthy") else "INSTALLED_WITH_ISSUES"
 
     if any(item.status == "failed" for item in cluster_plan.nodes):
@@ -1623,18 +1647,68 @@ def run_install_cluster(
     return report, 0
 
 
-def run_cluster_doctor(*, config_path: str | Path | None = None) -> dict[str, Any]:
+def run_cluster_doctor(
+    *,
+    config_path: str | Path | None = None,
+    refresh_dns: bool = True,
+) -> dict[str, Any]:
     config = load_config(config_path) if config_path else load_config(find_config())
     inventory = collect_inventory()
     nodes = parse_nodes(config)
     local_node = identify_local_node(nodes, inventory, config)
-    ssh_user = config.get("cluster", {}).get("ssh_user") if isinstance(config.get("cluster"), dict) else None
-    return assess_cluster_nodes(
+    cluster = config.get("cluster", {})
+    ssh_user = cluster.get("ssh_user") if isinstance(cluster, dict) else None
+    ssh_runner = _run_ssh_command
+    dns_messages: list[str] = []
+    if refresh_dns:
+        dns_messages = refresh_cluster_duckdns(
+            config,
+            nodes,
+            inventory=inventory,
+            local_node=local_node,
+            ssh_user=ssh_user,
+            runner=ssh_runner,
+            connectivity_mode=CONNECTIVITY_DUCKDNS,
+        )
+    health = assess_cluster_nodes(
         config,
         inventory=inventory,
         ssh_user=ssh_user,
+        runner=ssh_runner,
         local_node=local_node,
+        connectivity_mode=CONNECTIVITY_DUCKDNS,
     )
+    if dns_messages:
+        health["dns_updates"] = dns_messages
+    return health
+
+
+def run_dns_refresh_local(*, config_path: str | Path | None = None) -> tuple[bool, str]:
+    from .dns_update import refresh_local_node_duckdns
+
+    config = load_config(config_path) if config_path else load_config(find_config())
+    inventory = collect_inventory()
+    return refresh_local_node_duckdns(config, inventory.hostname)
+
+
+def run_dns_refresh_cluster(*, config_path: str | Path | None = None) -> tuple[list[str], int]:
+    config = load_config(config_path) if config_path else load_config(find_config())
+    inventory = collect_inventory()
+    nodes = parse_nodes(config)
+    local_node = identify_local_node(nodes, inventory, config)
+    cluster = config.get("cluster", {})
+    ssh_user = cluster.get("ssh_user") if isinstance(cluster, dict) else None
+    messages = refresh_cluster_duckdns(
+        config,
+        nodes,
+        inventory=inventory,
+        local_node=local_node,
+        ssh_user=ssh_user,
+        runner=_run_ssh_command,
+        connectivity_mode=CONNECTIVITY_DUCKDNS,
+    )
+    published = sum("published" in message for message in messages)
+    return messages, 0 if published else 1
 
 
 def run_lan_election_preview(*, config_path: str | Path | None = None) -> tuple[dict[str, Any], int]:

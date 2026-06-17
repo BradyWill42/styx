@@ -149,6 +149,20 @@ def node_connectivity_host(
     return node_bootstrap_host(config, node, inventory=inventory, local_node=local_node)
 
 
+def cluster_has_duckdns_hostnames(config: dict[str, Any], nodes: list[ClusterNode]) -> bool:
+    return bool(nodes) and all(node_hostname(config, node) for node in nodes)
+
+
+def duckdns_hostnames_resolve(config: dict[str, Any], nodes: list[ClusterNode]) -> bool:
+    if not cluster_has_duckdns_hostnames(config, nodes):
+        return False
+    for node in nodes:
+        host = node_hostname(config, node)
+        if not host or not resolve_hostname(host):
+            return False
+    return True
+
+
 def parse_nodes(config: dict[str, Any]) -> list[ClusterNode]:
     raw_nodes = config.get("nodes")
     if raw_nodes is None:

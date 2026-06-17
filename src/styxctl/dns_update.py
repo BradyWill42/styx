@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any
+from typing import Any, Callable
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -12,6 +12,10 @@ from .inventory import safe_run
 from .nodes import ClusterNode, node_hostname, node_subdomain, parse_nodes
 
 _DUCKDNS_RESPONSE = re.compile(r"^(OK|KO|BADTOKEN|UPDATED|NOCHANGE|DONATE|TOO FREQUENT)", re.I)
+_PUBLIC_IP_DETECT_CMD = "curl -4 -fsS https://api.ipify.org || curl -4 -fsS https://icanhazip.com"
+
+RunResult = tuple[bool, str]
+SshRunner = Callable[..., RunResult]
 
 
 def duckdns_token(config: dict[str, Any]) -> str | None:
@@ -48,6 +52,21 @@ def detect_public_ipv4() -> str | None:
     return None
 
 
+def detect_public_ipv4_remote(
+    target: str,
+    *,
+    port: int = 47810,
+    runner: SshRunner,
+) -> str | None:
+    ok, detail = runner(target, _PUBLIC_IP_DETECT_CMD, port=port)
+    if not ok:
+        return None
+    candidate = detail.strip().split()[0] if detail.strip() else ""
+    if candidate and "." in candidate:
+        return candidate
+    return None
+
+
 def update_duckdns(
     *,
     subdomain: str,
@@ -68,7 +87,12 @@ def update_duckdns(
     return False, body or "unknown DuckDNS response"
 
 
-def refresh_node_duckdns(config: dict[str, Any], node: ClusterNode) -> tuple[bool, str]:
+def refresh_node_duckdns(
+    config: dict[str, Any],
+    node: ClusterNode,
+    *,
+    ipv4: str | None = None,
+) -> tuple[bool, str]:
     dns = config.get("dns")
     if not isinstance(dns, dict) or dns.get("provider") != "duckdns":
         return False, "dns.provider is not duckdns"
@@ -81,7 +105,7 @@ def refresh_node_duckdns(config: dict[str, Any], node: ClusterNode) -> tuple[boo
     if not token:
         return False, "DuckDNS token not configured (set dns.token_env or dns.token)"
 
-    public_ip = detect_public_ipv4()
+    public_ip = ipv4 or detect_public_ipv4()
     if not public_ip:
         return False, "could not detect current public IPv4 for DuckDNS update"
 

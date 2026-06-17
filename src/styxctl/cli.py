@@ -19,6 +19,8 @@ from .config import (
 from .inventory import collect_inventory
 from .install import (
     run_cluster_doctor,
+    run_dns_refresh_cluster,
+    run_dns_refresh_local,
     run_install_cluster,
     run_install_doctor,
     run_install_local,
@@ -70,6 +72,8 @@ install_status_app = typer.Typer(help="Show local install status.", no_args_is_h
 install_doctor_app = typer.Typer(help="Diagnose local install health.", no_args_is_help=True)
 install_plan_app = typer.Typer(help="Preview install plans without changing the host.", no_args_is_help=True)
 install_apply_app = typer.Typer(help="Apply install plans without confirmation.", no_args_is_help=True)
+dns_app = typer.Typer(help="DuckDNS updates for stable node reachability.", no_args_is_help=True)
+dns_refresh_app = typer.Typer(help="Refresh DuckDNS records with each node's current public IP.", no_args_is_help=True)
 completion_app = typer.Typer(help="Shell completion helpers.", no_args_is_help=True)
 
 
@@ -549,11 +553,12 @@ def install_apply_cluster() -> None:
 
 @install_status_app.command("cluster")
 def install_status_cluster() -> None:
-    """Show k3s cluster node status for all configured IPs."""
+    """Show k3s cluster node status over DuckDNS hostnames."""
     health = run_cluster_doctor(config_path=None)
     table = Table(title="Styx k3s Cluster Status")
     table.add_column("Node")
     table.add_column("Role")
+    table.add_column("Host")
     table.add_column("IPv4")
     table.add_column("IPv6")
     table.add_column("Reachable")
@@ -563,6 +568,7 @@ def install_status_cluster() -> None:
         table.add_row(
             node.get("name", "unknown"),
             node.get("role", "unknown"),
+            node.get("connectivity_host") or node.get("hostname") or "-",
             node.get("ipv4") or "-",
             node.get("ipv6") or "-",
             "yes" if node.get("reachable") else "no",
@@ -570,9 +576,16 @@ def install_status_cluster() -> None:
         )
 
     console.print(table)
+    connectivity_mode = health.get("connectivity_mode", "duckdns")
+    console.print(f"Connectivity mode: {connectivity_mode}")
     kubectl_nodes = health.get("kubectl_nodes") or []
     if kubectl_nodes:
         console.print(f"kubectl nodes: {', '.join(kubectl_nodes)}")
+    dns_updates = health.get("dns_updates") or []
+    if dns_updates:
+        console.print("[cyan]DuckDNS updates:[/cyan]")
+        for message in dns_updates:
+            console.print(f"  - {message}")
     if health.get("issues"):
         console.print("[red]Issues:[/red]")
         for issue in health["issues"]:
@@ -621,16 +634,47 @@ def install_status_lan() -> None:
 
 @install_doctor_app.command("cluster")
 def install_doctor_cluster() -> None:
-    """Diagnose k3s cluster health across all configured node IPs."""
+    """Diagnose cluster health over DuckDNS hostnames and refresh stale records."""
     health = run_cluster_doctor(config_path=None)
     if health.get("healthy"):
-        console.print("[green]Cluster doctor: all configured k3s nodes are healthy[/green]")
+        console.print("[green]Cluster doctor: all configured k3s nodes are healthy via DuckDNS[/green]")
         return
     console.print("[red]Cluster doctor: blocking cluster issues found[/red]")
     for issue in health.get("issues", []):
         console.print(f"  - {issue}")
-    console.print("  action: run `styxctl install apply local` on each node, then `styxctl install apply cluster`")
+    dns_updates = health.get("dns_updates") or []
+    if dns_updates:
+        console.print("[cyan]DuckDNS refresh attempts:[/cyan]")
+        for message in dns_updates:
+            console.print(f"  - {message}")
+    console.print("  action: run `styxctl dns refresh local` on each node after ISP IP changes")
     raise typer.Exit(code=1)
+
+
+@dns_refresh_app.command("local")
+def dns_refresh_local() -> None:
+    """Publish this node's current public IPv4 to its configured DuckDNS hostname."""
+    try:
+        ok, detail = run_dns_refresh_local(config_path=None)
+    except Exception as exc:
+        console.print(f"[red]DuckDNS refresh failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    if ok:
+        console.print(f"[green]DuckDNS updated:[/green] {detail}")
+        return
+    console.print(f"[red]DuckDNS refresh skipped:[/red] {detail}")
+    raise typer.Exit(code=1)
+
+
+@dns_refresh_app.command("cluster")
+def dns_refresh_cluster() -> None:
+    """Refresh DuckDNS for every configured node (SSH-detected public IPs)."""
+    messages, exit_code = run_dns_refresh_cluster(config_path=None)
+    for message in messages:
+        console.print(f"  - {message}")
+    if exit_code != 0:
+        raise typer.Exit(code=exit_code)
+    console.print("[green]DuckDNS cluster refresh complete[/green]")
 
 
 def _future_app(label: str, milestone: str) -> typer.Typer:
@@ -660,9 +704,12 @@ install_app.add_typer(install_doctor_app, name="doctor")
 install_app.add_typer(install_plan_app, name="plan")
 install_app.add_typer(install_apply_app, name="apply")
 
+dns_app.add_typer(dns_refresh_app, name="refresh")
+
 app.add_typer(sysprep_app, name="sysprep")
 app.add_typer(ports_app, name="ports")
 app.add_typer(install_app, name="install")
+app.add_typer(dns_app, name="dns")
 app.add_typer(_future_app("deploy", "MVP3"), name="deploy")
 app.add_typer(_future_app("status", "MVP3"), name="status")
 app.add_typer(_future_app("doctor", "MVP3"), name="doctor")

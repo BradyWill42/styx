@@ -202,7 +202,7 @@ def test_run_install_cluster_mocked_ssh(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "styxctl.k3s_cluster.refresh_node_duckdns",
-        lambda config, node: (False, "mocked"),
+        lambda config, node, **kwargs: (True, "mocked"),
     )
     monkeypatch.setattr(
         "styxctl.k3s_cluster._run_ssh_command",
