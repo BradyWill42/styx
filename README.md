@@ -105,16 +105,16 @@ Each node's `ipv4` / `ipv6` in config becomes its k3s `--node-ip`. Cluster orche
 |--------|----------|----------|
 | [`main`](https://github.com/BradyWill42/styx/tree/main) | MVP1 + MVP2 integrated release | Default — full platform prep and install |
 | [`MVP1`](https://github.com/BradyWill42/styx/tree/MVP1) | MVP1-only sysprep snapshot; latest branch refreshes plan/apply subcommands and port docs | You only need assessment and safe remediation |
-| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP1 + install path; latest branch adds DuckDNS hostnames, gateway SSH/k3s ports, and LAN leader election | You need the newest install-path work before it lands on `main` |
+| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP1 + install path; latest branch adds DuckDNS hostnames, gateway SSH/k3s ports, and configured-node LAN leader election | You need the newest install-path work before it lands on `main` |
 
 All branches share the same CLI design and safety rules. `main` is the integration branch; feature work lands on `MVP1` or `MVP2` first, then merges into `main`.
 
 Current branch notes:
 
-- Documentation audit `2026-06-17 02:00 UTC`: fetched all remote branches (`main`, `MVP1`, and `MVP2`); no branch tips changed since the 01:00 README audit after its push (`main` at `b6dd306`, `MVP1` at `b55002b`, `MVP2` at `75ab2c6`) before this README-only edit, so the branch-only notes below remain current.
+- Documentation audit `2026-06-17 02:47 UTC`: fetched all remote branches (`main`, `MVP1`, and `MVP2`); since the 02:00 README audit after its push (`main` at `335d223`, `MVP1` at `b55002b`, `MVP2` at `75ab2c6`), only `MVP2` changed, advancing to `aa13882` with LAN leader election restricted to peers declared in `styx.yaml`.
 - `main` currently uses configured node IPs for SSH orchestration and k3s joins.
 - The latest `MVP2` branch resolves `nodes[].hostname` values, updates DuckDNS before install operations, and uses gateway ports `47810/tcp` for SSH plus `47811/tcp` for the k3s API.
-- The latest `MVP2` branch can elect a strongest co-located LAN peer with UDP `47802` before install planning or apply.
+- The latest `MVP2` branch can elect the strongest configured co-located LAN peer with UDP `47802` before install planning or apply, ignoring peers not listed in `styx.yaml`.
 
 ---
 
@@ -289,9 +289,9 @@ The `MVP2` branch has newer install-path work that is not yet merged into `main`
 - `nodes[].hostname` stores each node's DuckDNS name for cross-site SSH and k3s joins.
 - `dns.token_env` defaults the DuckDNS token source to an environment variable such as `DUCKDNS_TOKEN`; install operations publish the node's current public IPv4 before connecting.
 - `gateway.ssh_port` and `gateway.k3s_api_port` default to `47810` and `47811`; local install configures sshd and k3s to listen on those node ports.
-- `cluster.leader: lan-elected` enables LAN leader election over UDP `47802`; use `styxctl install plan lan` and `styxctl install status lan` on that branch to preview or inspect election.
+- `cluster.leader: lan-elected` enables configured-node LAN leader election over UDP `47802`; use `styxctl install plan lan` and `styxctl install status lan` on that branch to preview or inspect election.
 
-If multiple Styx gateways share a LAN and the configured `init-server` is on that same LAN, the elected strongest peer is promoted to `init-server` and the previous init-server becomes a `server`. If the init-server is remote, election is reported for visibility without changing k3s roles.
+If multiple configured Styx gateways share a LAN and the configured `init-server` is on that same LAN, the elected strongest peer is promoted to `init-server` and the previous init-server becomes a `server`. If the init-server is remote, election is reported for visibility without changing k3s roles.
 
 ### What MVP2 installs
 
@@ -444,7 +444,7 @@ Only ports `47800–47850` are managed by `styxctl`. Critical production ports `
 |------|----------|---------|
 | 47800 | UDP | Styx production WireGuard gateway |
 | 47801 | TCP | Styx gateway health API |
-| 47802 | UDP | Styx director API / LAN leader election (`MVP2` branch) |
+| 47802 | UDP | Styx director API / configured-node LAN leader election (`MVP2` branch) |
 | 47803 | TCP | Styx status dashboard/API |
 | 47804 | TCP | Styx node agent API |
 | 47805 | TCP | Styx Ansible controller API |
