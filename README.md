@@ -111,14 +111,10 @@ All branches share the same CLI design and safety rules. `main` is the integrati
 
 Current branch notes:
 
+- Documentation audit `2026-06-17 04:02 UTC`: fetched remote heads (`main` at `41993f7`, `MVP1` at `6ee9dd3`, and `MVP2` at `c314d1b`) before this README-only propagation. Since the 03:01 audit, this branch merged `public_ipv4` bootstrap connectivity, post-cluster DuckDNS publishing, sanitized generic DuckDNS examples, and README branch-table cleanup; `MVP1` had no new commits.
 - Bootstrap connectivity uses each node's `public_ipv4` and router 1:1 port forwards (`47810` SSH, `47811` k3s API).
 - DuckDNS (`hostname`) is published only after local networking, LAN leader election, and cluster join succeed.
 - `cluster.leader: lan-elected` elects the strongest configured peer on the local LAN (UDP `47802`), ignoring peers not listed in `styx.yaml`.
-
-Current branch notes:
-
-- Documentation audit `2026-06-17 03:01 UTC`: fetched remote heads (`main` at `1b125ca`, `MVP1` at `5d59f43`, and `MVP2` at `30d6801`) before this README-only propagation. Since the 02:47 audit, `main` merged the already-documented `MVP1` and `MVP2` branch histories; `MVP1` and `MVP2` had no new functional commits.
-- The latest `MVP2` branch ignores discovered LAN peers that are not listed in `styx.yaml` `nodes`, and the local host must match a configured node before participating in election.
 
 ---
 
@@ -435,20 +431,20 @@ wireguard:
   shared_server_identity: true
 
 nodes:
-  - name: pistyx
-    hostname: pistyx.duckdns.org
+  - name: node-init
+    hostname: styx-lab-init.duckdns.org
     public_ipv4: 203.0.113.10   # router WAN IP with 1:1 port forwards
     ipv4: 10.0.0.1                # mesh address for k3s --node-ip
     ipv6: fd00:cafe::1
     role: init-server
-  - name: pegasus
-    hostname: pipegasus.duckdns.org
+  - name: node-server
+    hostname: styx-lab-server.duckdns.org
     public_ipv4: 203.0.113.11
     ipv4: 10.0.0.2
     ipv6: fd00:cafe::2
     role: server
-  - name: hydra
-    hostname: pihydra.duckdns.org
+  - name: node-agent
+    hostname: styx-lab-agent.duckdns.org
     public_ipv4: 203.0.113.12
     ipv4: 10.0.0.3
     ipv6: fd00:cafe::3
@@ -458,10 +454,10 @@ dns:
   provider: duckdns
   domain: duckdns.org
   token_env: DUCKDNS_TOKEN
-  auto_endpoint: pistyx
+  auto_endpoint: node-init
   fixed_endpoints:
-    pegasus: pipegasus
-    hydra: pihydra
+    node-server: styx-lab-server
+    node-agent: styx-lab-agent
 
 siem:
   enabled: true
@@ -508,7 +504,7 @@ Only ports `47800–47850` are managed by `styxctl`. Critical production ports `
 Planned WireGuard endpoint for production clients:
 
 ```ini
-Endpoint = pistyx.duckdns.org:47800
+Endpoint = styx-lab-init.duckdns.org:47800
 ```
 
 ---
