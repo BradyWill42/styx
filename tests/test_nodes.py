@@ -12,8 +12,8 @@ from tests.support import EXAMPLE_CONFIG_PATH
 def _inventory(**overrides) -> SystemInventory:
     base = SystemInventory(
         generated_at="2026-01-01T00:00:00+00:00",
-        hostname="pistyx",
-        fqdn="pistyx.local",
+        hostname="node-init",
+        fqdn="node-init.local",
         os_version="Test OS",
         architecture="x86_64",
         kernel_version="6.1.0",
@@ -70,7 +70,7 @@ def test_parse_nodes_from_example_config():
     config = load_config(EXAMPLE_CONFIG_PATH)
     nodes = parse_nodes(config)
     assert len(nodes) == 3
-    assert nodes[0].name == "pistyx"
+    assert nodes[0].name == "node-init"
     assert nodes[0].role == "init-server"
 
 
@@ -94,5 +94,5 @@ def test_identify_local_node_by_current_ip():
     nodes = parse_nodes(config)
     matched = identify_local_node(nodes, _inventory())
     assert matched is not None
-    assert matched.name == "pistyx"
+    assert matched.name == "node-init"
     assert matched.role == "init-server"

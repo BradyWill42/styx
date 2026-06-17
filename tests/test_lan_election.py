@@ -95,13 +95,13 @@ def test_apply_lan_election_roles_promotes_leader():
     election = run_lan_election(config, make_inventory())
     election.enabled = True
     election.promote_to_init_server = True
-    election.leader = LanPeer("hydra", "10.0.0.3", 9000, "hydra", "styx")
+    election.leader = LanPeer("node-agent", "10.0.0.3", 9000, "node-agent", "styx")
 
     effective = apply_lan_election_roles(config, election)
     nodes = parse_nodes(effective)
     roles = {node.name: node.role for node in nodes}
-    assert roles["hydra"] == "init-server"
-    assert roles["pistyx"] == "server"
+    assert roles["node-agent"] == "init-server"
+    assert roles["node-init"] == "server"
 
 
 def test_run_lan_election_disabled_by_default():
@@ -112,26 +112,26 @@ def test_run_lan_election_disabled_by_default():
 
 def test_discover_lan_peers_includes_local_peer_when_subnet_unknown():
     settings = LanElectionSettings(enabled=True, port=47902, collect_sec=0.2)
-    local_peer = LanPeer("pistyx", "10.0.0.1", 1000, "pistyx", "styx")
+    local_peer = LanPeer("node-init", "10.0.0.1", 1000, "node-init", "styx")
     inventory = make_inventory(network_interfaces=[])
     from styxctl.lan_election import discover_lan_peers
 
     peers = discover_lan_peers(settings, inventory, local_peer=local_peer, subnet=None)
     assert len(peers) == 1
-    assert peers[0].node_name == "pistyx"
+    assert peers[0].node_name == "node-init"
 
 
 def test_filter_peers_to_configured_nodes():
     config = load_config(EXAMPLE_CONFIG_PATH)
     peers = [
-        LanPeer("pistyx", "192.168.1.10", 1000, "pistyx", "styx"),
-        LanPeer("pegasus", "192.168.1.11", 5000, "pegasus", "styx"),
+        LanPeer("node-init", "192.168.1.10", 1000, "node-init", "styx"),
+        LanPeer("node-server", "192.168.1.11", 5000, "node-server", "styx"),
         LanPeer("rogue", "192.168.1.12", 9000, "rogue", "styx"),
     ]
     filtered = filter_peers_to_configured_nodes(peers, config)
     names = {peer.node_name for peer in filtered}
-    assert names == {"pistyx", "pegasus"}
-    assert elect_lan_leader(filtered).node_name == "pegasus"
+    assert names == {"node-init", "node-server"}
+    assert elect_lan_leader(filtered).node_name == "node-server"
 
 
 def test_run_lan_election_ignores_unlisted_lan_peers():
@@ -139,10 +139,10 @@ def test_run_lan_election_ignores_unlisted_lan_peers():
     config["cluster"]["leader"] = "lan-elected"
     election = run_lan_election(
         config,
-        make_inventory(hostname="pistyx", primary_lan_ip="192.168.1.10", bootstrap_ipv4="192.168.1.10"),
+        make_inventory(hostname="node-init", primary_lan_ip="192.168.1.10", bootstrap_ipv4="192.168.1.10"),
     )
     assert election.enabled is True
-    assert all(peer.node_name in {"pistyx", "pegasus", "hydra"} for peer in election.peers)
+    assert all(peer.node_name in {"node-init", "node-server", "node-agent"} for peer in election.peers)
 
 
 def test_build_local_peer_requires_configured_node():
