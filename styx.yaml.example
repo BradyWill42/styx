@@ -38,16 +38,19 @@ nodes:
   # Replace names and hostnames with your own DuckDNS subdomains before deploy.
   - name: node-init
     hostname: styx-lab-init.duckdns.org
+    public_ipv4: 203.0.113.10
     ipv4: 10.0.0.1
     ipv6: fd00:cafe::1
     role: init-server
   - name: node-server
     hostname: styx-lab-server.duckdns.org
+    public_ipv4: 203.0.113.11
     ipv4: 10.0.0.2
     ipv6: fd00:cafe::2
     role: server
   - name: node-agent
     hostname: styx-lab-agent.duckdns.org
+    public_ipv4: 203.0.113.12
     ipv4: 10.0.0.3
     ipv6: fd00:cafe::3
     role: agent
