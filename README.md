@@ -111,7 +111,7 @@ All branches share the same CLI design, safety rules, and **this README**. `main
 
 Current branch notes:
 
-- Documentation audit `2026-06-17 20:00 UTC`: fetched remote heads and found `main`, `MVP1`, and `MVP2` all at `82878af` after the `19:29 UTC` branch-unifying merge. Since the 19:00 audit, the maintained branches now share the same integrated MVP1 + MVP2 code and canonical README; this README-only update records that state.
+- Documentation audit `2026-06-17 21:00 UTC`: fetched remote heads and found `main`, `MVP1`, and `MVP2` all still at `a656837` from the 20:00 README audit. No maintained branch has changed since the last run; this README-only update records the clean hourly audit state.
 - Bootstrap connectivity uses each node's `public_ipv4` and router 1:1 port forwards (`47810` SSH, `47811` k3s API).
 - DuckDNS (`hostname`) is published only after local networking, LAN leader election, and cluster join succeed.
 - `cluster.leader: lan-elected` elects the strongest configured peer on the local LAN (UDP `47802`), ignoring peers not listed in `styx.yaml`.
