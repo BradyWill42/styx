@@ -26,13 +26,14 @@ def test_node_hostname_from_dns_mapping():
     assert node_subdomain("pipegasus.duckdns.org", config) == "pipegasus"
 
 
-def test_build_cluster_plan_uses_gateway_join_url():
+def test_build_cluster_plan_uses_public_ipv4_bootstrap():
     config = load_config(EXAMPLE_CONFIG_PATH)
     plan = build_cluster_plan(config)
-    assert plan.join_url == "https://pistyx.duckdns.org:47811"
+    assert plan.join_url == "https://203.0.113.10:47811"
     init_plan = plan.nodes[0]
-    assert init_plan.target_host == "pistyx.duckdns.org"
+    assert init_plan.target_host == "203.0.113.10"
     assert init_plan.ssh_port == 47810
+    assert "203.0.113.10" in init_plan.tls_sans
     assert "pistyx.duckdns.org" in init_plan.tls_sans
 
 

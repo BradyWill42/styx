@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from styxctl.cli import app
 
-from tests.support import empty_artifacts, example_config_text
+from tests.support import example_config_text
 
 runner = CliRunner()
 
@@ -106,7 +106,16 @@ def test_sysprep_check_local_blocked_exits_nonzero(tmp_path, monkeypatch):
         ),
         detected_binaries={},
         detected_services={},
-        detected_artifacts=empty_artifacts(),
+        detected_artifacts={key: [] for key in (
+            "old_k3s_files",
+            "old_kubelet_state",
+            "old_cni_configs",
+            "old_flannel_state",
+            "old_cni_interfaces",
+            "old_flannel_interfaces",
+            "old_styx_interface_exact",
+            "old_temporary_styx_files",
+        )},
         cni_interfaces=[],
         firewall_backend={"preferred": "unknown"},
     )

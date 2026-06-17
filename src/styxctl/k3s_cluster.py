@@ -9,8 +9,18 @@ import subprocess
 from typing import Any, Callable
 
 from .dns_update import refresh_node_duckdns
+from .inventory import SystemInventory
 from .gateway import k3s_join_url, k3s_gateway_listen_args, parse_gateway_ports
-from .nodes import ClusterNode, all_node_tls_sans, init_server_node, node_hostname, parse_nodes, resolve_hostname, sort_nodes_for_install
+from .nodes import (
+    ClusterNode,
+    CONNECTIVITY_BOOTSTRAP,
+    all_node_tls_sans,
+    init_server_node,
+    node_connectivity_host,
+    node_hostname,
+    parse_nodes,
+    sort_nodes_for_install,
+)
 
 K3S_TOKEN_PATH = "/var/lib/rancher/k3s/server/node-token"
 
@@ -132,6 +142,7 @@ def build_cluster_plan(
     config: dict[str, Any],
     *,
     local_node: ClusterNode | None = None,
+    inventory: SystemInventory | None = None,
     join_url: str | None = None,
     join_token: str | None = None,
 ) -> ClusterPlan:
@@ -141,18 +152,30 @@ def build_cluster_plan(
     if init_node is None:
         return ClusterPlan(init_node="unknown", warnings=["no init-server node defined"])
 
-    init_host = node_hostname(config, init_node) or init_node.primary_ip
+    init_host = node_connectivity_host(
+        config,
+        init_node,
+        mode=CONNECTIVITY_BOOTSTRAP,
+        inventory=inventory,
+        local_node=local_node,
+    )
     if join_url is None and init_host:
         join_url = k3s_join_url(init_host, gateway)
 
     plans: list[ClusterNodePlan] = []
     warnings: list[str] = []
     for node in sort_nodes_for_install(nodes):
-        host = node.connectivity_host(config)
+        host = node_connectivity_host(
+            config,
+            node,
+            mode=CONNECTIVITY_BOOTSTRAP,
+            inventory=inventory,
+            local_node=local_node,
+        )
         if not host:
-            warnings.append(f"node {node.name} has no hostname or mesh IP for connectivity")
+            warnings.append(f"node {node.name} has no public_ipv4 for bootstrap connectivity")
             continue
-        resolved = resolve_hostname(host) if node_hostname(config, node) else node.ipv4
+        resolved = node.resolved_ipv4(config, mode=CONNECTIVITY_BOOTSTRAP)
         env, args, display = k3s_install_spec(
             config,
             node,
@@ -179,9 +202,25 @@ def build_cluster_plan(
     return ClusterPlan(init_node=init_node.name, nodes=plans, warnings=warnings, join_url=join_url)
 
 
-def _ssh_target(node: ClusterNode, fallback_user: str | None, config: dict[str, Any]) -> str:
+def _ssh_target(
+    node: ClusterNode,
+    fallback_user: str | None,
+    config: dict[str, Any],
+    *,
+    inventory: SystemInventory | None = None,
+    local_node: ClusterNode | None = None,
+) -> str:
     user = node.ssh_user or fallback_user
-    host = node.connectivity_host(config) or node.primary_ip or node.name
+    host = (
+        node_connectivity_host(
+            config,
+            node,
+            mode=CONNECTIVITY_BOOTSTRAP,
+            inventory=inventory,
+            local_node=local_node,
+        )
+        or node.name
+    )
     return f"{user}@{host}" if user else host
 
 
@@ -229,9 +268,11 @@ def fetch_join_token_from_init(
     config: dict[str, Any],
     ssh_user: str | None = None,
     runner: Callable[..., RunResult] | None = None,
+    inventory: SystemInventory | None = None,
+    local_node: ClusterNode | None = None,
 ) -> RunResult:
     gateway = parse_gateway_ports(config)
-    target = _ssh_target(init_node, ssh_user, config)
+    target = _ssh_target(init_node, ssh_user, config, inventory=inventory, local_node=local_node)
     run = runner or _run_ssh_command
     return run(target, f"sudo cat {K3S_TOKEN_PATH}", port=gateway.ssh)
 
@@ -248,13 +289,15 @@ def apply_cluster_node_plan(
     config: dict[str, Any],
     ssh_user: str | None,
     runner: Callable[..., RunResult] | None = None,
+    inventory: SystemInventory | None = None,
+    local_node: ClusterNode | None = None,
 ) -> ClusterNodePlan:
     if plan.local_execution:
         plan.status = "skipped"
         plan.detail = "local node handled by install local"
         return plan
 
-    target = _ssh_target(plan.node, ssh_user, config)
+    target = _ssh_target(plan.node, ssh_user, config, inventory=inventory, local_node=local_node)
     remote_command = _remote_k3s_install_command(plan.k3s_env, plan.k3s_args)
     run = runner or _run_ssh_command
     ok, detail = run(target, remote_command, port=plan.ssh_port)
@@ -264,14 +307,15 @@ def apply_cluster_node_plan(
 
 
 def refresh_cluster_duckdns(config: dict[str, Any], nodes: list[ClusterNode]) -> list[str]:
+    """Publish each node's current public IPv4 to DuckDNS after cluster connectivity is up."""
     messages: list[str] = []
     for node in nodes:
         ok, detail = refresh_node_duckdns(config, node)
-        host = node_hostname(config, node) or node.name
+        host = node_hostname(config, node) or node.public_ipv4 or node.name
         if ok:
-            messages.append(f"{host}: DuckDNS updated ({detail})")
+            messages.append(f"{host}: DuckDNS published ({detail})")
         else:
-            messages.append(f"{host}: DuckDNS update skipped ({detail})")
+            messages.append(f"{host}: DuckDNS publish skipped ({detail})")
     return messages
 
 
@@ -281,6 +325,7 @@ def assess_cluster_nodes(
     inventory: SystemInventory | None = None,
     ssh_user: str | None = None,
     runner: Callable[..., RunResult] | None = None,
+    local_node: ClusterNode | None = None,
 ) -> dict[str, Any]:
     nodes = parse_nodes(config)
     gateway = parse_gateway_ports(config)
@@ -291,7 +336,7 @@ def assess_cluster_nodes(
 
     kubectl_nodes: list[str] = []
     if init_node:
-        target = _ssh_target(init_node, ssh_user, config)
+        target = _ssh_target(init_node, ssh_user, config, inventory=inventory, local_node=local_node)
         ok, detail = run(target, "sudo kubectl get nodes -o json", port=gateway.ssh)
         if ok:
             try:
@@ -311,14 +356,21 @@ def assess_cluster_nodes(
             issues.append(f"could not query kubectl on init server: {detail}")
 
     for node in nodes:
-        host = node.connectivity_host(config) or node.name
-        target = _ssh_target(node, ssh_user, config)
+        host = node_connectivity_host(
+            config,
+            node,
+            mode=CONNECTIVITY_BOOTSTRAP,
+            inventory=inventory,
+            local_node=local_node,
+        ) or node.name
+        target = _ssh_target(node, ssh_user, config, inventory=inventory, local_node=local_node)
         ok, detail = run(target, "sudo systemctl is-active k3s || sudo systemctl is-active k3s-agent", port=gateway.ssh)
-        resolved = resolve_hostname(host) if node_hostname(config, node) else node.ipv4
+        resolved = node.resolved_ipv4(config, mode=CONNECTIVITY_BOOTSTRAP)
         entry = {
             "name": node.name,
             "role": node.role,
             "hostname": node_hostname(config, node),
+            "public_ipv4": node.public_ipv4,
             "ipv4": node.ipv4,
             "ipv6": node.ipv6,
             "resolved_ipv4": resolved,
@@ -340,8 +392,25 @@ def assess_cluster_nodes(
         "healthy": healthy,
         "init_node": init_node.name if init_node else None,
         "join_url": (
-            k3s_join_url(node_hostname(config, init_node) or init_node.primary_ip, gateway)
-            if init_node and (node_hostname(config, init_node) or init_node.primary_ip)
+            k3s_join_url(
+                node_connectivity_host(
+                    config,
+                    init_node,
+                    mode=CONNECTIVITY_BOOTSTRAP,
+                    inventory=inventory,
+                    local_node=local_node,
+                )
+                or "",
+                gateway,
+            )
+            if init_node
+            and node_connectivity_host(
+                config,
+                init_node,
+                mode=CONNECTIVITY_BOOTSTRAP,
+                inventory=inventory,
+                local_node=local_node,
+            )
             else None
         ),
         "kubectl_nodes": kubectl_nodes,
