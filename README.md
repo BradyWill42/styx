@@ -105,14 +105,14 @@ Each node uses a DuckDNS `hostname` for cross-site SSH/k3s join and mesh `ipv4` 
 |--------|----------|----------|
 | [`main`](https://github.com/BradyWill42/styx/tree/main) | MVP1 + MVP2 integrated release with DuckDNS, gateway ports, and LAN leader election | Default — full platform prep and install |
 | [`MVP1`](https://github.com/BradyWill42/styx/tree/MVP1) | MVP1-only sysprep snapshot | You only need assessment and safe remediation |
-| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP2 milestone snapshot with install-path features | Preserved for milestone development |
+| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP2 install-path branch with `public_ipv4` bootstrap, delayed DuckDNS publish, gateway ports, and LAN leader election | Preserved for milestone development |
 
 All branches share the same CLI design and safety rules. `main` is the integration branch; `MVP1` and `MVP2` are preserved as milestone snapshots.
 
 Current branch notes:
 
-- Documentation audit `2026-06-17 03:01 UTC`: fetched remote heads (`main` at `1b125ca`, `MVP1` at `5d59f43`, and `MVP2` at `30d6801`) before this README-only propagation. Since the 02:47 audit, `main` merged the already-documented `MVP1` and `MVP2` branch histories; `MVP1` and `MVP2` had no new functional commits.
-- `main` now carries the integrated DuckDNS hostname workflow, gateway SSH/k3s ports, and configured-node LAN leader election docs as the current release behavior.
+- Documentation audit `2026-06-17 04:02 UTC`: fetched remote heads (`main` at `41993f7`, `MVP1` at `6ee9dd3`, and `MVP2` at `c314d1b`) before this README-only propagation. Since the 03:01 audit, `main` merged sanitized generic DuckDNS examples; `MVP2` merged `public_ipv4` bootstrap connectivity, post-cluster DuckDNS publishing, and README cleanup; `MVP1` had no new commits.
+- `main` remains the integrated release with the DuckDNS hostname workflow, gateway SSH/k3s ports, and configured-node LAN leader election. The latest `MVP2` branch carries the newer `public_ipv4` bootstrap workflow until it is merged back to `main`.
 
 ---
 
@@ -363,7 +363,7 @@ Always run `install plan` before `install apply`. Interactive commands (`install
 
 Remote steps on `main` use each node's `ssh_user` when set, otherwise `cluster.ssh_user` (default in example: `ubuntu`). Ensure key-based SSH works from the machine running `styxctl` to every node IP in config. You can also set `cluster.join_token` when a non-init node must join without fetching the token from the init-server over SSH.
 
-On the latest `MVP2` branch, remote steps resolve `nodes[].hostname`, connect to SSH on `gateway.ssh_port` (`47810` by default), and join k3s at `https://<hostname>:47811` by default.
+On the latest `MVP2` branch, remote steps connect to each node's `public_ipv4` on `gateway.ssh_port` (`47810` by default), join k3s at `https://<public_ipv4>:47811`, and publish `nodes[].hostname` to DuckDNS after cluster health passes.
 
 ### Health checks
 
@@ -464,7 +464,7 @@ siem:
   profile: small-lab
 ```
 
-**Important:** on `main`, node `ipv4` / `ipv6` values must match each machine's **current reachable addresses** — they drive k3s `--node-ip`, TLS SANs, and SSH targets during cluster join. On the latest `MVP2` branch, `hostname` drives cross-site SSH/k3s reachability while `ipv4` / `ipv6` remain the k3s node IPs. The `mesh_*` CIDRs are used for Styx WireGuard addressing.
+**Important:** on `main`, node `ipv4` / `ipv6` values must match each machine's **current reachable addresses** — they drive k3s `--node-ip`, TLS SANs, and SSH targets during cluster join. On the latest `MVP2` branch, `public_ipv4` is the bootstrap SSH/k3s endpoint, `hostname` is published to DuckDNS after the cluster is healthy, and mesh `ipv4` / `ipv6` remain the k3s node IPs. The `mesh_*` CIDRs are used for Styx WireGuard addressing.
 
 Config validation status:
 
