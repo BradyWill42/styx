@@ -357,6 +357,8 @@ def _k3s_install_command_display(config: dict[str, Any], inventory: SystemInvent
             all_nodes=all_nodes,
             join_url=join_url if local_node.role != "init-server" else None,
             join_token=join_token if local_node.role != "init-server" else None,
+            inventory=inventory,
+            local_node=local_node,
         )
         return display
     args = _k3s_install_args(config)
@@ -630,6 +632,9 @@ def build_install_plan(
                 all_nodes=nodes,
                 join_url=join_url,
                 join_token=join_token,
+                inventory=inventory,
+                local_node=local_node,
+                election_lan_ips=election_lan_ips,
             )
             steps.append(
                 InstallStep(
@@ -1039,6 +1044,59 @@ def _apply_gateway_firewall(
     return True, "; ".join(results)
 
 
+def _revoke_firewall_port(port: int, protocol: str, inventory: SystemInventory) -> RunResult:
+    binaries = inventory.firewall_backend.get("binaries", {})
+    services = inventory.firewall_backend.get("services", {})
+    label = f"{port}/{protocol}"
+
+    ufw_active = (services.get("ufw", {}).get("active") or "").lower() == "active"
+    if binaries.get("ufw") and ufw_active:
+        return _run_mutating(
+            ["ufw", "delete", "allow", label],
+            use_sudo=True,
+            sudo_available=inventory.sudo_available,
+        )
+
+    firewalld_active = (services.get("firewalld", {}).get("active") or "").lower() == "active"
+    if binaries.get("firewall-cmd") and firewalld_active:
+        ok, detail = _run_mutating(
+            ["firewall-cmd", "--permanent", "--remove-port", label],
+            use_sudo=True,
+            sudo_available=inventory.sudo_available,
+        )
+        if not ok:
+            return ok, detail
+        return _run_mutating(
+            ["firewall-cmd", "--reload"],
+            use_sudo=True,
+            sudo_available=inventory.sudo_available,
+        )
+
+    if binaries.get("nft"):
+        return True, f"nftables rule for {label} was not tracked; remove manually if needed"
+
+    return True, f"no active firewall backend detected; skipped {label}"
+
+
+def _revoke_gateway_firewall(
+    wireguard_port: int,
+    gateway_ssh_port: int,
+    gateway_k3s_port: int,
+    inventory: SystemInventory,
+) -> RunResult:
+    results: list[str] = []
+    for port, protocol in (
+        (wireguard_port, "udp"),
+        (gateway_ssh_port, "tcp"),
+        (gateway_k3s_port, "tcp"),
+    ):
+        ok, detail = _revoke_firewall_port(port, protocol, inventory)
+        results.append(f"{port}/{protocol}: {detail}")
+        if not ok:
+            return False, "; ".join(results)
+    return True, "; ".join(results)
+
+
 def _apply_firewall_allowance(
     port: int,
     inventory: SystemInventory,
@@ -1106,6 +1164,8 @@ def _execute_step(
                 all_nodes=nodes,
                 join_url=join_url if local_node.role != "init-server" else None,
                 join_token=join_token if local_node.role != "init-server" else None,
+                inventory=inventory,
+                local_node=local_node,
             )
         else:
             env = {"INSTALL_K3S_EXEC": "server"}
@@ -1472,8 +1532,19 @@ def check_cluster_gate(
         return gate
 
     nodes = parse_nodes(gate.config)
-    node_errors = validate_nodes(nodes, gate.config)
-    node_warnings = validate_nodes_warnings(nodes, gate.config)
+    local_node = identify_local_node(nodes, gate.inventory, gate.config)
+    node_errors = validate_nodes(
+        nodes,
+        gate.config,
+        inventory=gate.inventory,
+        local_node=local_node,
+    )
+    node_warnings = validate_nodes_warnings(
+        nodes,
+        gate.config,
+        inventory=gate.inventory,
+        local_node=local_node,
+    )
     if not nodes:
         return InstallGateResult(
             ok=False,
@@ -1528,6 +1599,7 @@ def run_install_cluster(
     effective_config, lan_election = resolve_lan_leadership(gate.config, pre_inventory) if gate.ok else (gate.config, None)
     nodes = parse_nodes(effective_config) if gate.ok else []
     election_lan_ips, election_leader = _election_context(lan_election)
+    local_node = identify_local_node(nodes, pre_inventory, effective_config) if nodes else None
     if gate.ok:
         node_errors = validate_nodes(
             nodes,
@@ -1535,6 +1607,8 @@ def run_install_cluster(
             election_lan_ips=election_lan_ips,
             election_leader=election_leader,
             require_lan_ip=bool(lan_election and lan_election.enabled),
+            inventory=pre_inventory,
+            local_node=local_node,
         )
         if node_errors:
             gate = InstallGateResult(
@@ -1548,7 +1622,6 @@ def run_install_cluster(
                 warnings=gate.warnings,
                 blocking=node_errors,
             )
-    local_node = identify_local_node(nodes, pre_inventory, effective_config) if nodes else None
     cluster_plan = (
         build_cluster_plan(
             effective_config,
@@ -1628,6 +1701,9 @@ def run_install_cluster(
                 all_nodes=nodes,
                 join_url=join_url,
                 join_token=join_token,
+                inventory=pre_inventory,
+                local_node=local_node,
+                election_lan_ips=election_lan_ips,
             )
             ok, detail = _k3s_install_local(env, args, pre_inventory)
             node_plan.status = "installed" if ok else "failed"
@@ -1660,6 +1736,9 @@ def run_install_cluster(
                             all_nodes=nodes,
                             join_url=join_url,
                             join_token=join_token,
+                            inventory=pre_inventory,
+                            local_node=local_node,
+                            election_lan_ips=election_lan_ips,
                         )
                         node_plan.k3s_env = env
                         node_plan.k3s_args = args

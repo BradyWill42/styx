@@ -36,6 +36,7 @@ def test_build_uninstall_plan_all_skipped_when_nothing_installed(tmp_path, monke
     assert step_names["remove-wg-config"] == "skipped"
     assert step_names["remove-gateway-ssh"] == "skipped"
     assert step_names["k3s-uninstall"] == "skipped"
+    assert step_names["remove-gateway-firewall"] == "pending"
 
 
 def test_build_uninstall_plan_wg_down_pending_when_interface_up(tmp_path, monkeypatch):
@@ -79,6 +80,15 @@ def test_build_uninstall_plan_remove_sshd_dropin_pending_when_file_exists(tmp_pa
 
     step = next(s for s in plan.steps if s.name == "remove-gateway-ssh")
     assert step.status == "pending"
+
+
+def test_build_uninstall_plan_includes_firewall_revoke(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("styxctl.uninstall._detect_k3s_uninstall_script", lambda: None)
+    plan = build_uninstall_plan(inventory=_base_inventory())
+    step = next(step for step in plan.steps if step.name == "remove-gateway-firewall")
+    assert step.status == "pending"
+    assert "47800/udp" in (step.reason or "")
 
 
 def test_build_uninstall_plan_k3s_deferred_when_binary_but_no_script(tmp_path, monkeypatch):

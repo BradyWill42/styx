@@ -28,8 +28,11 @@ from .install import (
 )
 from .install_report import render_install_text, save_install_report
 from .uninstall import (
+    apply_cluster_uninstall_plan,
     apply_uninstall_plan,
+    build_cluster_uninstall_plan,
     build_uninstall_plan,
+    render_cluster_uninstall_text,
     render_uninstall_text,
 )
 from .ports import PORT_BLOCKS, PORT_PLAN, check_reserved_ports, port_purpose
@@ -680,6 +683,40 @@ def uninstall_local() -> None:
         raise typer.Exit(code=0)
     applied = apply_uninstall_plan(plan)
     _print_uninstall_plan(applied, dry_run=False, exit_code=1 if any(s.status == "failed" for s in applied.steps) else 0)
+
+
+@uninstall_plan_app.command("cluster")
+def uninstall_plan_cluster() -> None:
+    """Preview cluster-wide uninstall across all configured nodes."""
+    plan = build_cluster_uninstall_plan()
+    console.print(render_cluster_uninstall_text(plan, dry_run=True))
+
+
+@uninstall_apply_app.command("cluster")
+def uninstall_apply_cluster() -> None:
+    """Remove Styx from all configured cluster nodes without confirmation."""
+    plan = build_cluster_uninstall_plan()
+    applied = apply_cluster_uninstall_plan(plan)
+    console.print(render_cluster_uninstall_text(applied, dry_run=False))
+    if any(node.status == "failed" for node in applied.nodes):
+        raise typer.Exit(code=1)
+
+
+@uninstall_app.command("cluster")
+def uninstall_cluster() -> None:
+    """Remove Styx from all configured cluster nodes (shows plan, then confirms)."""
+    plan = build_cluster_uninstall_plan()
+    console.print(render_cluster_uninstall_text(plan, dry_run=True))
+    if not plan.nodes:
+        console.print("[green]No cluster nodes configured.[/green]")
+        return
+    if not typer.confirm(f"Apply uninstall to {len(plan.nodes)} cluster node(s)?", default=False):
+        console.print("No changes were made.")
+        raise typer.Exit(code=0)
+    applied = apply_cluster_uninstall_plan(plan)
+    console.print(render_cluster_uninstall_text(applied, dry_run=False))
+    if any(node.status == "failed" for node in applied.nodes):
+        raise typer.Exit(code=1)
 
 
 def _future_app(label: str, milestone: str) -> typer.Typer:

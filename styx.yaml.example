@@ -38,25 +38,22 @@ nodes:
   # Replace names and hostnames with your own DuckDNS subdomains before deploy.
   # Each node normally has its own public_ipv4 (router WAN IP with 1:1 port forwards).
   # Co-located nodes behind one WAN IP may share public_ipv4 when cluster.leader is
-  # lan-elected; set lan_ip for each Pi on that LAN and let election pick the site entrypoint.
+  # lan-elected. lan_ip is auto-detected on each node when styxctl runs locally.
   - name: node-init
     hostname: styx-lab-init.duckdns.org
     public_ipv4: 203.0.113.10
-    lan_ip: 192.168.1.10
     ipv4: 10.0.0.1
     ipv6: fd00:cafe::1
     role: init-server
   - name: node-server
     hostname: styx-lab-server.duckdns.org
     public_ipv4: 203.0.113.11
-    lan_ip: 192.168.1.11
     ipv4: 10.0.0.2
     ipv6: fd00:cafe::2
     role: server
   - name: node-agent
     hostname: styx-lab-agent.duckdns.org
     public_ipv4: 203.0.113.12
-    lan_ip: 192.168.1.12
     ipv4: 10.0.0.3
     ipv6: fd00:cafe::3
     role: agent
