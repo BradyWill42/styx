@@ -11,7 +11,7 @@ import yaml
 
 from .ports import RESERVED_PORT_END, RESERVED_PORT_START
 from .gateway import parse_gateway_ports
-from .nodes import node_hostname, parse_nodes, validate_nodes
+from .nodes import node_hostname, parse_nodes, validate_nodes, validate_nodes_warnings
 
 
 DEFAULT_CONFIG_FILENAMES = ("styx.yaml", "styx.yml")
@@ -192,6 +192,8 @@ def validate_config(config: dict[str, Any]) -> list[ValidationIssue]:
     if nodes:
         for message in validate_nodes(nodes, config):
             issues.append(ValidationIssue("error", "nodes", message))
+        for message in validate_nodes_warnings(nodes, config):
+            issues.append(ValidationIssue("warning", "nodes", message))
     else:
         issues.append(
             ValidationIssue(
@@ -243,6 +245,10 @@ def format_config_summary(config: dict[str, Any], config_path: Path | None) -> s
         for node in nodes:
             host = node_hostname(config, node) or "-"
             pub = node.public_ipv4 or "-"
+            lan = node.lan_ip or "-"
             ips = ", ".join(filter(None, (node.ipv4, node.ipv6)))
-            lines.append(f"  - {node.name} ({node.role}) public {pub} dns {host} mesh {ips}")
+            entry = " entrypoint" if node.site_entrypoint else ""
+            lines.append(
+                f"  - {node.name} ({node.role}) public {pub} lan {lan} dns {host} mesh {ips}{entry}"
+            )
     return "\n".join(lines).rstrip() + "\n"

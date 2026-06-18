@@ -289,3 +289,26 @@ def test_run_install_plan_preview(tmp_path, monkeypatch):
     report, exit_code = run_install_plan_preview(config_path=tmp_path / "styx.yaml")
     assert exit_code == 0
     assert report["command"] == "styxctl install plan local"
+
+
+def test_run_cluster_doctor_uses_colocated_ssh_targets(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    import yaml
+    from tests.test_nodes import _colocated_config
+    from styxctl.install import run_cluster_doctor
+
+    config_path = tmp_path / "styx.yaml"
+    config_path.write_text(yaml.safe_dump(_colocated_config()), encoding="utf-8")
+    monkeypatch.setattr("styxctl.install.collect_inventory", _base_inventory)
+
+    seen_targets: list[str] = []
+
+    def fake_ssh(target, command, **kwargs):
+        seen_targets.append(target)
+        return False, "mocked unreachable"
+
+    monkeypatch.setattr("styxctl.k3s_cluster._run_ssh_command", fake_ssh)
+    health = run_cluster_doctor(config_path=config_path)
+    assert health["healthy"] is False
+    assert "ubuntu@192.168.1.11" in seen_targets
+    assert any("via" in issue or "192.168.1.11" in issue for issue in health["issues"])

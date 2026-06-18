@@ -95,7 +95,7 @@ flowchart TB
 | `server` | Additional k3s control-plane / server node |
 | `agent` | k3s worker node |
 
-Each node uses `public_ipv4` (router WAN IP with port forwards) for bootstrap SSH and k3s joins, `hostname` (DuckDNS) for stable naming after the cluster is connected, and mesh `ipv4` / `ipv6` for k3s `--node-ip`. Install and cluster join start on gateway ports `47810` (SSH) and `47811` (k3s API) over each node's public IP; DuckDNS is published only after networking, LAN leader election, and node joins succeed. After cutover, cluster status and doctor checks use DuckDNS hostnames and can refresh stale records.
+Each node uses `public_ipv4` (router WAN IP with port forwards) for bootstrap SSH and k3s joins when it is the site's entrypoint or a remote node, `lan_ip` for co-located LAN routing, `hostname` (DuckDNS) for stable naming after the cluster is connected, and mesh `ipv4` / `ipv6` for k3s `--node-ip`. Install and cluster join start on gateway ports `47810` (SSH) and `47811` (k3s API); co-located nodes without their own port-forward join over the LAN or outbound NAT. DuckDNS is published only after networking, LAN leader election, and node joins succeed. After cutover, cluster status and doctor checks use DuckDNS hostnames and can refresh stale records.
 
 ---
 
@@ -114,7 +114,7 @@ Current branch notes:
 - Documentation audit `2026-06-18 00:00 UTC`: fetched all remote heads. `main`, `MVP1`, and `MVP2` were still at `35f0697` from the 23:00 README audit; active cursor branches added DuckDNS steady-state connectivity refresh (`cursor/duckdns-cutover-connectivity-0281` at `b67401c`) and CI branch-trigger cleanup (`cursor/remove-mvp-branches-0281` at `ae45126`). This README-only update records the audit and documents the DuckDNS refresh surface.
 - Bootstrap connectivity uses each node's `public_ipv4` and router 1:1 port forwards (`47810` SSH, `47811` k3s API).
 - DuckDNS (`hostname`) is published only after local networking, LAN leader election, and cluster join succeed.
-- `cluster.leader: lan-elected` elects the strongest configured peer on the local LAN (UDP `47802`), ignoring peers not listed in `styx.yaml`.
+- `cluster.leader: lan-elected` elects the strongest configured peer on the local LAN (UDP `47802`), ignoring peers not listed in `styx.yaml`. Co-located nodes may share one `public_ipv4` when election is enabled; the elected leader becomes that site's entrypoint for port-forwards and ProxyJump routing.
 
 ---
 
@@ -291,7 +291,9 @@ styxctl install doctor cluster
 
 Each node uses:
 
-- `public_ipv4` — router WAN IP with 1:1 port forwards to this Pi (`47810` SSH, `47811` k3s API) for bootstrap connectivity
+- `public_ipv4` — router WAN IP with 1:1 port forwards to this Pi (`47810` SSH, `47811` k3s API) for bootstrap connectivity when this node is the site entrypoint or a remote node
+- `lan_ip` — optional LAN address for co-located nodes sharing one `public_ipv4`; used for ProxyJump SSH and same-site k3s joins
+- `site_entrypoint` — optional override marking the single host per shared-WAN site that owns port-forwards (election sets this automatically)
 - `hostname` — DuckDNS name published **after** the cluster is connected
 - `ipv4` / `ipv6` — mesh addresses passed to k3s as `--node-ip` (internal overlay, not your LAN or public IP)
 
@@ -317,7 +319,41 @@ Before `install plan local`, `install apply local`, and `install apply cluster`,
 4. Scores each remaining peer by RAM, CPU cores, architecture, disk, and existing k3s
 5. Elects the strongest configured peer on this LAN as leader
 
-If the configured `init-server` is on the same LAN and two or more peers are present, the elected leader is promoted to `init-server` and the previous init-server is demoted to `server`. If the init-server lives on a different site, election still picks a LAN leader for visibility but k3s roles stay unchanged.
+If the configured `init-server` is on the same LAN and two or more peers are present, the elected leader is promoted to `init-server` and the previous init-server is demoted to `server`. The elected leader is also marked as that site's **entrypoint** (the single host that owns router port-forwards). If the init-server lives on a different site, election still picks a LAN leader for visibility but k3s roles stay unchanged.
+
+### Co-located nodes behind one WAN IP
+
+Homelab setups often have two or more gateway Pis on the same LAN behind one router. They share a single `public_ipv4` because the router can only forward each external port (`47810` SSH, `47811` k3s API) to one host. Enable `cluster.leader: lan-elected` and set each Pi's `lan_ip`:
+
+```yaml
+cluster:
+  leader: lan-elected
+
+nodes:
+  - name: pegasus
+    public_ipv4: 71.104.114.70
+    lan_ip: 192.168.1.10
+    role: init-server
+    # ...
+  - name: atlas
+    public_ipv4: 71.104.114.70   # same WAN IP — allowed with lan-elected
+    lan_ip: 192.168.1.11
+    role: server
+```
+
+Election picks the site **entrypoint** (strongest peer on that LAN). Only the entrypoint needs inbound port-forwards; co-located peers join k3s outbound through NAT and are reached over the LAN:
+
+| From | To | Mechanism |
+|------|-----|-----------|
+| operator | site entrypoint | SSH to `public_ipv4:47810` |
+| operator on that LAN | LAN-internal node | SSH direct to `lan_ip:47810` |
+| operator elsewhere | LAN-internal node | SSH `ProxyJump` through the entrypoint, then `lan_ip` |
+| node, same site | init-server | k3s join `https://<init lan_ip>:47811` |
+| node, different site | init-server | k3s join `https://<init public_ipv4>:47811` |
+
+When `styxctl install apply cluster` runs on the shared LAN, election auto-fills missing `lan_ip` values from peer discovery. If you orchestrate from a different site, set `lan_ip` explicitly for every co-located node.
+
+Set `site_entrypoint: true` on exactly one node per shared-WAN site when using `cluster.leader: static` instead of election.
 
 Preview or inspect election without installing:
 

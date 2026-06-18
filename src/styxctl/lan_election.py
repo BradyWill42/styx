@@ -83,7 +83,12 @@ class LanElectionResult:
             "previous_init_server": self.previous_init_server,
             "subnet": self.subnet,
             "warnings": list(self.warnings),
+            "lan_ips": self.lan_ips,
         }
+
+    @property
+    def lan_ips(self) -> dict[str, str]:
+        return {peer.node_name: peer.lan_ip for peer in self.peers}
 
 
 def parse_lan_election_settings(config: dict[str, Any]) -> LanElectionSettings:
@@ -430,7 +435,7 @@ def run_lan_election(
 
 
 def apply_lan_election_roles(config: dict[str, Any], election: LanElectionResult) -> dict[str, Any]:
-    if not election.enabled or not election.promote_to_init_server or election.leader is None:
+    if not election.enabled:
         return config
 
     effective = copy.deepcopy(config)
@@ -438,7 +443,33 @@ def apply_lan_election_roles(config: dict[str, Any], election: LanElectionResult
     if not isinstance(raw_nodes, list):
         return config
 
-    leader_name = election.leader.node_name
+    lan_ips = election.lan_ips
+    leader_name = election.leader.node_name if election.leader else None
+    leader_public_ip: str | None = None
+    if leader_name:
+        for node in parse_nodes(config):
+            if node.name == leader_name:
+                leader_public_ip = node.public_ipv4
+                break
+
+    for item in raw_nodes:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str):
+            continue
+
+        if name in lan_ips and not item.get("lan_ip"):
+            item["lan_ip"] = lan_ips[name]
+
+        if leader_name and leader_public_ip:
+            item_public = item.get("public_ipv4")
+            if isinstance(item_public, str) and item_public.strip() == leader_public_ip:
+                item["site_entrypoint"] = name == leader_name
+
+    if not election.promote_to_init_server or election.leader is None:
+        return effective
+
     for item in raw_nodes:
         if not isinstance(item, dict):
             continue

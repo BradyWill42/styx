@@ -5,10 +5,11 @@ from __future__ import annotations
 from styxctl.config import load_config, validate_config
 from styxctl.nodes import node_hostname, node_subdomain
 from styxctl.gateway import k3s_gateway_listen_args, k3s_join_url, parse_gateway_ports
-from styxctl.k3s_cluster import build_cluster_plan
+from styxctl.k3s_cluster import _node_ssh_connection, build_cluster_plan
 from styxctl.nodes import parse_nodes
 
-from tests.support import EXAMPLE_CONFIG_PATH
+from tests.support import EXAMPLE_CONFIG_PATH, make_inventory
+from tests.test_nodes import _colocated_config
 
 
 def test_parse_gateway_ports_defaults():
@@ -54,3 +55,47 @@ def test_k3s_gateway_listen_args():
     args = k3s_gateway_listen_args(config, server_role=True)
     assert args == ["--https-listen-port", "47811"]
     assert k3s_gateway_listen_args(config, server_role=False) == []
+
+
+def test_build_cluster_plan_colocated_join_uses_init_lan_ip():
+    config = _colocated_config()
+    nodes = parse_nodes(config)
+    plan = build_cluster_plan(config)
+    by_name = {item.node.name: item for item in plan.nodes}
+    assert by_name["atlas"].k3s_env["K3S_URL"] == "https://192.168.1.10:47811"
+    assert by_name["thor"].k3s_env["K3S_URL"] == "https://71.104.114.70:47811"
+
+
+def test_node_ssh_connection_proxyjump_for_remote_colocated_node():
+    config = _colocated_config()
+    nodes = parse_nodes(config)
+    by_name = {node.name: node for node in nodes}
+    remote_inventory = make_inventory(primary_lan_ip="10.50.0.5", network_interfaces=["eth0  UP  10.50.0.5/24"])
+    connection = _node_ssh_connection(
+        by_name["atlas"],
+        nodes,
+        "ubuntu",
+        config,
+        inventory=remote_inventory,
+    )
+    assert connection.jump == "ubuntu@71.104.114.70"
+    assert connection.target == "ubuntu@192.168.1.11"
+
+
+def test_node_ssh_connection_direct_when_operator_on_same_lan():
+    config = _colocated_config()
+    nodes = parse_nodes(config)
+    by_name = {node.name: node for node in nodes}
+    local_inventory = make_inventory(
+        primary_lan_ip="192.168.1.5",
+        network_interfaces=["eth0  UP  192.168.1.5/24"],
+    )
+    connection = _node_ssh_connection(
+        by_name["atlas"],
+        nodes,
+        "ubuntu",
+        config,
+        inventory=local_inventory,
+    )
+    assert connection.jump is None
+    assert connection.target == "ubuntu@192.168.1.11"

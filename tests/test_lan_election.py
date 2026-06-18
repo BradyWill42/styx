@@ -19,6 +19,7 @@ from styxctl.lan_election import (
 from styxctl.nodes import parse_nodes
 
 from tests.support import EXAMPLE_CONFIG_PATH, make_inventory
+from tests.test_nodes import _colocated_config
 
 
 def test_parse_lan_election_settings_enabled():
@@ -102,6 +103,25 @@ def test_apply_lan_election_roles_promotes_leader():
     roles = {node.name: node.role for node in nodes}
     assert roles["node-agent"] == "init-server"
     assert roles["node-init"] == "server"
+
+
+def test_apply_lan_election_roles_sets_site_entrypoint_and_lan_ip():
+    config = _colocated_config()
+    config["nodes"][1]["lan_ip"] = None
+    election = run_lan_election(config, make_inventory(hostname="pegasus", primary_lan_ip="192.168.1.10"))
+    election.enabled = True
+    election.leader = LanPeer("pegasus", "192.168.1.10", 9000, "pegasus", "styx")
+    election.peers = [
+        LanPeer("pegasus", "192.168.1.10", 9000, "pegasus", "styx"),
+        LanPeer("atlas", "192.168.1.11", 5000, "atlas", "styx"),
+    ]
+
+    effective = apply_lan_election_roles(config, election)
+    nodes = parse_nodes(effective)
+    by_name = {node.name: node for node in nodes}
+    assert by_name["pegasus"].site_entrypoint is True
+    assert by_name["atlas"].site_entrypoint is False
+    assert by_name["atlas"].lan_ip == "192.168.1.11"
 
 
 def test_run_lan_election_disabled_by_default():
