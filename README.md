@@ -95,7 +95,7 @@ flowchart TB
 | `server` | Additional k3s control-plane / server node |
 | `agent` | k3s worker node |
 
-Each node uses `public_ipv4` (router WAN IP with port forwards) for bootstrap SSH and k3s joins, `hostname` (DuckDNS) for stable naming after the cluster is connected, and mesh `ipv4` / `ipv6` for k3s `--node-ip`. Install and cluster join start on gateway ports `47810` (SSH) and `47811` (k3s API) over each node's public IP; DuckDNS is published only after networking, LAN leader election, and node joins succeed.
+Each node uses `public_ipv4` (router WAN IP with port forwards) for bootstrap SSH and k3s joins, `hostname` (DuckDNS) for stable naming after the cluster is connected, and mesh `ipv4` / `ipv6` for k3s `--node-ip`. Install and cluster join start on gateway ports `47810` (SSH) and `47811` (k3s API) over each node's public IP; DuckDNS is published only after networking, LAN leader election, and node joins succeed. After cutover, cluster status and doctor checks use DuckDNS hostnames and can refresh stale records.
 
 ---
 
@@ -111,7 +111,7 @@ All branches share the same CLI design, safety rules, and **this README**. `main
 
 Current branch notes:
 
-- Documentation audit `2026-06-17 23:00 UTC`: fetched remote heads and found `main`, `MVP1`, and `MVP2` all still at `d6b55dd` from the 22:00 README audit. No maintained branch has changed since the last run; this README-only update records the clean hourly audit state.
+- Documentation audit `2026-06-18 00:00 UTC`: fetched all remote heads. `main`, `MVP1`, and `MVP2` were still at `35f0697` from the 23:00 README audit; active cursor branches added DuckDNS steady-state connectivity refresh (`cursor/duckdns-cutover-connectivity-0281` at `b67401c`) and CI branch-trigger cleanup (`cursor/remove-mvp-branches-0281` at `ae45126`). This README-only update records the audit and documents the DuckDNS refresh surface.
 - Bootstrap connectivity uses each node's `public_ipv4` and router 1:1 port forwards (`47810` SSH, `47811` k3s API).
 - DuckDNS (`hostname`) is published only after local networking, LAN leader election, and cluster join succeed.
 - `cluster.leader: lan-elected` elects the strongest configured peer on the local LAN (UDP `47802`), ignoring peers not listed in `styx.yaml`.
@@ -167,6 +167,7 @@ styxctl install status local
 styxctl install status cluster
 styxctl install doctor local
 styxctl install doctor cluster
+styxctl dns refresh cluster           # refresh DuckDNS records after ISP IP changes
 ```
 
 ### Requirements
@@ -294,7 +295,7 @@ Each node uses:
 - `hostname` — DuckDNS name published **after** the cluster is connected
 - `ipv4` / `ipv6` — mesh addresses passed to k3s as `--node-ip` (internal overlay, not your LAN or public IP)
 
-Bootstrap order: local networking install → LAN leader election (if enabled) → cluster join over `public_ipv4` → DuckDNS publish.
+Bootstrap order: local networking install -> LAN leader election (if enabled) -> cluster join over `public_ipv4` -> DuckDNS publish -> steady-state checks over DuckDNS hostnames.
 
 ### LAN leader election
 
@@ -582,6 +583,13 @@ styxctl install <TAB>
 | `install status lan` | Show LAN peers and elected leader |
 | `install doctor local` | Actionable local health diagnosis |
 | `install doctor cluster` | Cluster-wide health diagnosis |
+
+### DNS
+
+| Command | Description |
+|---------|-------------|
+| `dns refresh local` | Publish this node's current public IPv4 to its DuckDNS hostname |
+| `dns refresh cluster` | Refresh DuckDNS for every configured node using SSH-detected public IPv4s |
 
 ### Config, sysprep reports, and shell
 
