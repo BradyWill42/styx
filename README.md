@@ -111,7 +111,7 @@ All branches share the same CLI design, safety rules, and **this README**. `main
 
 Current branch notes:
 
-- Documentation audit `2026-06-18 00:00 UTC`: fetched all remote heads. `main`, `MVP1`, and `MVP2` were still at `35f0697` from the 23:00 README audit; active cursor branches added DuckDNS steady-state connectivity refresh (`cursor/duckdns-cutover-connectivity-0281` at `b67401c`) and CI branch-trigger cleanup (`cursor/remove-mvp-branches-0281` at `ae45126`). This README-only update records the audit and documents the DuckDNS refresh surface.
+- Documentation audit `2026-06-18 01:00 UTC`: fetched all remote heads. `main` advanced to `0943740` with co-located shared-WAN support and site-aware status/doctor fixes; `MVP1` and `MVP2` remained at `7b38bab` from the 00:00 README audit. Active cursor branches were `cursor/colocated-nodes-lan-election-6114` at `2e65895`, `cursor/duckdns-cutover-connectivity-0281` at `c9e115a`, and `cursor/remove-mvp-branches-0281` at `f25992b`. This README-only update records the audit and documents the co-located cluster health-check surface.
 - Bootstrap connectivity uses each node's `public_ipv4` and router 1:1 port forwards (`47810` SSH, `47811` k3s API).
 - DuckDNS (`hostname`) is published only after local networking, LAN leader election, and cluster join succeed.
 - `cluster.leader: lan-elected` elects the strongest configured peer on the local LAN (UDP `47802`), ignoring peers not listed in `styx.yaml`. Co-located nodes may share one `public_ipv4` when election is enabled; the elected leader becomes that site's entrypoint for port-forwards and ProxyJump routing.
@@ -354,6 +354,8 @@ Election picks the site **entrypoint** (strongest peer on that LAN). Only the en
 When `styxctl install apply cluster` runs on the shared LAN, election auto-fills missing `lan_ip` values from peer discovery. If you orchestrate from a different site, set `lan_ip` explicitly for every co-located node.
 
 Set `site_entrypoint: true` on exactly one node per shared-WAN site when using `cluster.leader: static` instead of election.
+
+Cluster health checks use the same site-aware routing. `styxctl install status cluster` and `styxctl install doctor cluster` resolve co-located peers through the elected entrypoint, fall back to the site's `init-server` when election data is unavailable, and report node validation warnings without blocking otherwise healthy plans.
 
 Preview or inspect election without installing:
 
@@ -615,10 +617,10 @@ styxctl install <TAB>
 | `install cluster` | Cluster install with confirm |
 | `install apply cluster` | Cluster install without confirm |
 | `install status local` | k3s + WireGuard status table |
-| `install status cluster` | All nodes reachability table |
+| `install status cluster` | Site-aware all-node reachability table |
 | `install status lan` | Show LAN peers and elected leader |
 | `install doctor local` | Actionable local health diagnosis |
-| `install doctor cluster` | Cluster-wide health diagnosis |
+| `install doctor cluster` | Site-aware cluster-wide health diagnosis |
 
 ### DNS
 
