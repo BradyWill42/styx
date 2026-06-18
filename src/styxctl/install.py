@@ -15,6 +15,7 @@ from pathlib import Path
 import secrets
 import shutil
 import subprocess
+import tempfile
 from typing import Any, Callable
 
 from .config import config_status, find_config, load_config, validate_config
@@ -712,6 +713,57 @@ def build_install_plan(
     )
 
 
+def _k3s_install_local(
+    env: dict[str, str],
+    args: list[str],
+    inventory: SystemInventory,
+) -> RunResult:
+    """Download the k3s installer script and execute it with sudo."""
+    curl_path = shutil.which("curl")
+    if not curl_path:
+        return False, "curl not found"
+
+    try:
+        download = subprocess.run(
+            [curl_path, "-sfL", "https://get.k3s.io"],
+            capture_output=True,
+            timeout=60.0,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "timed out downloading k3s installer"
+    except OSError as exc:
+        return False, str(exc)
+
+    if download.returncode != 0:
+        stderr = (download.stderr or b"").decode("utf-8", errors="replace").strip()
+        return False, f"failed to download k3s installer: {stderr}"
+
+    try:
+        fd, temp_path = tempfile.mkstemp(prefix="k3s-install-", suffix=".sh")
+        try:
+            os.write(fd, download.stdout)
+        finally:
+            os.close(fd)
+        os.chmod(temp_path, 0o700)
+    except OSError as exc:
+        return False, f"failed to write k3s installer: {exc}"
+
+    try:
+        env_pairs = [f"{k}={v}" for k, v in env.items()]
+        command = ["env", *env_pairs, temp_path, *args]
+        return _run_mutating(
+            command,
+            use_sudo=True,
+            sudo_available=inventory.sudo_available,
+            timeout=900.0,
+        )
+    finally:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+
+
 def _run_pipeline(
     left: list[str],
     right: list[str],
@@ -1058,11 +1110,7 @@ def _execute_step(
         else:
             env = {"INSTALL_K3S_EXEC": "server"}
             args = _k3s_install_args(config)
-        ok, detail = _run_pipeline(
-            ["curl", "-sfL", "https://get.k3s.io"],
-            ["sh", "-s", "-", *args],
-            env=env,
-        )
+        ok, detail = _k3s_install_local(env, args, inventory)
     elif step.name == "k3s-cluster":
         step.status = "skipped"
         step.detail = "cluster orchestration is handled by `styxctl install cluster`"
@@ -1581,11 +1629,7 @@ def run_install_cluster(
                 join_url=join_url,
                 join_token=join_token,
             )
-            ok, detail = _run_pipeline(
-                ["curl", "-sfL", "https://get.k3s.io"],
-                ["sh", "-s", "-", *args],
-                env=env,
-            )
+            ok, detail = _k3s_install_local(env, args, pre_inventory)
             node_plan.status = "installed" if ok else "failed"
             node_plan.detail = detail
         else:
