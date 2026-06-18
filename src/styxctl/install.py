@@ -28,6 +28,8 @@ from .k3s_cluster import (
     fetch_join_token_from_init,
     k3s_install_spec,
     refresh_cluster_duckdns,
+    _init_join_host,
+    _init_ssh_host,
     _run_ssh_command,
 )
 from .lan_election import LanElectionResult, apply_lan_election_roles, resolve_lan_leadership, run_lan_election
@@ -39,6 +41,7 @@ from .nodes import (
     node_connectivity_host,
     parse_nodes,
     validate_nodes,
+    validate_nodes_warnings,
 )
 from .remediation import _run_mutating
 from .reports import CRITICAL_PORTS, evaluate_readiness
@@ -298,23 +301,26 @@ def _missing_packages(inventory: SystemInventory, package_manager: str | None) -
     return sorted(set(missing))
 
 
+def _election_context(lan_election: LanElectionResult | None) -> tuple[dict[str, str] | None, str | None]:
+    if lan_election is None:
+        return None, None
+    leader_name = lan_election.leader.node_name if lan_election.leader else None
+    return lan_election.lan_ips, leader_name
+
+
 def _join_credentials(
     config: dict[str, Any],
     nodes: list,
     *,
     inventory: SystemInventory | None = None,
     local_node: ClusterNode | None = None,
+    election_lan_ips: dict[str, str] | None = None,
+    election_leader: str | None = None,
 ) -> tuple[str | None, str | None]:
     init = init_server_node(nodes)
-    if init is None:
+    if init is None or local_node is None:
         return None, None
-    init_host = node_connectivity_host(
-        config,
-        init,
-        mode=CONNECTIVITY_BOOTSTRAP,
-        inventory=inventory,
-        local_node=local_node,
-    )
+    init_host = _init_join_host(init, local_node, election_lan_ips=election_lan_ips)
     if not init_host:
         return None, None
     gateway = parse_gateway_ports(config)
@@ -330,6 +336,8 @@ def _join_credentials(
         ssh_user=ssh_user,
         inventory=inventory,
         local_node=local_node,
+        election_lan_ips=election_lan_ips,
+        election_leader=election_leader,
     )
     if ok:
         return join_url, detail.strip()
@@ -470,7 +478,18 @@ def build_install_plan(
     interface, port = _wireguard_settings(config)
     nodes = parse_nodes(config)
     local_node = identify_local_node(nodes, inventory, config)
-    cluster_plan = build_cluster_plan(config, local_node=local_node, inventory=inventory) if nodes else None
+    election_lan_ips, election_leader = _election_context(lan_election)
+    cluster_plan = (
+        build_cluster_plan(
+            config,
+            local_node=local_node,
+            inventory=inventory,
+            election_lan_ips=election_lan_ips,
+            election_leader=election_leader,
+        )
+        if nodes
+        else None
+    )
 
     missing_packages = _missing_packages(inventory, package_manager)
     if missing_packages and package_manager == "apt":
@@ -1447,9 +1466,36 @@ def run_install_cluster(
     )
     effective_config, lan_election = resolve_lan_leadership(gate.config, pre_inventory) if gate.ok else (gate.config, None)
     nodes = parse_nodes(effective_config) if gate.ok else []
+    election_lan_ips, election_leader = _election_context(lan_election)
+    if gate.ok:
+        node_errors = validate_nodes(
+            nodes,
+            effective_config,
+            election_lan_ips=election_lan_ips,
+            election_leader=election_leader,
+            require_lan_ip=bool(lan_election and lan_election.enabled),
+        )
+        if node_errors:
+            gate = InstallGateResult(
+                ok=False,
+                message="Cluster node configuration is invalid after LAN election.",
+                config=gate.config,
+                config_path=gate.config_path,
+                config_status_value="INVALID",
+                inventory=gate.inventory,
+                sysprep_status=gate.sysprep_status,
+                warnings=gate.warnings,
+                blocking=node_errors,
+            )
     local_node = identify_local_node(nodes, pre_inventory, effective_config) if nodes else None
     cluster_plan = (
-        build_cluster_plan(effective_config, local_node=local_node, inventory=pre_inventory)
+        build_cluster_plan(
+            effective_config,
+            local_node=local_node,
+            inventory=pre_inventory,
+            election_lan_ips=election_lan_ips,
+            election_leader=election_leader,
+        )
         if gate.ok
         else ClusterPlan(init_node="unknown")
     )
@@ -1540,15 +1586,15 @@ def run_install_cluster(
                         runner=ssh_runner,
                         inventory=pre_inventory,
                         local_node=local_node,
+                        election_lan_ips=election_lan_ips,
+                        election_leader=election_leader,
                     )
                     if token_ok:
                         join_token = token_detail.strip()
-                        init_host = node_connectivity_host(
-                            effective_config,
+                        init_host = _init_join_host(
                             init,
-                            mode=CONNECTIVITY_BOOTSTRAP,
-                            inventory=pre_inventory,
-                            local_node=local_node,
+                            node_plan.node,
+                            election_lan_ips=election_lan_ips,
                         )
                         join_url = k3s_join_url(init_host, gateway) if init_host else join_url
                         env, args, _ = k3s_install_spec(
@@ -1567,6 +1613,8 @@ def run_install_cluster(
                 runner=ssh_runner,
                 inventory=pre_inventory,
                 local_node=local_node,
+                election_lan_ips=election_lan_ips,
+                election_leader=election_leader,
             )
 
         if node_plan.role == "init-server" and node_plan.status == "installed":
@@ -1579,15 +1627,15 @@ def run_install_cluster(
                     runner=ssh_runner,
                     inventory=pre_inventory,
                     local_node=local_node,
+                    election_lan_ips=election_lan_ips,
+                    election_leader=election_leader,
                 )
                 if token_ok:
                     join_token = token_detail.strip()
-                    init_host = node_connectivity_host(
-                        effective_config,
+                    init_host = _init_ssh_host(
                         init,
-                        mode=CONNECTIVITY_BOOTSTRAP,
                         inventory=pre_inventory,
-                        local_node=local_node,
+                        election_lan_ips=election_lan_ips,
                     )
                     if init_host:
                         join_url = k3s_join_url(init_host, gateway)
@@ -1598,6 +1646,8 @@ def run_install_cluster(
         ssh_user=ssh_user,
         runner=ssh_runner,
         local_node=local_node,
+        election_lan_ips=election_lan_ips,
+        election_leader=election_leader,
     )
     dns_messages: list[str] = []
     cluster_installed = not any(item.status == "failed" for item in cluster_plan.nodes)

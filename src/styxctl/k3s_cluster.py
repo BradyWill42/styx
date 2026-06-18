@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import ipaddress
 import json
 import shutil
 import subprocess
@@ -11,20 +12,143 @@ from typing import Any, Callable
 from .dns_update import refresh_node_duckdns
 from .inventory import SystemInventory
 from .gateway import k3s_join_url, k3s_gateway_listen_args, parse_gateway_ports
+from .lan_election import local_lan_subnet
 from .nodes import (
     ClusterNode,
     CONNECTIVITY_BOOTSTRAP,
     all_node_tls_sans,
     init_server_node,
+    is_colocated,
     node_connectivity_host,
+    node_effective_lan_ip,
     node_hostname,
     parse_nodes,
+    site_entrypoint_for,
     sort_nodes_for_install,
 )
 
 K3S_TOKEN_PATH = "/var/lib/rancher/k3s/server/node-token"
 
 RunResult = tuple[bool, str]
+
+
+@dataclass(slots=True)
+class SshConnection:
+    target: str
+    jump: str | None = None
+    port: int = 47810
+
+
+def _operator_on_lan(inventory: SystemInventory | None, lan_ip: str | None) -> bool:
+    if inventory is None or not lan_ip:
+        return False
+    subnet = local_lan_subnet(inventory)
+    if subnet is None:
+        return False
+    try:
+        return ipaddress.ip_address(lan_ip) in subnet
+    except ValueError:
+        return False
+
+
+def _init_join_host(
+    init_node: ClusterNode,
+    joining_node: ClusterNode,
+    *,
+    election_lan_ips: dict[str, str] | None = None,
+) -> str | None:
+    if (
+        init_node.public_ipv4
+        and joining_node.public_ipv4
+        and init_node.public_ipv4 == joining_node.public_ipv4
+    ):
+        return node_effective_lan_ip(init_node, election_lan_ips=election_lan_ips) or init_node.public_ipv4
+    return init_node.public_ipv4
+
+
+def _init_ssh_host(
+    init_node: ClusterNode,
+    *,
+    inventory: SystemInventory | None = None,
+    election_lan_ips: dict[str, str] | None = None,
+) -> str | None:
+    init_lan = node_effective_lan_ip(init_node, election_lan_ips=election_lan_ips)
+    if init_lan and _operator_on_lan(inventory, init_lan):
+        return init_lan
+    return init_node.public_ipv4
+
+
+def _node_ssh_connection(
+    node: ClusterNode,
+    nodes: list[ClusterNode],
+    fallback_user: str | None,
+    config: dict[str, Any],
+    *,
+    inventory: SystemInventory | None = None,
+    local_node: ClusterNode | None = None,
+    election_lan_ips: dict[str, str] | None = None,
+    election_leader: str | None = None,
+    gateway_ssh_port: int = 47810,
+) -> SshConnection:
+    user = node.ssh_user or fallback_user
+    entrypoint = site_entrypoint_for(
+        node,
+        nodes,
+        election_lan_ips=election_lan_ips,
+        election_leader=election_leader,
+    )
+    lan_ip = node_effective_lan_ip(node, election_lan_ips=election_lan_ips)
+
+    if not is_colocated(node, nodes) or (entrypoint is not None and node.name == entrypoint.name):
+        host = (
+            node_connectivity_host(
+                config,
+                node,
+                mode=CONNECTIVITY_BOOTSTRAP,
+                inventory=inventory,
+                local_node=local_node,
+            )
+            or node.name
+        )
+        return SshConnection(target=f"{user}@{host}" if user else host, port=gateway_ssh_port)
+
+    if lan_ip and _operator_on_lan(inventory, lan_ip):
+        return SshConnection(target=f"{user}@{lan_ip}" if user else lan_ip, port=gateway_ssh_port)
+
+    jump_host = entrypoint.public_ipv4 if entrypoint else node.public_ipv4
+    jump_user = (entrypoint.ssh_user if entrypoint else None) or fallback_user
+    jump = f"{jump_user}@{jump_host}" if jump_user else jump_host
+    final_host = lan_ip or node.name
+    return SshConnection(
+        target=f"{user}@{final_host}" if user else final_host,
+        jump=jump,
+        port=gateway_ssh_port,
+    )
+
+
+def _node_plan_target_host(
+    node: ClusterNode,
+    nodes: list[ClusterNode],
+    config: dict[str, Any],
+    *,
+    inventory: SystemInventory | None = None,
+    local_node: ClusterNode | None = None,
+    election_lan_ips: dict[str, str] | None = None,
+    election_leader: str | None = None,
+) -> str:
+    connection = _node_ssh_connection(
+        node,
+        nodes,
+        None,
+        config,
+        inventory=inventory,
+        local_node=local_node,
+        election_lan_ips=election_lan_ips,
+        election_leader=election_leader,
+    )
+    if connection.jump:
+        return f"{connection.target} via {connection.jump}"
+    return connection.target.split("@", 1)[-1]
 
 
 @dataclass(slots=True)
@@ -145,6 +269,8 @@ def build_cluster_plan(
     inventory: SystemInventory | None = None,
     join_url: str | None = None,
     join_token: str | None = None,
+    election_lan_ips: dict[str, str] | None = None,
+    election_leader: str | None = None,
 ) -> ClusterPlan:
     nodes = parse_nodes(config)
     gateway = parse_gateway_ports(config)
@@ -152,35 +278,39 @@ def build_cluster_plan(
     if init_node is None:
         return ClusterPlan(init_node="unknown", warnings=["no init-server node defined"])
 
-    init_host = node_connectivity_host(
-        config,
-        init_node,
-        mode=CONNECTIVITY_BOOTSTRAP,
-        inventory=inventory,
-        local_node=local_node,
-    )
-    if join_url is None and init_host:
-        join_url = k3s_join_url(init_host, gateway)
-
     plans: list[ClusterNodePlan] = []
     warnings: list[str] = []
+    default_join_url = join_url
     for node in sort_nodes_for_install(nodes):
-        host = node_connectivity_host(
-            config,
+        host = _node_plan_target_host(
             node,
-            mode=CONNECTIVITY_BOOTSTRAP,
+            nodes,
+            config,
             inventory=inventory,
             local_node=local_node,
+            election_lan_ips=election_lan_ips,
+            election_leader=election_leader,
         )
         if not host:
-            warnings.append(f"node {node.name} has no public_ipv4 for bootstrap connectivity")
+            warnings.append(f"node {node.name} has no bootstrap connectivity target")
             continue
+
+        node_join_url = default_join_url
+        if node.role != "init-server":
+            join_host = _init_join_host(
+                init_node,
+                node,
+                election_lan_ips=election_lan_ips,
+            )
+            if join_host:
+                node_join_url = k3s_join_url(join_host, gateway)
+
         resolved = node.resolved_ipv4(config, mode=CONNECTIVITY_BOOTSTRAP)
         env, args, display = k3s_install_spec(
             config,
             node,
             all_nodes=nodes,
-            join_url=join_url if node.role != "init-server" else None,
+            join_url=node_join_url if node.role != "init-server" else None,
             join_token=join_token if node.role != "init-server" else None,
         )
         plans.append(
@@ -199,7 +329,22 @@ def build_cluster_plan(
             )
         )
 
-    return ClusterPlan(init_node=init_node.name, nodes=plans, warnings=warnings, join_url=join_url)
+    representative_join_url = default_join_url
+    if representative_join_url is None and init_node:
+        join_host = _init_ssh_host(
+            init_node,
+            inventory=inventory,
+            election_lan_ips=election_lan_ips,
+        )
+        if join_host:
+            representative_join_url = k3s_join_url(join_host, gateway)
+
+    return ClusterPlan(
+        init_node=init_node.name,
+        nodes=plans,
+        warnings=warnings,
+        join_url=representative_join_url,
+    )
 
 
 def _ssh_target(
@@ -209,19 +354,22 @@ def _ssh_target(
     *,
     inventory: SystemInventory | None = None,
     local_node: ClusterNode | None = None,
-) -> str:
-    user = node.ssh_user or fallback_user
-    host = (
-        node_connectivity_host(
-            config,
-            node,
-            mode=CONNECTIVITY_BOOTSTRAP,
-            inventory=inventory,
-            local_node=local_node,
-        )
-        or node.name
+    election_lan_ips: dict[str, str] | None = None,
+    election_leader: str | None = None,
+) -> SshConnection:
+    nodes = parse_nodes(config)
+    gateway = parse_gateway_ports(config)
+    return _node_ssh_connection(
+        node,
+        nodes,
+        fallback_user,
+        config,
+        inventory=inventory,
+        local_node=local_node,
+        election_lan_ips=election_lan_ips,
+        election_leader=election_leader,
+        gateway_ssh_port=gateway.ssh,
     )
-    return f"{user}@{host}" if user else host
 
 
 def _run_ssh_command(
@@ -229,23 +377,26 @@ def _run_ssh_command(
     remote_command: str,
     *,
     port: int = 47810,
+    jump: str | None = None,
     timeout: float = 900.0,
 ) -> RunResult:
     if shutil.which("ssh") is None:
         return False, "ssh command not found"
+    command = [
+        "ssh",
+        "-p",
+        str(port),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+    ]
+    if jump:
+        command.extend(["-J", f"{jump}:{port}"])
+    command.extend([target, remote_command])
     try:
         completed = subprocess.run(
-            [
-                "ssh",
-                "-p",
-                str(port),
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=10",
-                target,
-                remote_command,
-            ],
+            command,
             check=False,
             capture_output=True,
             text=True,
@@ -270,11 +421,26 @@ def fetch_join_token_from_init(
     runner: Callable[..., RunResult] | None = None,
     inventory: SystemInventory | None = None,
     local_node: ClusterNode | None = None,
+    election_lan_ips: dict[str, str] | None = None,
+    election_leader: str | None = None,
 ) -> RunResult:
     gateway = parse_gateway_ports(config)
-    target = _ssh_target(init_node, ssh_user, config, inventory=inventory, local_node=local_node)
+    connection = _ssh_target(
+        init_node,
+        ssh_user,
+        config,
+        inventory=inventory,
+        local_node=local_node,
+        election_lan_ips=election_lan_ips,
+        election_leader=election_leader,
+    )
     run = runner or _run_ssh_command
-    return run(target, f"sudo cat {K3S_TOKEN_PATH}", port=gateway.ssh)
+    return run(
+        connection.target,
+        f"sudo cat {K3S_TOKEN_PATH}",
+        port=connection.port,
+        jump=connection.jump,
+    )
 
 
 def _remote_k3s_install_command(env: dict[str, str], args: list[str]) -> str:
@@ -291,16 +457,31 @@ def apply_cluster_node_plan(
     runner: Callable[..., RunResult] | None = None,
     inventory: SystemInventory | None = None,
     local_node: ClusterNode | None = None,
+    election_lan_ips: dict[str, str] | None = None,
+    election_leader: str | None = None,
 ) -> ClusterNodePlan:
     if plan.local_execution:
         plan.status = "skipped"
         plan.detail = "local node handled by install local"
         return plan
 
-    target = _ssh_target(plan.node, ssh_user, config, inventory=inventory, local_node=local_node)
+    connection = _ssh_target(
+        plan.node,
+        ssh_user,
+        config,
+        inventory=inventory,
+        local_node=local_node,
+        election_lan_ips=election_lan_ips,
+        election_leader=election_leader,
+    )
     remote_command = _remote_k3s_install_command(plan.k3s_env, plan.k3s_args)
     run = runner or _run_ssh_command
-    ok, detail = run(target, remote_command, port=plan.ssh_port)
+    ok, detail = run(
+        connection.target,
+        remote_command,
+        port=connection.port,
+        jump=connection.jump,
+    )
     plan.status = "installed" if ok else "failed"
     plan.detail = detail
     return plan
@@ -326,6 +507,8 @@ def assess_cluster_nodes(
     ssh_user: str | None = None,
     runner: Callable[..., RunResult] | None = None,
     local_node: ClusterNode | None = None,
+    election_lan_ips: dict[str, str] | None = None,
+    election_leader: str | None = None,
 ) -> dict[str, Any]:
     nodes = parse_nodes(config)
     gateway = parse_gateway_ports(config)
@@ -336,8 +519,21 @@ def assess_cluster_nodes(
 
     kubectl_nodes: list[str] = []
     if init_node:
-        target = _ssh_target(init_node, ssh_user, config, inventory=inventory, local_node=local_node)
-        ok, detail = run(target, "sudo kubectl get nodes -o json", port=gateway.ssh)
+        connection = _ssh_target(
+            init_node,
+            ssh_user,
+            config,
+            inventory=inventory,
+            local_node=local_node,
+            election_lan_ips=election_lan_ips,
+            election_leader=election_leader,
+        )
+        ok, detail = run(
+            connection.target,
+            "sudo kubectl get nodes -o json",
+            port=connection.port,
+            jump=connection.jump,
+        )
         if ok:
             try:
                 payload = json.loads(detail)
@@ -356,15 +552,30 @@ def assess_cluster_nodes(
             issues.append(f"could not query kubectl on init server: {detail}")
 
     for node in nodes:
-        host = node_connectivity_host(
-            config,
+        host = _node_plan_target_host(
             node,
-            mode=CONNECTIVITY_BOOTSTRAP,
+            nodes,
+            config,
             inventory=inventory,
             local_node=local_node,
+            election_lan_ips=election_lan_ips,
+            election_leader=election_leader,
         ) or node.name
-        target = _ssh_target(node, ssh_user, config, inventory=inventory, local_node=local_node)
-        ok, detail = run(target, "sudo systemctl is-active k3s || sudo systemctl is-active k3s-agent", port=gateway.ssh)
+        connection = _ssh_target(
+            node,
+            ssh_user,
+            config,
+            inventory=inventory,
+            local_node=local_node,
+            election_lan_ips=election_lan_ips,
+            election_leader=election_leader,
+        )
+        ok, detail = run(
+            connection.target,
+            "sudo systemctl is-active k3s || sudo systemctl is-active k3s-agent",
+            port=connection.port,
+            jump=connection.jump,
+        )
         resolved = node.resolved_ipv4(config, mode=CONNECTIVITY_BOOTSTRAP)
         entry = {
             "name": node.name,
@@ -393,23 +604,19 @@ def assess_cluster_nodes(
         "init_node": init_node.name if init_node else None,
         "join_url": (
             k3s_join_url(
-                node_connectivity_host(
-                    config,
+                _init_ssh_host(
                     init_node,
-                    mode=CONNECTIVITY_BOOTSTRAP,
                     inventory=inventory,
-                    local_node=local_node,
+                    election_lan_ips=election_lan_ips,
                 )
                 or "",
                 gateway,
             )
             if init_node
-            and node_connectivity_host(
-                config,
+            and _init_ssh_host(
                 init_node,
-                mode=CONNECTIVITY_BOOTSTRAP,
                 inventory=inventory,
-                local_node=local_node,
+                election_lan_ips=election_lan_ips,
             )
             else None
         ),
