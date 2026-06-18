@@ -9,12 +9,38 @@ from typing import Any
 
 import yaml
 
-from .ports import RESERVED_PORT_END, RESERVED_PORT_START
-from .gateway import parse_gateway_ports
+from .gateway import DEFAULT_K3S_API_PORT, DEFAULT_SSH_PORT, parse_gateway_ports
+from .network_plan import DEFAULT_NETWORK, assign_node_mesh_ips
 from .nodes import node_hostname, parse_nodes, validate_nodes, validate_nodes_warnings
+from .ports import RESERVED_PORT_END, RESERVED_PORT_START
 
 
 DEFAULT_CONFIG_FILENAMES = ("styx.yaml", "styx.yml")
+
+DEFAULT_CONFIG: dict[str, Any] = {
+    "cluster": {
+        "mode": "dual-stack",
+        "leader": "lan-elected",
+        "lan_election": {
+            "port": 47802,
+            "collect_sec": 3,
+        },
+    },
+    "gateway": {
+        "ssh_port": DEFAULT_SSH_PORT,
+        "k3s_api_port": DEFAULT_K3S_API_PORT,
+    },
+    "network": dict(DEFAULT_NETWORK),
+    "wireguard": {
+        "interface": "Styx",
+        "port": 47800,
+    },
+    "dns": {
+        "provider": "duckdns",
+        "domain": "duckdns.org",
+        "token_env": "DUCKDNS_TOKEN",
+    },
+}
 
 
 class ConfigError(RuntimeError):
@@ -37,6 +63,25 @@ def find_config(start: Path | None = None) -> Path | None:
     return None
 
 
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Apply built-in defaults and auto-assign mesh IPs from the backbone plan."""
+    if not config:
+        return {}
+    resolved = _deep_merge(DEFAULT_CONFIG, config)
+    assign_node_mesh_ips(resolved)
+    return resolved
+
+
 def load_config(path: str | Path | None = None) -> dict[str, Any]:
     candidate = Path(path) if path is not None else find_config()
     if candidate is None:
@@ -51,7 +96,7 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
         return {}
     if not isinstance(data, dict):
         raise ConfigError(f"Config file {candidate} must contain a YAML mapping at the top level")
-    return data
+    return resolve_config(data)
 
 
 def _require_mapping(value: Any, path: str, issues: list[ValidationIssue]) -> dict[str, Any] | None:
@@ -92,6 +137,8 @@ def validate_config(config: dict[str, Any]) -> list[ValidationIssue]:
         )
         return issues
 
+    config = resolve_config(config)
+
     cluster = _require_mapping(config.get("cluster"), "cluster", issues)
     if cluster:
         _require_str(cluster.get("name"), "cluster.name", issues)
@@ -128,8 +175,8 @@ def validate_config(config: dict[str, Any]) -> list[ValidationIssue]:
                         ValidationIssue("error", "cluster.lan_election.collect_sec", "expected positive number")
                     )
 
-    network = _require_mapping(config.get("network"), "network", issues)
-    if network:
+    network = config.get("network")
+    if isinstance(network, dict):
         for key in (
             "ipv4_supernet",
             "ipv6_supernet",
@@ -147,8 +194,8 @@ def validate_config(config: dict[str, Any]) -> list[ValidationIssue]:
             if key in network:
                 _validate_network_prefix(network.get(key), f"network.{key}", issues)
 
-    wireguard = _require_mapping(config.get("wireguard"), "wireguard", issues)
-    if wireguard:
+    wireguard = config.get("wireguard")
+    if isinstance(wireguard, dict):
         interface = _require_str(wireguard.get("interface"), "wireguard.interface", issues)
         if interface and interface == "wg0":
             issues.append(
@@ -221,6 +268,7 @@ def format_config_summary(config: dict[str, Any], config_path: Path | None) -> s
         lines.append("Using empty defaults.")
         return "\n".join(lines).rstrip() + "\n"
 
+    config = resolve_config(config)
     lines.append(f"Config file: {config_path}")
     cluster = config.get("cluster", {})
     wireguard = config.get("wireguard", {})
