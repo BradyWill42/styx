@@ -1287,7 +1287,7 @@ def build_install_report(
         else:
             status = "INSTALLED"
     else:
-        status = "FAILED" if not gate.ok else "FAILED"
+        status = "FAILED"
 
     return {
         "tool": "styxctl",
@@ -1425,6 +1425,7 @@ def check_cluster_gate(
 
     nodes = parse_nodes(gate.config)
     node_errors = validate_nodes(nodes, gate.config)
+    node_warnings = validate_nodes_warnings(nodes, gate.config)
     if not nodes:
         return InstallGateResult(
             ok=False,
@@ -1448,6 +1449,18 @@ def check_cluster_gate(
             sysprep_status=gate.sysprep_status,
             warnings=gate.warnings,
             blocking=node_errors,
+        )
+    if node_warnings:
+        return InstallGateResult(
+            ok=True,
+            message=gate.message,
+            config=gate.config,
+            config_path=gate.config_path,
+            config_status_value=gate.config_status_value,
+            inventory=gate.inventory,
+            sysprep_status=gate.sysprep_status,
+            warnings=[*gate.warnings, *node_warnings],
+            blocking=gate.blocking,
         )
     return gate
 
@@ -1676,14 +1689,22 @@ def run_install_cluster(
 def run_cluster_doctor(*, config_path: str | Path | None = None) -> dict[str, Any]:
     config = load_config(config_path) if config_path else load_config(find_config())
     inventory = collect_inventory()
-    nodes = parse_nodes(config)
-    local_node = identify_local_node(nodes, inventory, config)
-    ssh_user = config.get("cluster", {}).get("ssh_user") if isinstance(config.get("cluster"), dict) else None
+    effective_config, election = resolve_lan_leadership(config, inventory)
+    nodes = parse_nodes(effective_config)
+    local_node = identify_local_node(nodes, inventory, effective_config)
+    election_lan_ips, election_leader = _election_context(election)
+    ssh_user = (
+        effective_config.get("cluster", {}).get("ssh_user")
+        if isinstance(effective_config.get("cluster"), dict)
+        else None
+    )
     return assess_cluster_nodes(
-        config,
+        effective_config,
         inventory=inventory,
         ssh_user=ssh_user,
         local_node=local_node,
+        election_lan_ips=election_lan_ips,
+        election_leader=election_leader,
     )
 
 

@@ -241,6 +241,14 @@ def test_site_entrypoint_for_prefers_explicit_flag():
     assert entrypoint.name == "atlas"
 
 
+def test_site_entrypoint_for_falls_back_to_init_server():
+    nodes = parse_nodes(_colocated_config())
+    by_name = {node.name: node for node in nodes}
+    entrypoint = site_entrypoint_for(by_name["atlas"], nodes)
+    assert entrypoint is not None
+    assert entrypoint.name == "pegasus"
+
+
 def test_is_colocated_detects_shared_wan_site():
     nodes = parse_nodes(_colocated_config())
     by_name = {node.name: node for node in nodes}

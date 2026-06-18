@@ -248,6 +248,10 @@ def site_entrypoint_for(
     if len(explicit) == 1:
         return explicit[0]
 
+    init_in_site = [site_node for site_node in site_nodes if site_node.role == "init-server"]
+    if len(init_in_site) == 1:
+        return init_in_site[0]
+
     return None
 
 
