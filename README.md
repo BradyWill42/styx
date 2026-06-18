@@ -17,7 +17,6 @@
 
 - [What is Styx?](#what-is-styx)
 - [Architecture](#architecture)
-- [Repository branches](#repository-branches)
 - [Quick start](#quick-start)
 - [Milestone roadmap](#milestone-roadmap)
 - [MVP1: Assess and remediate](#mvp1-assess-and-remediate)
@@ -99,19 +98,10 @@ Each node uses `public_ipv4` (router WAN IP with port forwards) for bootstrap SS
 
 ---
 
-## Repository branches
+## Repository
 
-| Branch | Contents | Use when |
-|--------|----------|----------|
-| [`main`](https://github.com/BradyWill42/styx/tree/main) | MVP1 + MVP2 integrated release with `public_ipv4` bootstrap, DuckDNS post-cluster publish, gateway ports, and LAN leader election | Default — full platform prep and install |
-| [`MVP1`](https://github.com/BradyWill42/styx/tree/MVP1) | MVP1-only sysprep snapshot | You only need assessment and safe remediation |
-| [`MVP2`](https://github.com/BradyWill42/styx/tree/MVP2) | MVP1 + install path with `public_ipv4` bootstrap, DuckDNS post-cluster publish, gateway ports, and LAN leader election | Milestone development on the install path |
+All development happens on [`main`](https://github.com/BradyWill42/styx/tree/main). It contains the full MVP1 (sysprep) and MVP2 (install) platform, including `public_ipv4` bootstrap, DuckDNS post-cluster publish, gateway ports, and LAN leader election.
 
-All branches share the same CLI design, safety rules, and **this README**. `main` combines MVP1 and MVP2; `MVP1` and `MVP2` are preserved milestone snapshots for targeted work.
-
-Current branch notes:
-
-- Documentation audit `2026-06-18 01:00 UTC`: fetched all remote heads. `main` advanced to `0943740` with co-located shared-WAN support and site-aware status/doctor fixes; `MVP1` and `MVP2` remained at `7b38bab` from the 00:00 README audit. Active cursor branches were `cursor/colocated-nodes-lan-election-6114` at `2e65895`, `cursor/duckdns-cutover-connectivity-0281` at `c9e115a`, and `cursor/remove-mvp-branches-0281` at `f25992b`. This README-only update records the audit and documents the co-located cluster health-check surface.
 - Bootstrap connectivity uses each node's `public_ipv4` and router 1:1 port forwards (`47810` SSH, `47811` k3s API).
 - DuckDNS (`hostname`) is published only after local networking, LAN leader election, and cluster join succeed.
 - `cluster.leader: lan-elected` elects the strongest configured peer on the local LAN (UDP `47802`), ignoring peers not listed in `styx.yaml`. Co-located nodes may share one `public_ipv4` when election is enabled; the elected leader becomes that site's entrypoint for port-forwards and ProxyJump routing.
@@ -782,7 +772,7 @@ styx.yaml.example     # Reference cluster configuration
 
 ## Continuous integration
 
-Every pull request to `main`, `MVP1`, or `MVP2` runs CI. Pushes to those branches and automation branches also run CI:
+Every pull request and push to `main` runs CI:
 
 1. **Test matrix** — Python 3.10, 3.11, 3.12: pytest, CLI smoke, wheel build
 2. **Sysprep/install smoke** — read-only `sysprep`, `ports`, `config`, and `install plan/status/doctor` checks on a GitHub-hosted Ubuntu runner; uploads report artifacts
