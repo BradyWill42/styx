@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from styxctl.config import load_config
 from styxctl.lan_election import (
     LanElectionResult,
@@ -17,11 +19,9 @@ from styxctl.lan_election import (
     resolve_lan_leadership,
     run_lan_election,
 )
-from styxctl.nodes import parse_nodes
-
 from styxctl.nodes import init_server_node, parse_nodes, site_entrypoint_for
 
-from tests.support import EXAMPLE_CONFIG_PATH, homelab_config, make_inventory
+from tests.support import EXAMPLE_CONFIG_PATH, homelab_config, homelab_config_with_roles, make_inventory
 from tests.test_nodes import _colocated_config
 
 
@@ -245,3 +245,109 @@ def test_run_lan_election_keeps_roles_when_only_one_hub_peer_responds():
     effective = apply_lan_election_roles(config, election)
     nodes = parse_nodes(effective)
     assert init_server_node(nodes).name == "pegasus"
+
+
+def _hub_peers(*, pegasus_strength: int, atlas_strength: int) -> list[LanPeer]:
+    return [
+        LanPeer("pegasus", "192.168.1.10", pegasus_strength, "pegasus", "styx"),
+        LanPeer("atlas", "192.168.1.11", atlas_strength, "atlas", "styx"),
+    ]
+
+
+def _hub_election_result(
+    config: dict,
+    *,
+    pegasus_strength: int,
+    atlas_strength: int,
+) -> LanElectionResult:
+    peers = _hub_peers(pegasus_strength=pegasus_strength, atlas_strength=atlas_strength)
+    leader = elect_lan_leader(peers)
+    nodes = parse_nodes(config)
+    init_node = init_server_node(nodes)
+    init_on_lan = init_node is not None and init_node.name in {peer.node_name for peer in peers}
+    return LanElectionResult(
+        enabled=True,
+        settings=LanElectionSettings(enabled=True),
+        local_peer=peers[0],
+        peers=peers,
+        leader=leader,
+        promote_to_init_server=len(peers) >= 2 and init_on_lan and leader is not None,
+        previous_init_server=(
+            init_node.name
+            if init_on_lan and init_node and leader and leader.node_name != init_node.name
+            else None
+        ),
+        subnet="192.168.1.0/24",
+    )
+
+
+@pytest.mark.parametrize(
+    ("pegasus_role", "atlas_role", "pegasus_strength", "atlas_strength", "expected_leader"),
+    [
+        ("init-server", "server", 9000, 5000, "pegasus"),
+        ("init-server", "server", 5000, 9000, "atlas"),
+        ("server", "init-server", 9000, 5000, "pegasus"),
+        ("server", "init-server", 5000, 9000, "atlas"),
+        ("server", "server", 9000, 5000, "pegasus"),
+        ("server", "server", 5000, 9000, "atlas"),
+        ("init-server", "init-server", 9000, 5000, "pegasus"),
+        ("init-server", "init-server", 5000, 9000, "atlas"),
+    ],
+)
+def test_lan_election_picks_strongest_for_configured_role_combinations(
+    pegasus_role: str,
+    atlas_role: str,
+    pegasus_strength: int,
+    atlas_strength: int,
+    expected_leader: str,
+):
+    config = homelab_config_with_roles(pegasus_role=pegasus_role, atlas_role=atlas_role)
+    election = _hub_election_result(
+        config,
+        pegasus_strength=pegasus_strength,
+        atlas_strength=atlas_strength,
+    )
+
+    assert election.leader is not None
+    assert election.leader.node_name == expected_leader
+    assert election.leader.strength == max(pegasus_strength, atlas_strength)
+
+
+@pytest.mark.parametrize(
+    ("pegasus_role", "atlas_role", "pegasus_strength", "atlas_strength", "expected_leader"),
+    [
+        ("init-server", "server", 5000, 9000, "atlas"),
+        ("init-server", "agent", 9000, 5000, "pegasus"),
+        ("server", "init-server", 9000, 5000, "pegasus"),
+        ("init-server", "init-server", 5000, 9000, "atlas"),
+    ],
+)
+def test_apply_lan_election_roles_promotes_strongest_leader(
+    pegasus_role: str,
+    atlas_role: str,
+    pegasus_strength: int,
+    atlas_strength: int,
+    expected_leader: str,
+):
+    config = homelab_config_with_roles(pegasus_role=pegasus_role, atlas_role=atlas_role)
+    election = _hub_election_result(
+        config,
+        pegasus_strength=pegasus_strength,
+        atlas_strength=atlas_strength,
+    )
+
+    roles_before = {node.name: node.role for node in parse_nodes(config)}
+    effective = apply_lan_election_roles(config, election)
+    roles_after = {node.name: node.role for node in parse_nodes(effective)}
+
+    if election.promote_to_init_server:
+        assert roles_after[expected_leader] == "init-server"
+        for name, role in roles_before.items():
+            if name == expected_leader:
+                continue
+            if role == "init-server":
+                assert roles_after[name] == "server"
+    else:
+        assert roles_after == roles_before
+        assert election.leader is not None
+        assert election.leader.node_name == expected_leader
