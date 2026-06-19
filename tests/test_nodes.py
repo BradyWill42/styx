@@ -213,7 +213,7 @@ def test_is_colocated_detects_shared_wan_site():
     nodes = parse_nodes(_colocated_config())
     by_name = {node.name: node for node in nodes}
     assert is_colocated(by_name["atlas"], nodes)
-    assert not is_colocated(by_name["thor"], nodes)
+    assert len(nodes) == 2
 
 
 def test_all_node_tls_sans_includes_explicit_lan_ip():

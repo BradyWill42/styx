@@ -192,8 +192,8 @@ def test_resolve_lan_leadership_keeps_config_when_static():
     assert parse_nodes(effective)[0].role == "init-server"
 
 
-def test_elect_lan_leader_with_only_colocated_peers_when_thor_offline():
-    """Remote site (thor) offline: pegasus and atlas still elect a hub leader."""
+def test_elect_lan_leader_with_colocated_hub_peers():
+    """pegasus and atlas elect a hub leader on their shared LAN."""
     peers = [
         LanPeer("pegasus", "192.168.1.10", 9000, "pegasus", "styx"),
         LanPeer("atlas", "192.168.1.11", 5000, "atlas", "styx"),
@@ -203,7 +203,7 @@ def test_elect_lan_leader_with_only_colocated_peers_when_thor_offline():
     assert leader.node_name == "pegasus"
 
 
-def test_resolve_lan_leadership_elects_hub_leader_when_remote_site_absent():
+def test_resolve_lan_leadership_elects_hub_leader_between_init_server_and_agent():
     config = homelab_config()
     election = LanElectionResult(
         enabled=True,
@@ -223,11 +223,10 @@ def test_resolve_lan_leadership_elects_hub_leader_when_remote_site_absent():
     nodes = parse_nodes(effective)
     by_name = {node.name: node for node in nodes}
 
-    assert "thor" not in {peer.node_name for peer in election.peers}
+    assert set(by_name) == {"pegasus", "atlas"}
     assert by_name["pegasus"].role == "init-server"
-    assert by_name["atlas"].role == "server"
+    assert by_name["atlas"].role == "agent"
     assert by_name["pegasus"].site_entrypoint is True
-    assert by_name["thor"].role == "server"
     assert site_entrypoint_for(by_name["atlas"], nodes).name == "pegasus"
 
 

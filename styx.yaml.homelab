@@ -1,5 +1,5 @@
-# Homelab cluster config for atlas, pegasus, and thor self-hosted runners.
-# pegasus and atlas share one WAN IP (co-located LAN hub); thor is a remote site.
+# Homelab cluster config for co-located atlas and pegasus runners.
+# Both nodes share one WAN IP; LAN election picks the init-server on the hub.
 cluster:
   name: styx
   leader: lan-elected
@@ -18,7 +18,6 @@ dns:
   fixed_endpoints:
     pegasus: pegasus
     atlas: atlas
-    thor: thor
 
 nodes:
   - name: pegasus
@@ -33,11 +32,5 @@ nodes:
     lan_ip: 192.168.1.11
     ipv4: 10.0.0.2
     ipv6: fd00:cafe::2
-    role: server
+    role: agent
     hostname: atlas.duckdns.org
-  - name: thor
-    public_ipv4: 108.35.35.192
-    ipv4: 10.0.0.3
-    ipv6: fd00:cafe::3
-    role: server
-    hostname: thor.duckdns.org
