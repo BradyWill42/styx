@@ -742,30 +742,29 @@ styx.yaml.example     # Reference cluster configuration
 Every pull request and push to `main` runs CI:
 
 1. **Test matrix** (GitHub-hosted) — Python 3.10, 3.11, 3.12: pytest, CLI smoke, wheel build
-2. **Styx gateway checks** (self-hosted) — pytest, sysprep, plan, and LAN hub election on each **online** runner (`atlas`, `pegasus`, `thor`; offline hosts are skipped)
+2. **Styx gateway checks** (self-hosted) — pytest, LAN election, and read-only checks on **pegasus** and **atlas** (init-server + agent hub)
 3. **Sysprep smoke** (GitHub-hosted fallback) — same read-only checks on `ubuntu-latest` when self-hosted runners are offline
 
 ### Self-hosted runners
 
-Account runners registered for this repository:
+Account runners used for hub testing:
 
 | Runner | Typical role labels | Notes |
 |--------|---------------------|-------|
-| `pegasus` | `init-server`, `server` | Preferred init node for cluster jobs |
-| `atlas` | `init-server`, `server`, `agent` | |
-| `thor` | `init-server`, `server` | Skipped automatically when offline |
+| `pegasus` | `init-server`, `server` | Configured init-server in homelab styx.yaml |
+| `atlas` | `init-server`, `server`, `agent` | Configured agent in homelab styx.yaml |
 
-Workflows query the GitHub API at runtime and only schedule matrix jobs on runners with `status: online`. Offline hosts (e.g. thor) are not tested until they come back idle.
+The gateway workflow targets **pegasus** and **atlas** only. Both share one WAN IP; LAN election (`cluster.leader: lan-elected`) elects the hub init-server between them.
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | **Runner smoke** | Manual | Confirm each **online** runner picks up jobs |
-| **Styx gateway checks** | Push / PR | Pytest, read-only checks, and LAN hub election on all live nodes |
+| **Styx gateway checks** | Push / PR | Pytest, LAN election, and read-only checks on pegasus + atlas |
 | **Styx cluster E2E** | Manual | Full install, cluster join, uninstall (live nodes only) |
 
 Start with **Runner smoke** (`workflow_dispatch`), then push to `main` to exercise **Styx gateway checks**.
 
-View results in the repository **Actions** tab. Gateway workflows upload per-runner report artifacts (`styx-gateway-report-atlas`, etc.).
+View results in the repository **Actions** tab. Gateway workflows upload per-runner report artifacts (`styx-gateway-report-pegasus`, `styx-lan-election-atlas`, etc.).
 
 ---
 

@@ -29,7 +29,7 @@ def example_config_text() -> str:
 
 
 def homelab_config(*, leader: str = "lan-elected", atlas_lan_ip: str | None = "192.168.1.11") -> dict[str, Any]:
-    """Homelab topology: pegasus + atlas co-located, thor remote."""
+    """Homelab topology: pegasus (init-server) + atlas (agent) on one LAN."""
     return {
         "cluster": {"leader": leader, "ssh_user": "ubuntu"},
         "gateway": {"ssh_port": 47810, "k3s_api_port": 47811},
@@ -39,7 +39,6 @@ def homelab_config(*, leader: str = "lan-elected", atlas_lan_ip: str | None = "1
             "fixed_endpoints": {
                 "pegasus": "pegasus",
                 "atlas": "atlas",
-                "thor": "thor",
             },
         },
         "nodes": [
@@ -58,16 +57,8 @@ def homelab_config(*, leader: str = "lan-elected", atlas_lan_ip: str | None = "1
                 "lan_ip": atlas_lan_ip,
                 "ipv4": "10.0.0.2",
                 "ipv6": "fd00:cafe::2",
-                "role": "server",
+                "role": "agent",
                 "hostname": "atlas.duckdns.org",
-            },
-            {
-                "name": "thor",
-                "public_ipv4": "108.35.35.192",
-                "ipv4": "10.0.0.3",
-                "ipv6": "fd00:cafe::3",
-                "role": "server",
-                "hostname": "thor.duckdns.org",
             },
         ],
     }
