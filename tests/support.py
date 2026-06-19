@@ -30,6 +30,22 @@ def example_config_text() -> str:
 
 def homelab_config(*, leader: str = "lan-elected", atlas_lan_ip: str | None = "192.168.1.11") -> dict[str, Any]:
     """Homelab topology: pegasus (init-server) + atlas (agent) on one LAN."""
+    return homelab_config_with_roles(
+        pegasus_role="init-server",
+        atlas_role="agent",
+        leader=leader,
+        atlas_lan_ip=atlas_lan_ip,
+    )
+
+
+def homelab_config_with_roles(
+    *,
+    pegasus_role: str = "init-server",
+    atlas_role: str = "server",
+    leader: str = "lan-elected",
+    atlas_lan_ip: str | None = "192.168.1.11",
+) -> dict[str, Any]:
+    """Homelab hub with configurable roles for pegasus and atlas."""
     return {
         "cluster": {"leader": leader, "ssh_user": "ubuntu"},
         "gateway": {"ssh_port": 47810, "k3s_api_port": 47811},
@@ -48,7 +64,7 @@ def homelab_config(*, leader: str = "lan-elected", atlas_lan_ip: str | None = "1
                 "lan_ip": "192.168.1.10",
                 "ipv4": "10.0.0.1",
                 "ipv6": "fd00:cafe::1",
-                "role": "init-server",
+                "role": pegasus_role,
                 "hostname": "pegasus.duckdns.org",
             },
             {
@@ -57,7 +73,7 @@ def homelab_config(*, leader: str = "lan-elected", atlas_lan_ip: str | None = "1
                 "lan_ip": atlas_lan_ip,
                 "ipv4": "10.0.0.2",
                 "ipv6": "fd00:cafe::2",
-                "role": "agent",
+                "role": atlas_role,
                 "hostname": "atlas.duckdns.org",
             },
         ],

@@ -62,6 +62,39 @@ def main() -> int:
         print("Expected role promotion when both hub peers are present", file=sys.stderr)
         return 1
 
+    peers = election.get("peers") or []
+    if len(peers) >= 2 and leader_name:
+        leader_strength = leader.get("strength")
+        max_strength = max(int(peer.get("strength", 0)) for peer in peers)
+        if leader_strength is None or int(leader_strength) < max_strength:
+            print(
+                f"Elected leader {leader_name!r} strength {leader_strength!r} "
+                f"is weaker than max peer strength {max_strength}",
+                file=sys.stderr,
+            )
+            return 1
+        tied = [
+            peer.get("node_name")
+            for peer in peers
+            if int(peer.get("strength", 0)) == int(leader_strength)
+        ]
+        if leader_name not in tied:
+            print(f"Leader {leader_name!r} is not among strongest peers {tied}", file=sys.stderr)
+            return 1
+        if int(leader_strength) == max_strength:
+            expected = max(
+                ((peer.get("node_name"), int(peer.get("strength", 0))) for peer in peers),
+                key=lambda item: (item[1], item[0]),
+            )[0]
+            if leader_name != expected:
+                print(
+                    f"Expected strongest peer {expected!r} by strength/name tiebreak, "
+                    f"got {leader_name!r}",
+                    file=sys.stderr,
+                )
+                return 1
+        print(f"Leader strength: {leader_strength} (max among peers: {max_strength})")
+
     from styxctl.config import load_config
     from styxctl.lan_election import apply_lan_election_roles
     from styxctl.lan_election import LanElectionResult, LanElectionSettings, LanPeer
