@@ -742,30 +742,30 @@ styx.yaml.example     # Reference cluster configuration
 Every pull request and push to `main` runs CI:
 
 1. **Test matrix** (GitHub-hosted) — Python 3.10, 3.11, 3.12: pytest, CLI smoke, wheel build
-2. **Styx gateway checks** (self-hosted) — sysprep, plan, and status on each labeled runner (`node-init`, `node-server`, `node-agent`)
+2. **Styx gateway checks** (self-hosted) — sysprep, plan, and status on each **online** runner (`atlas`, `pegasus`, `thor`; offline hosts are skipped)
 3. **Sysprep smoke** (GitHub-hosted fallback) — same read-only checks on `ubuntu-latest` when self-hosted runners are offline
 
 ### Self-hosted runners
 
-Register three account or repository runners with labels:
+Account runners registered for this repository:
 
-| Pi | Runner name (example) | Labels |
-|----|------------------------|--------|
-| init | `styx-node-init` | `styx`, `node-init` |
-| server | `styx-node-server` | `styx`, `node-server` |
-| agent | `styx-node-agent` | `styx`, `node-agent` |
+| Runner | Typical role labels | Notes |
+|--------|---------------------|-------|
+| `pegasus` | `init-server`, `server` | Preferred init node for cluster jobs |
+| `atlas` | `init-server`, `server`, `agent` | |
+| `thor` | `init-server`, `server` | Skipped automatically when offline |
 
-Workflows:
+Workflows query the GitHub API at runtime and only schedule matrix jobs on runners with `status: online`. Offline hosts (e.g. thor) are not tested until they come back idle.
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| **Runner smoke** | Manual | Confirm each runner picks up jobs |
-| **Styx gateway checks** | Push / PR | Read-only checks on all 3 nodes |
-| **Styx cluster E2E** | Manual | Full install, cluster join, uninstall |
+| **Runner smoke** | Manual | Confirm each **online** runner picks up jobs |
+| **Styx gateway checks** | Push / PR | Read-only checks on all live nodes |
+| **Styx cluster E2E** | Manual | Full install, cluster join, uninstall (live nodes only) |
 
 Start with **Runner smoke** (`workflow_dispatch`), then push to `main` to exercise **Styx gateway checks**.
 
-View results in the repository **Actions** tab. Gateway workflows upload per-node report artifacts (`styx-gateway-report-node-init`, etc.).
+View results in the repository **Actions** tab. Gateway workflows upload per-runner report artifacts (`styx-gateway-report-atlas`, etc.).
 
 ---
 

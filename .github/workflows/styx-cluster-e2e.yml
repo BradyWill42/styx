@@ -1,13 +1,8 @@
-# Full 3-node cluster install on self-hosted Styx runners.
+# Full cluster install on live self-hosted runners only.
 #
 # Destructive: installs k3s and Styx WireGuard, joins the cluster, then uninstalls.
-# Requires:
-#   - Runners labeled styx + node-init / node-server / node-agent
-#   - Passwordless sudo for the runner user
-#   - styx.yaml on each Pi matching that host (or edit styx.yaml.example hostnames)
-#   - SSH keys and port forwards between nodes for cluster join
-#
-# Trigger manually from the Actions tab until your lab networking is verified.
+# Offline runners are skipped. Cluster orchestration runs on the online init-server
+# runner (prefers pegasus, then atlas, then thor).
 
 name: Styx cluster E2E
 
@@ -23,14 +18,59 @@ concurrency:
   group: styx-cluster-e2e
   cancel-in-progress: false
 
+permissions:
+  actions: read
+  contents: read
+
 jobs:
+  discover-runners:
+    name: Discover online runners
+    runs-on: ubuntu-latest
+    outputs:
+      runners: ${{ steps.discover.outputs.runners }}
+      init_runner: ${{ steps.discover.outputs.init_runner }}
+    steps:
+      - name: List live self-hosted runners
+        id: discover
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.actions.listSelfHostedRunnersForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+
+            const online = data.runners.filter((runner) => runner.status === "online");
+            const names = online.map((runner) => runner.name).sort();
+
+            const initPreference = ["pegasus", "atlas", "thor"];
+            const initCandidates = online.filter((runner) =>
+              runner.labels.some((label) => label.name === "init-server")
+            );
+            const initRunner =
+              initPreference.find((name) =>
+                initCandidates.some((runner) => runner.name === name)
+              ) || initCandidates[0]?.name || "";
+
+            core.info(`Online runners: ${names.join(", ") || "none"}`);
+            core.info(`Init runner: ${initRunner || "none"}`);
+
+            if (names.length === 0) {
+              core.setFailed("No online self-hosted runners available");
+            }
+
+            core.setOutput("runners", JSON.stringify(names));
+            core.setOutput("init_runner", initRunner);
+
   install-local:
-    name: Install local (${{ matrix.node_label }})
+    name: Install local (${{ matrix.runner }})
+    needs: discover-runners
+    if: needs.discover-runners.outputs.runners != '[]'
     strategy:
       fail-fast: false
       matrix:
-        node_label: [node-init, node-server, node-agent]
-    runs-on: [self-hosted, styx, "${{ matrix.node_label }}"]
+        runner: ${{ fromJson(needs.discover-runners.outputs.runners) }}
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@v4
@@ -63,8 +103,9 @@ jobs:
 
   cluster-join:
     name: Cluster join
-    needs: install-local
-    runs-on: [self-hosted, styx, node-init]
+    needs: [discover-runners, install-local]
+    if: needs.discover-runners.outputs.init_runner != ''
+    runs-on: ${{ needs.discover-runners.outputs.init_runner }}
 
     steps:
       - uses: actions/checkout@v4
@@ -95,9 +136,9 @@ jobs:
 
   uninstall:
     name: Cluster uninstall
-    needs: cluster-join
-    if: always() && inputs.skip_uninstall != true
-    runs-on: [self-hosted, styx, node-init]
+    needs: [discover-runners, cluster-join]
+    if: always() && inputs.skip_uninstall != true && needs.discover-runners.outputs.init_runner != ''
+    runs-on: ${{ needs.discover-runners.outputs.init_runner }}
 
     steps:
       - uses: actions/checkout@v4
