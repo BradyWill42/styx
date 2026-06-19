@@ -1,0 +1,28 @@
+# Quick connectivity test for self-hosted runners.
+# Runs on ANY idle runner with the "styx" label.
+# Use this first to confirm GitHub can reach your fleet.
+
+name: Runner smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ping:
+    name: Runner ping (${{ matrix.node_label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        node_label: [node-init, node-server, node-agent]
+    runs-on: [self-hosted, styx, "${{ matrix.node_label }}"]
+
+    steps:
+      - run: |
+          echo "Runner name: $RUNNER_NAME"
+          echo "Runner labels: $RUNNER_LABELS"
+          echo "Hostname: $(hostname -f)"
+          echo "User: $(whoami)"
+          echo "Architecture: $(uname -m)"
+          command -v python3
+          command -v sudo
+          sudo -n true && echo "passwordless sudo: yes" || echo "passwordless sudo: no"

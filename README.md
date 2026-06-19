@@ -741,12 +741,31 @@ styx.yaml.example     # Reference cluster configuration
 
 Every pull request and push to `main` runs CI:
 
-1. **Test matrix** — Python 3.10, 3.11, 3.12: pytest, CLI smoke, wheel build
-2. **Sysprep/install smoke** — read-only `sysprep`, `ports`, `config`, and `install plan/status/doctor` checks on a GitHub-hosted Ubuntu runner; uploads report artifacts
+1. **Test matrix** (GitHub-hosted) — Python 3.10, 3.11, 3.12: pytest, CLI smoke, wheel build
+2. **Styx gateway checks** (self-hosted) — sysprep, plan, and status on each labeled runner (`node-init`, `node-server`, `node-agent`)
+3. **Sysprep smoke** (GitHub-hosted fallback) — same read-only checks on `ubuntu-latest` when self-hosted runners are offline
 
-View results in the repository **Actions** tab. Download the **sysprep-report-github-hosted** artifact to inspect JSON and text reports from CI.
+### Self-hosted runners
 
-CI validates the full check and plan path on real Linux, but it is **not** a substitute for running MVP1 on your own gateway hardware.
+Register three account or repository runners with labels:
+
+| Pi | Runner name (example) | Labels |
+|----|------------------------|--------|
+| init | `styx-node-init` | `styx`, `node-init` |
+| server | `styx-node-server` | `styx`, `node-server` |
+| agent | `styx-node-agent` | `styx`, `node-agent` |
+
+Workflows:
+
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| **Runner smoke** | Manual | Confirm each runner picks up jobs |
+| **Styx gateway checks** | Push / PR | Read-only checks on all 3 nodes |
+| **Styx cluster E2E** | Manual | Full install, cluster join, uninstall |
+
+Start with **Runner smoke** (`workflow_dispatch`), then push to `main` to exercise **Styx gateway checks**.
+
+View results in the repository **Actions** tab. Gateway workflows upload per-node report artifacts (`styx-gateway-report-node-init`, etc.).
 
 ---
 

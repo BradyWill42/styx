@@ -41,7 +41,7 @@ jobs:
         run: python -m pip install build && python -m build
 
   sysprep-smoke:
-    name: Sysprep check (GitHub-hosted)
+    name: Sysprep smoke (GitHub-hosted fallback)
     runs-on: ubuntu-latest
 
     steps:

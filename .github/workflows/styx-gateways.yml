@@ -1,0 +1,119 @@
+# Gateway checks on self-hosted Styx runners.
+#
+# Expected runner labels (set during ./config.sh on each Pi):
+#   node-init:  styx, node-init
+#   node-server: styx, node-server
+#   node-agent:  styx, node-agent
+#
+# Every self-hosted runner also gets the default label: self-hosted
+
+name: Styx gateway checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: styx-gateways-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gateway-check:
+    name: Gateway check (${{ matrix.node_label }})
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        node_label: [node-init, node-server, node-agent]
+    runs-on: [self-hosted, styx, "${{ matrix.node_label }}"]
+
+    steps:
+      - name: Identify runner host
+        run: |
+          echo "Runner labels: $RUNNER_LABELS"
+          echo "Hostname: $(hostname -s)"
+          echo "Architecture: $(uname -m)"
+
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install styxctl
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Prepare styx.yaml
+        run: cp styx.yaml.example styx.yaml
+
+      - name: Sysprep and plan checks
+        run: |
+          styxctl sysprep check local
+          styxctl sysprep safe plan local
+          styxctl ports check local
+          styxctl config validate
+          styxctl install plan local
+          styxctl install plan cluster
+          styxctl uninstall plan local
+          styxctl uninstall plan cluster
+          styxctl install status local || true
+          styxctl install doctor local || true
+
+      - name: Verify sysprep report
+        run: |
+          test -d reports/styx
+          hostname="$(ls reports/styx | head -n1)"
+          test -f "reports/styx/${hostname}/sysprep-report.json"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report_dir = next(Path("reports/styx").iterdir())
+          report = json.loads((report_dir / "sysprep-report.json").read_text())
+          assert report["status"] in {"READY", "READY_WITH_WARNINGS", "BLOCKED"}
+          print(f"Sysprep status on {report_dir.name}: {report['status']}")
+          PY
+
+      - name: Upload gateway reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: styx-gateway-report-${{ matrix.node_label }}
+          path: reports/styx/
+          if-no-files-found: error
+
+  cluster-plan:
+    name: Cluster plan (init node)
+    needs: gateway-check
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, styx, node-init]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install styxctl
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Prepare styx.yaml
+        run: cp styx.yaml.example styx.yaml
+
+      - name: Cluster status and doctor
+        run: |
+          styxctl install status cluster || true
+          styxctl install doctor cluster || true

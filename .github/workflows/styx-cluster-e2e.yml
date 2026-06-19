@@ -1,0 +1,124 @@
+# Full 3-node cluster install on self-hosted Styx runners.
+#
+# Destructive: installs k3s and Styx WireGuard, joins the cluster, then uninstalls.
+# Requires:
+#   - Runners labeled styx + node-init / node-server / node-agent
+#   - Passwordless sudo for the runner user
+#   - styx.yaml on each Pi matching that host (or edit styx.yaml.example hostnames)
+#   - SSH keys and port forwards between nodes for cluster join
+#
+# Trigger manually from the Actions tab until your lab networking is verified.
+
+name: Styx cluster E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_uninstall:
+        description: Leave Styx/k3s installed after the run
+        type: boolean
+        default: false
+
+concurrency:
+  group: styx-cluster-e2e
+  cancel-in-progress: false
+
+jobs:
+  install-local:
+    name: Install local (${{ matrix.node_label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        node_label: [node-init, node-server, node-agent]
+    runs-on: [self-hosted, styx, "${{ matrix.node_label }}"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install styxctl
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Use repo or existing styx.yaml
+        run: |
+          if [ -f /etc/styx/styx.yaml ]; then
+            cp /etc/styx/styx.yaml styx.yaml
+            echo "Using /etc/styx/styx.yaml"
+          else
+            cp styx.yaml.example styx.yaml
+            echo "Using styx.yaml.example from repo"
+          fi
+
+      - name: Install local foundation
+        run: styxctl install apply local
+
+      - name: Local install status
+        run: styxctl install status local
+
+  cluster-join:
+    name: Cluster join
+    needs: install-local
+    runs-on: [self-hosted, styx, node-init]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install styxctl
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Use repo or existing styx.yaml
+        run: |
+          if [ -f /etc/styx/styx.yaml ]; then
+            cp /etc/styx/styx.yaml styx.yaml
+          else
+            cp styx.yaml.example styx.yaml
+          fi
+
+      - name: Join cluster
+        run: styxctl install apply cluster
+
+      - name: Cluster doctor
+        run: styxctl install doctor cluster
+
+  uninstall:
+    name: Cluster uninstall
+    needs: cluster-join
+    if: always() && inputs.skip_uninstall != true
+    runs-on: [self-hosted, styx, node-init]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install styxctl
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Use repo or existing styx.yaml
+        run: |
+          if [ -f /etc/styx/styx.yaml ]; then
+            cp /etc/styx/styx.yaml styx.yaml
+          else
+            cp styx.yaml.example styx.yaml
+          fi
+
+      - name: Uninstall cluster
+        run: styxctl uninstall apply cluster
