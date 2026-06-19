@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from styxctl.config import load_config
 from styxctl.lan_election import (
+    LanElectionResult,
     LanElectionSettings,
     LanPeer,
     apply_lan_election_roles,
@@ -18,7 +19,9 @@ from styxctl.lan_election import (
 )
 from styxctl.nodes import parse_nodes
 
-from tests.support import EXAMPLE_CONFIG_PATH, make_inventory
+from styxctl.nodes import init_server_node, parse_nodes, site_entrypoint_for
+
+from tests.support import EXAMPLE_CONFIG_PATH, homelab_config, make_inventory
 from tests.test_nodes import _colocated_config
 
 
@@ -187,3 +190,59 @@ def test_resolve_lan_leadership_keeps_config_when_static():
     effective, election = resolve_lan_leadership(config, make_inventory())
     assert election.enabled is False
     assert parse_nodes(effective)[0].role == "init-server"
+
+
+def test_elect_lan_leader_with_only_colocated_peers_when_thor_offline():
+    """Remote site (thor) offline: pegasus and atlas still elect a hub leader."""
+    peers = [
+        LanPeer("pegasus", "192.168.1.10", 9000, "pegasus", "styx"),
+        LanPeer("atlas", "192.168.1.11", 5000, "atlas", "styx"),
+    ]
+    leader = elect_lan_leader(peers)
+    assert leader is not None
+    assert leader.node_name == "pegasus"
+
+
+def test_resolve_lan_leadership_elects_hub_leader_when_remote_site_absent():
+    config = homelab_config()
+    election = LanElectionResult(
+        enabled=True,
+        settings=LanElectionSettings(enabled=True),
+        local_peer=LanPeer("atlas", "192.168.1.11", 5000, "atlas", "styx"),
+        peers=[
+            LanPeer("pegasus", "192.168.1.10", 9000, "pegasus", "styx"),
+            LanPeer("atlas", "192.168.1.11", 5000, "atlas", "styx"),
+        ],
+        leader=LanPeer("pegasus", "192.168.1.10", 9000, "pegasus", "styx"),
+        promote_to_init_server=True,
+        previous_init_server=None,
+        subnet="192.168.1.0/24",
+    )
+
+    effective = apply_lan_election_roles(config, election)
+    nodes = parse_nodes(effective)
+    by_name = {node.name: node for node in nodes}
+
+    assert "thor" not in {peer.node_name for peer in election.peers}
+    assert by_name["pegasus"].role == "init-server"
+    assert by_name["atlas"].role == "server"
+    assert by_name["pegasus"].site_entrypoint is True
+    assert by_name["thor"].role == "server"
+    assert site_entrypoint_for(by_name["atlas"], nodes).name == "pegasus"
+
+
+def test_run_lan_election_keeps_roles_when_only_one_hub_peer_responds():
+    config = homelab_config()
+    election = run_lan_election(
+        config,
+        make_inventory(hostname="pegasus", primary_lan_ip="192.168.1.10", bootstrap_ipv4="192.168.1.10"),
+    )
+    election.enabled = True
+    election.peers = [LanPeer("pegasus", "192.168.1.10", 9000, "pegasus", "styx")]
+    election.leader = election.peers[0]
+    election.promote_to_init_server = False
+    election.warnings = ["only one Styx peer on this LAN; keeping configured roles"]
+
+    effective = apply_lan_election_roles(config, election)
+    nodes = parse_nodes(effective)
+    assert init_server_node(nodes).name == "pegasus"

@@ -15,51 +15,11 @@ from styxctl.nodes import (
 )
 from styxctl.ports import PortScanResult
 
-from tests.support import EXAMPLE_CONFIG_PATH
+from tests.support import EXAMPLE_CONFIG_PATH, homelab_config
 
 
 def _colocated_config(*, leader: str = "lan-elected", atlas_lan_ip: str | None = "192.168.1.11"):
-    return {
-        "cluster": {"leader": leader, "ssh_user": "ubuntu"},
-        "gateway": {"ssh_port": 47810, "k3s_api_port": 47811},
-        "dns": {
-            "provider": "duckdns",
-            "domain": "duckdns.org",
-            "fixed_endpoints": {
-                "pegasus": "pegasus",
-                "atlas": "atlas",
-                "thor": "thor",
-            },
-        },
-        "nodes": [
-            {
-                "name": "pegasus",
-                "public_ipv4": "71.104.114.70",
-                "lan_ip": "192.168.1.10",
-                "ipv4": "10.0.0.1",
-                "ipv6": "fd00:cafe::1",
-                "role": "init-server",
-                "hostname": "pegasus.duckdns.org",
-            },
-            {
-                "name": "atlas",
-                "public_ipv4": "71.104.114.70",
-                "lan_ip": atlas_lan_ip,
-                "ipv4": "10.0.0.2",
-                "ipv6": "fd00:cafe::2",
-                "role": "server",
-                "hostname": "atlas.duckdns.org",
-            },
-            {
-                "name": "thor",
-                "public_ipv4": "108.35.35.192",
-                "ipv4": "10.0.0.3",
-                "ipv6": "fd00:cafe::3",
-                "role": "server",
-                "hostname": "thor.duckdns.org",
-            },
-        ],
-    }
+    return homelab_config(leader=leader, atlas_lan_ip=atlas_lan_ip)
 
 
 def _inventory(**overrides) -> SystemInventory:

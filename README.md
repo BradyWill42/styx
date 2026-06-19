@@ -742,7 +742,7 @@ styx.yaml.example     # Reference cluster configuration
 Every pull request and push to `main` runs CI:
 
 1. **Test matrix** (GitHub-hosted) — Python 3.10, 3.11, 3.12: pytest, CLI smoke, wheel build
-2. **Styx gateway checks** (self-hosted) — sysprep, plan, and status on each **online** runner (`atlas`, `pegasus`, `thor`; offline hosts are skipped)
+2. **Styx gateway checks** (self-hosted) — pytest, sysprep, plan, and LAN hub election on each **online** runner (`atlas`, `pegasus`, `thor`; offline hosts are skipped)
 3. **Sysprep smoke** (GitHub-hosted fallback) — same read-only checks on `ubuntu-latest` when self-hosted runners are offline
 
 ### Self-hosted runners
@@ -760,7 +760,7 @@ Workflows query the GitHub API at runtime and only schedule matrix jobs on runne
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | **Runner smoke** | Manual | Confirm each **online** runner picks up jobs |
-| **Styx gateway checks** | Push / PR | Read-only checks on all live nodes |
+| **Styx gateway checks** | Push / PR | Pytest, read-only checks, and LAN hub election on all live nodes |
 | **Styx cluster E2E** | Manual | Full install, cluster join, uninstall (live nodes only) |
 
 Start with **Runner smoke** (`workflow_dispatch`), then push to `main` to exercise **Styx gateway checks**.
