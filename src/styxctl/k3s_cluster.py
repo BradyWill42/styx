@@ -56,13 +56,20 @@ def _init_join_host(
     joining_node: ClusterNode,
     *,
     election_lan_ips: dict[str, str] | None = None,
+    inventory: SystemInventory | None = None,
+    local_node: ClusterNode | None = None,
 ) -> str | None:
     if (
         init_node.public_ipv4
         and joining_node.public_ipv4
         and init_node.public_ipv4 == joining_node.public_ipv4
     ):
-        return node_effective_lan_ip(init_node, election_lan_ips=election_lan_ips) or init_node.public_ipv4
+        return node_effective_lan_ip(
+            init_node,
+            election_lan_ips=election_lan_ips,
+            inventory=inventory,
+            local_node=local_node,
+        ) or init_node.public_ipv4
     return init_node.public_ipv4
 
 
@@ -71,8 +78,14 @@ def _init_ssh_host(
     *,
     inventory: SystemInventory | None = None,
     election_lan_ips: dict[str, str] | None = None,
+    local_node: ClusterNode | None = None,
 ) -> str | None:
-    init_lan = node_effective_lan_ip(init_node, election_lan_ips=election_lan_ips)
+    init_lan = node_effective_lan_ip(
+        init_node,
+        election_lan_ips=election_lan_ips,
+        inventory=inventory,
+        local_node=local_node,
+    )
     if init_lan and _operator_on_lan(inventory, init_lan):
         return init_lan
     return init_node.public_ipv4
@@ -97,7 +110,12 @@ def _node_ssh_connection(
         election_lan_ips=election_lan_ips,
         election_leader=election_leader,
     )
-    lan_ip = node_effective_lan_ip(node, election_lan_ips=election_lan_ips)
+    lan_ip = node_effective_lan_ip(
+        node,
+        election_lan_ips=election_lan_ips,
+        inventory=inventory,
+        local_node=local_node,
+    )
 
     if not is_colocated(node, nodes) or (entrypoint is not None and node.name == entrypoint.name):
         host = (
@@ -220,6 +238,9 @@ def k3s_install_spec(
     all_nodes: list[ClusterNode],
     join_url: str | None = None,
     join_token: str | None = None,
+    inventory: SystemInventory | None = None,
+    local_node: ClusterNode | None = None,
+    election_lan_ips: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], list[str], str]:
     args = _k3s_network_args(config)
     args.extend(k3s_gateway_listen_args(config, server_role=node.role in {"init-server", "server"}))
@@ -227,7 +248,13 @@ def k3s_install_spec(
 
     for ip in node.all_ips():
         args.extend(["--node-ip", ip])
-    for san in all_node_tls_sans(all_nodes, config):
+    for san in all_node_tls_sans(
+        all_nodes,
+        config,
+        election_lan_ips=election_lan_ips,
+        inventory=inventory,
+        local_node=local_node,
+    ):
         args.extend(["--tls-san", san])
 
     if node.role == "init-server":
@@ -301,6 +328,8 @@ def build_cluster_plan(
                 init_node,
                 node,
                 election_lan_ips=election_lan_ips,
+                inventory=inventory,
+                local_node=local_node,
             )
             if join_host:
                 node_join_url = k3s_join_url(join_host, gateway)
@@ -312,6 +341,9 @@ def build_cluster_plan(
             all_nodes=nodes,
             join_url=node_join_url if node.role != "init-server" else None,
             join_token=join_token if node.role != "init-server" else None,
+            inventory=inventory,
+            local_node=local_node,
+            election_lan_ips=election_lan_ips,
         )
         plans.append(
             ClusterNodePlan(
@@ -319,7 +351,13 @@ def build_cluster_plan(
                 role=node.role,
                 target_host=host,
                 node_ips=node.all_ips(),
-                tls_sans=all_node_tls_sans(nodes, config),
+                tls_sans=all_node_tls_sans(
+                    nodes,
+                    config,
+                    election_lan_ips=election_lan_ips,
+                    inventory=inventory,
+                    local_node=local_node,
+                ),
                 k3s_env=env,
                 k3s_args=args,
                 command_display=display,
@@ -335,6 +373,7 @@ def build_cluster_plan(
             init_node,
             inventory=inventory,
             election_lan_ips=election_lan_ips,
+            local_node=local_node,
         )
         if join_host:
             representative_join_url = k3s_join_url(join_host, gateway)
@@ -608,6 +647,7 @@ def assess_cluster_nodes(
                     init_node,
                     inventory=inventory,
                     election_lan_ips=election_lan_ips,
+                    local_node=local_node,
                 )
                 or "",
                 gateway,
@@ -617,6 +657,7 @@ def assess_cluster_nodes(
                 init_node,
                 inventory=inventory,
                 election_lan_ips=election_lan_ips,
+                local_node=local_node,
             )
             else None
         ),

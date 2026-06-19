@@ -8,7 +8,6 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from .inventory import safe_run
 from .nodes import ClusterNode, node_hostname, node_subdomain, parse_nodes
 
 _DUCKDNS_RESPONSE = re.compile(r"^(OK|KO|BADTOKEN|UPDATED|NOCHANGE|DONATE|TOO FREQUENT)", re.I)
@@ -30,6 +29,10 @@ def duckdns_token(config: dict[str, Any]) -> str | None:
 
 
 def detect_public_ipv4() -> str | None:
+    detected = _detect_public_ipv4_network()
+    if detected:
+        return detected
+
     for url in (
         "https://api.ipify.org",
         "https://ifconfig.me/ip",
@@ -42,9 +45,6 @@ def detect_public_ipv4() -> str | None:
             continue
         if text and "." in text:
             return text.split()[0]
-    result = safe_run("curl_public_ip", ["curl", "-4", "-fsS", "https://api.ipify.org"], timeout=8.0)
-    if result.returncode == 0 and result.stdout.strip():
-        return result.stdout.strip()
     return None
 
 

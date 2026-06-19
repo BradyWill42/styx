@@ -27,6 +27,14 @@ from .install import (
     run_lan_election_status,
 )
 from .install_report import render_install_text, save_install_report
+from .uninstall import (
+    apply_cluster_uninstall_plan,
+    apply_uninstall_plan,
+    build_cluster_uninstall_plan,
+    build_uninstall_plan,
+    render_cluster_uninstall_text,
+    render_uninstall_text,
+)
 from .ports import PORT_BLOCKS, PORT_PLAN, check_reserved_ports, port_purpose
 from .remediation import (
     apply_port_clear,
@@ -71,6 +79,9 @@ install_doctor_app = typer.Typer(help="Diagnose local install health.", no_args_
 install_plan_app = typer.Typer(help="Preview install plans without changing the host.", no_args_is_help=True)
 install_apply_app = typer.Typer(help="Apply install plans without confirmation.", no_args_is_help=True)
 completion_app = typer.Typer(help="Shell completion helpers.", no_args_is_help=True)
+uninstall_app = typer.Typer(help="Remove Styx config and k3s from local nodes.", no_args_is_help=True)
+uninstall_plan_app = typer.Typer(help="Preview uninstall plan without changing the host.", no_args_is_help=True)
+uninstall_apply_app = typer.Typer(help="Apply uninstall plan without confirmation.", no_args_is_help=True)
 
 
 @app.callback()
@@ -633,6 +644,81 @@ def install_doctor_cluster() -> None:
     raise typer.Exit(code=1)
 
 
+def _print_uninstall_plan(plan, *, dry_run: bool, exit_code: int = 0) -> None:
+    console.print(render_uninstall_text(plan, dry_run=dry_run))
+    if exit_code != 0:
+        raise typer.Exit(code=exit_code)
+
+
+@uninstall_plan_app.command("local")
+def uninstall_plan_local() -> None:
+    """Preview what would be removed on this node without making any changes."""
+    plan = build_uninstall_plan()
+    _print_uninstall_plan(plan, dry_run=True)
+
+
+@uninstall_apply_app.command("local")
+def uninstall_apply_local() -> None:
+    """Remove Styx config and k3s from this node without confirmation."""
+    plan = build_uninstall_plan()
+    applied = apply_uninstall_plan(plan)
+    _print_uninstall_plan(
+        applied,
+        dry_run=False,
+        exit_code=1 if any(step.status == "failed" for step in applied.steps) else 0,
+    )
+
+
+@uninstall_app.command("local")
+def uninstall_local() -> None:
+    """Remove Styx config and k3s from this node (shows plan, then confirms)."""
+    plan = build_uninstall_plan()
+    pending = [step for step in plan.steps if step.status == "pending"]
+    _print_uninstall_plan(plan, dry_run=True)
+    if not pending:
+        console.print("[green]Nothing to uninstall.[/green]")
+        return
+    if not typer.confirm(f"Apply {len(pending)} uninstall step(s)?", default=False):
+        console.print("No changes were made.")
+        raise typer.Exit(code=0)
+    applied = apply_uninstall_plan(plan)
+    _print_uninstall_plan(applied, dry_run=False, exit_code=1 if any(s.status == "failed" for s in applied.steps) else 0)
+
+
+@uninstall_plan_app.command("cluster")
+def uninstall_plan_cluster() -> None:
+    """Preview cluster-wide uninstall across all configured nodes."""
+    plan = build_cluster_uninstall_plan()
+    console.print(render_cluster_uninstall_text(plan, dry_run=True))
+
+
+@uninstall_apply_app.command("cluster")
+def uninstall_apply_cluster() -> None:
+    """Remove Styx from all configured cluster nodes without confirmation."""
+    plan = build_cluster_uninstall_plan()
+    applied = apply_cluster_uninstall_plan(plan)
+    console.print(render_cluster_uninstall_text(applied, dry_run=False))
+    if any(node.status == "failed" for node in applied.nodes):
+        raise typer.Exit(code=1)
+
+
+@uninstall_app.command("cluster")
+def uninstall_cluster() -> None:
+    """Remove Styx from all configured cluster nodes (shows plan, then confirms)."""
+    plan = build_cluster_uninstall_plan()
+    console.print(render_cluster_uninstall_text(plan, dry_run=True))
+    if not plan.nodes:
+        console.print("[green]No cluster nodes configured.[/green]")
+        return
+    if not typer.confirm(f"Apply uninstall to {len(plan.nodes)} cluster node(s)?", default=False):
+        console.print("No changes were made.")
+        raise typer.Exit(code=0)
+    applied = apply_cluster_uninstall_plan(plan)
+    console.print(render_cluster_uninstall_text(applied, dry_run=False))
+    if any(node.status == "failed" for node in applied.nodes):
+        raise typer.Exit(code=1)
+
+
 def _future_app(label: str, milestone: str) -> typer.Typer:
     future = typer.Typer(help=f"Future {label} commands ({milestone}).", no_args_is_help=True)
 
@@ -660,9 +746,13 @@ install_app.add_typer(install_doctor_app, name="doctor")
 install_app.add_typer(install_plan_app, name="plan")
 install_app.add_typer(install_apply_app, name="apply")
 
+uninstall_app.add_typer(uninstall_plan_app, name="plan")
+uninstall_app.add_typer(uninstall_apply_app, name="apply")
+
 app.add_typer(sysprep_app, name="sysprep")
 app.add_typer(ports_app, name="ports")
 app.add_typer(install_app, name="install")
+app.add_typer(uninstall_app, name="uninstall")
 app.add_typer(_future_app("deploy", "MVP3"), name="deploy")
 app.add_typer(_future_app("status", "MVP3"), name="status")
 app.add_typer(_future_app("doctor", "MVP3"), name="doctor")

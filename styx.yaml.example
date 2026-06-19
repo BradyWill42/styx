@@ -5,21 +5,19 @@ cluster:
 nodes:
   # Replace hostnames and public_ipv4 with your DuckDNS subdomains and router WAN IPs.
   # Mesh overlay IPs (10.0.0.x / fd00:cafe::x) are assigned automatically from node order.
-  # Co-located nodes behind one WAN IP may share public_ipv4; set lan_ip on each Pi on that LAN.
+  # Co-located nodes behind one WAN IP may share public_ipv4; lan_ip is auto-detected
+  # on each node when styxctl runs locally, or set it explicitly when needed.
   - name: node-init
     hostname: styx-lab-init.duckdns.org
     public_ipv4: 203.0.113.10
-    lan_ip: 192.168.1.10
     role: init-server
   - name: node-server
     hostname: styx-lab-server.duckdns.org
     public_ipv4: 203.0.113.11
-    lan_ip: 192.168.1.11
     role: server
   - name: node-agent
     hostname: styx-lab-agent.duckdns.org
     public_ipv4: 203.0.113.12
-    lan_ip: 192.168.1.12
     role: agent
 
 dns:

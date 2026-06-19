@@ -1,0 +1,719 @@
+"""Uninstall Styx config and k3s from local and cluster gateway nodes.
+
+Only removes artifacts that Styx installed. Preserves wg0 and
+unrelated host infrastructure.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+import shlex
+from typing import Any, Callable
+
+from .config import find_config, load_config
+from .gateway import parse_gateway_ports
+from .install import (
+    STYX_SSHD_DROPIN,
+    STYX_WG_DIR,
+    _revoke_gateway_firewall,
+    _wireguard_settings,
+)
+from .inventory import SystemInventory, collect_inventory
+from .k3s_cluster import _node_ssh_connection, _run_ssh_command
+from .nodes import identify_local_node, parse_nodes
+from .remediation import _remove_path, _run_mutating
+
+K3S_UNINSTALL_SCRIPTS = (
+    "/usr/local/bin/k3s-uninstall.sh",
+    "/usr/local/bin/k3s-agent-uninstall.sh",
+)
+LEFTOVER_ARTIFACT_KEYS = (
+    "old_k3s_files",
+    "old_kubelet_state",
+    "old_cni_configs",
+    "old_flannel_state",
+)
+PRESERVED_INTERFACES = frozenset({"wg0"})
+
+RunResult = tuple[bool, str]
+
+
+@dataclass(slots=True)
+class UninstallStep:
+    name: str
+    category: str
+    action: str
+    status: str
+    reason: str | None = None
+    command_display: str | None = None
+    detail: str | None = None
+    requires_sudo: bool = True
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class UninstallPlan:
+    hostname: str
+    interface: str
+    wireguard_port: int = 47800
+    gateway_ssh_port: int = 47810
+    gateway_k3s_port: int = 47811
+    steps: list[UninstallStep] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "hostname": self.hostname,
+            "interface": self.interface,
+            "wireguard_port": self.wireguard_port,
+            "gateway_ssh_port": self.gateway_ssh_port,
+            "gateway_k3s_port": self.gateway_k3s_port,
+            "steps": [step.to_dict() for step in self.steps],
+        }
+
+
+@dataclass(slots=True)
+class ClusterUninstallNodePlan:
+    node_name: str
+    target_host: str
+    local_execution: bool
+    ssh_port: int
+    ssh_jump: str | None
+    steps: list[UninstallStep] = field(default_factory=list)
+    status: str = "pending"
+    detail: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "node_name": self.node_name,
+            "target_host": self.target_host,
+            "local_execution": self.local_execution,
+            "ssh_port": self.ssh_port,
+            "ssh_jump": self.ssh_jump,
+            "status": self.status,
+            "detail": self.detail,
+            "steps": [step.to_dict() for step in self.steps],
+        }
+
+
+@dataclass(slots=True)
+class ClusterUninstallPlan:
+    hostname: str
+    nodes: list[ClusterUninstallNodePlan] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "hostname": self.hostname,
+            "nodes": [node.to_dict() for node in self.nodes],
+        }
+
+
+def _detect_k3s_uninstall_script() -> str | None:
+    for path in K3S_UNINSTALL_SCRIPTS:
+        if Path(path).is_file():
+            return path
+    return None
+
+
+def _leftover_artifact_paths(inventory: SystemInventory) -> list[str]:
+    paths: list[str] = []
+    for key in LEFTOVER_ARTIFACT_KEYS:
+        paths.extend(inventory.detected_artifacts.get(key, []))
+    return sorted(set(paths))
+
+
+def _temp_styx_paths(inventory: SystemInventory) -> list[str]:
+    return sorted(set(inventory.detected_artifacts.get("old_temporary_styx_files", [])))
+
+
+def _append_k3s_uninstall_steps(steps: list[UninstallStep], inventory: SystemInventory) -> None:
+    k3s_script = _detect_k3s_uninstall_script()
+    if k3s_script:
+        steps.append(
+            UninstallStep(
+                name="k3s-uninstall",
+                category="platform",
+                action="uninstall",
+                status="pending",
+                reason=f"k3s uninstall script found at {k3s_script}",
+                command_display=f"sudo {k3s_script}",
+            )
+        )
+    elif inventory.detected_binaries.get("k3s"):
+        steps.append(
+            UninstallStep(
+                name="k3s-uninstall",
+                category="platform",
+                action="uninstall",
+                status="deferred",
+                reason=(
+                    "k3s binary detected but no uninstall script found; "
+                    "leftover artifact cleanup will run instead"
+                ),
+            )
+        )
+    else:
+        steps.append(
+            UninstallStep(
+                name="k3s-uninstall",
+                category="platform",
+                action="uninstall",
+                status="skipped",
+                reason="k3s is not installed on this node",
+            )
+        )
+
+
+def _append_leftover_artifact_steps(steps: list[UninstallStep], inventory: SystemInventory) -> None:
+    for path in _leftover_artifact_paths(inventory):
+        steps.append(
+            UninstallStep(
+                name=f"remove-artifact:{path}",
+                category="artifact",
+                action="remove",
+                status="pending",
+                reason=f"leftover Styx/k3s artifact detected at {path}",
+                command_display=f"sudo rm -rf {path}",
+            )
+        )
+
+
+def _append_wireguard_steps(
+    steps: list[UninstallStep],
+    *,
+    interface: str,
+    inventory: SystemInventory,
+) -> None:
+    if interface in PRESERVED_INTERFACES:
+        steps.append(
+            UninstallStep(
+                name="wg-down",
+                category="wireguard",
+                action="down",
+                status="skipped",
+                reason=f"{interface} is preserved and will not be modified",
+            )
+        )
+        return
+
+    if interface in inventory.interface_names or interface in inventory.wireguard_interfaces:
+        steps.append(
+            UninstallStep(
+                name="wg-down",
+                category="wireguard",
+                action="down",
+                status="pending",
+                reason=f"{interface} interface is currently up",
+                command_display=f"sudo wg-quick down {interface}",
+            )
+        )
+    else:
+        steps.append(
+            UninstallStep(
+                name="wg-down",
+                category="wireguard",
+                action="down",
+                status="skipped",
+                reason=f"{interface} interface is not up",
+            )
+        )
+
+    styx_conf = STYX_WG_DIR / f"{interface}.conf"
+    if styx_conf.is_file():
+        steps.append(
+            UninstallStep(
+                name="remove-wg-config",
+                category="wireguard",
+                action="remove",
+                status="pending",
+                reason=f"{styx_conf} exists",
+                command_display=f"sudo rm -f {styx_conf}",
+            )
+        )
+    else:
+        steps.append(
+            UninstallStep(
+                name="remove-wg-config",
+                category="wireguard",
+                action="remove",
+                status="skipped",
+                reason=f"{styx_conf} not found",
+            )
+        )
+
+
+def _append_gateway_steps(steps: list[UninstallStep]) -> None:
+    if STYX_SSHD_DROPIN.is_file():
+        steps.append(
+            UninstallStep(
+                name="remove-gateway-ssh",
+                category="gateway",
+                action="remove",
+                status="pending",
+                reason=f"{STYX_SSHD_DROPIN} exists",
+                command_display=(
+                    f"sudo rm -f {STYX_SSHD_DROPIN}; "
+                    "sudo systemctl reload ssh || sudo systemctl reload sshd"
+                ),
+            )
+        )
+    else:
+        steps.append(
+            UninstallStep(
+                name="remove-gateway-ssh",
+                category="gateway",
+                action="remove",
+                status="skipped",
+                reason=f"{STYX_SSHD_DROPIN} not found",
+            )
+        )
+
+
+def _append_firewall_step(
+    steps: list[UninstallStep],
+    *,
+    wireguard_port: int,
+    gateway_ssh_port: int,
+    gateway_k3s_port: int,
+) -> None:
+    steps.append(
+        UninstallStep(
+            name="remove-gateway-firewall",
+            category="firewall",
+            action="revoke",
+            status="pending",
+            reason=(
+                "Remove Styx gateway firewall allowances added during install: "
+                f"{wireguard_port}/udp, {gateway_ssh_port}/tcp, {gateway_k3s_port}/tcp"
+            ),
+            command_display=(
+                f"revoke {wireguard_port}/udp, {gateway_ssh_port}/tcp, {gateway_k3s_port}/tcp "
+                "(ufw/firewalld if backend detected)"
+            ),
+        )
+    )
+
+
+def _append_temp_file_steps(steps: list[UninstallStep], inventory: SystemInventory) -> None:
+    for path in _temp_styx_paths(inventory):
+        steps.append(
+            UninstallStep(
+                name=f"remove-temp:{path}",
+                category="file",
+                action="remove",
+                status="pending",
+                reason="temporary Styx file detected",
+                command_display=f"sudo rm -rf {path}",
+                requires_sudo=path.startswith("/var/"),
+            )
+        )
+
+
+def build_uninstall_plan(
+    *,
+    config_path: str | Path | None = None,
+    inventory: SystemInventory | None = None,
+) -> UninstallPlan:
+    """Build a plan describing what would be removed on this node."""
+    inventory = inventory or collect_inventory()
+    resolved_path = Path(config_path) if config_path is not None else find_config()
+    config = load_config(resolved_path) if resolved_path else {}
+    interface, wireguard_port = _wireguard_settings(config)
+    gateway = parse_gateway_ports(config)
+    steps: list[UninstallStep] = []
+
+    _append_k3s_uninstall_steps(steps, inventory)
+    _append_leftover_artifact_steps(steps, inventory)
+    _append_wireguard_steps(steps, interface=interface, inventory=inventory)
+    _append_gateway_steps(steps)
+    _append_firewall_step(
+        steps,
+        wireguard_port=wireguard_port,
+        gateway_ssh_port=gateway.ssh,
+        gateway_k3s_port=gateway.k3s_api,
+    )
+    _append_temp_file_steps(steps, inventory)
+
+    return UninstallPlan(
+        hostname=inventory.hostname,
+        interface=interface,
+        wireguard_port=wireguard_port,
+        gateway_ssh_port=gateway.ssh,
+        gateway_k3s_port=gateway.k3s_api,
+        steps=steps,
+    )
+
+
+def _execute_uninstall_step(
+    step: UninstallStep,
+    *,
+    plan: UninstallPlan,
+    inventory: SystemInventory,
+) -> UninstallStep:
+    if step.status != "pending":
+        return step
+
+    interface = plan.interface
+
+    if step.name == "k3s-uninstall":
+        script = _detect_k3s_uninstall_script()
+        if not script:
+            step.status = "skipped"
+            step.detail = "uninstall script no longer present"
+            return step
+        ok, detail = _run_mutating(
+            [script],
+            use_sudo=True,
+            sudo_available=inventory.sudo_available,
+            timeout=300.0,
+        )
+    elif step.name == "wg-down":
+        ok, detail = _run_mutating(
+            ["wg-quick", "down", interface],
+            use_sudo=True,
+            sudo_available=inventory.sudo_available,
+            timeout=30.0,
+        )
+    elif step.name == "remove-wg-config":
+        styx_conf = str(STYX_WG_DIR / f"{interface}.conf")
+        ok, detail = _run_mutating(
+            ["rm", "-f", styx_conf],
+            use_sudo=True,
+            sudo_available=inventory.sudo_available,
+        )
+    elif step.name == "remove-gateway-ssh":
+        ok, detail = _run_mutating(
+            ["rm", "-f", str(STYX_SSHD_DROPIN)],
+            use_sudo=True,
+            sudo_available=inventory.sudo_available,
+        )
+        if ok:
+            reload_detail = "ssh reload failed"
+            for unit in ("ssh", "sshd"):
+                reload_ok, reload_detail = _run_mutating(
+                    ["systemctl", "reload", unit],
+                    use_sudo=True,
+                    sudo_available=inventory.sudo_available,
+                )
+                if reload_ok:
+                    detail = f"{detail}; reloaded {unit}"
+                    break
+            else:
+                detail = f"{detail}; {reload_detail}"
+    elif step.name == "remove-gateway-firewall":
+        ok, detail = _revoke_gateway_firewall(
+            plan.wireguard_port,
+            plan.gateway_ssh_port,
+            plan.gateway_k3s_port,
+            inventory,
+        )
+    elif step.name.startswith("remove-artifact:") or step.name.startswith("remove-temp:"):
+        path = step.name.split(":", 1)[1]
+        outcome = _remove_path(path, inventory)
+        ok = outcome.status == "applied"
+        detail = outcome.detail
+        if outcome.status == "skipped":
+            step.status = "skipped"
+            step.detail = detail
+            return step
+    else:
+        step.status = "skipped"
+        step.detail = "no executor"
+        return step
+
+    step.status = "removed" if ok else "failed"
+    step.detail = detail
+    return step
+
+
+def apply_uninstall_plan(
+    plan: UninstallPlan,
+    *,
+    inventory: SystemInventory | None = None,
+) -> UninstallPlan:
+    inventory = inventory or collect_inventory()
+    updated_steps = [
+        _execute_uninstall_step(step, plan=plan, inventory=inventory)
+        for step in plan.steps
+    ]
+    refreshed = collect_inventory()
+    leftover_paths = _leftover_artifact_paths(refreshed)
+    existing_names = {step.name for step in updated_steps}
+    for path in leftover_paths:
+        step_name = f"remove-artifact:{path}"
+        if step_name in existing_names:
+            continue
+        extra = UninstallStep(
+            name=step_name,
+            category="artifact",
+            action="remove",
+            status="pending",
+            reason=f"leftover artifact still present after uninstall: {path}",
+            command_display=f"sudo rm -rf {path}",
+        )
+        updated_steps.append(_execute_uninstall_step(extra, plan=plan, inventory=inventory))
+
+    return UninstallPlan(
+        hostname=plan.hostname,
+        interface=plan.interface,
+        wireguard_port=plan.wireguard_port,
+        gateway_ssh_port=plan.gateway_ssh_port,
+        gateway_k3s_port=plan.gateway_k3s_port,
+        steps=updated_steps,
+    )
+
+
+def build_cluster_uninstall_plan(
+    *,
+    config_path: str | Path | None = None,
+    inventory: SystemInventory | None = None,
+    election_lan_ips: dict[str, str] | None = None,
+    election_leader: str | None = None,
+) -> ClusterUninstallPlan:
+    inventory = inventory or collect_inventory()
+    resolved_path = Path(config_path) if config_path is not None else find_config()
+    config = load_config(resolved_path) if resolved_path else {}
+    nodes = parse_nodes(config)
+    local_node = identify_local_node(nodes, inventory, config)
+    gateway = parse_gateway_ports(config)
+    ssh_user = config.get("cluster", {}).get("ssh_user") if isinstance(config.get("cluster"), dict) else None
+    local_plan = build_uninstall_plan(config_path=resolved_path, inventory=inventory)
+
+    node_plans: list[ClusterUninstallNodePlan] = []
+    for node in nodes:
+        connection = _node_ssh_connection(
+            node,
+            nodes,
+            ssh_user,
+            config,
+            inventory=inventory,
+            local_node=local_node,
+            election_lan_ips=election_lan_ips,
+            election_leader=election_leader,
+            gateway_ssh_port=gateway.ssh,
+        )
+        node_plans.append(
+            ClusterUninstallNodePlan(
+                node_name=node.name,
+                target_host=connection.target,
+                local_execution=local_node is not None and local_node.name == node.name,
+                ssh_port=connection.port,
+                ssh_jump=connection.jump,
+                steps=list(local_plan.steps),
+            )
+        )
+    return ClusterUninstallPlan(hostname=inventory.hostname, nodes=node_plans)
+
+
+def _remote_uninstall_command(plan: UninstallPlan) -> str:
+    commands: list[str] = []
+    for step in plan.steps:
+        if step.status != "pending" or not step.command_display:
+            continue
+        if step.name == "k3s-uninstall":
+            commands.append("if [ -x /usr/local/bin/k3s-uninstall.sh ]; then /usr/local/bin/k3s-uninstall.sh; elif [ -x /usr/local/bin/k3s-agent-uninstall.sh ]; then /usr/local/bin/k3s-agent-uninstall.sh; fi")
+        elif step.name == "wg-down":
+            commands.append(f"wg-quick down {plan.interface} || true")
+        elif step.name == "remove-wg-config":
+            commands.append(f"rm -f /etc/wireguard/{plan.interface}.conf")
+        elif step.name == "remove-gateway-ssh":
+            commands.append("rm -f /etc/ssh/sshd_config.d/styx-gateway.conf")
+            commands.append("systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true")
+        elif step.name.startswith("remove-artifact:") or step.name.startswith("remove-temp:"):
+            path = step.name.split(":", 1)[1]
+            commands.append(f"rm -rf {path}")
+    return " && ".join(commands) if commands else "true"
+
+
+def apply_cluster_uninstall_plan(
+    plan: ClusterUninstallPlan,
+    *,
+    config_path: str | Path | None = None,
+    inventory: SystemInventory | None = None,
+    runner: Callable[..., RunResult] | None = None,
+) -> ClusterUninstallPlan:
+    inventory = inventory or collect_inventory()
+    resolved_path = Path(config_path) if config_path is not None else find_config()
+    local_plan = build_uninstall_plan(config_path=resolved_path, inventory=inventory)
+    ssh_runner = runner or _run_ssh_command
+
+    for node_plan in plan.nodes:
+        if node_plan.local_execution:
+            applied = apply_uninstall_plan(local_plan, inventory=inventory)
+            node_plan.steps = applied.steps
+            node_plan.status = "removed" if not any(step.status == "failed" for step in applied.steps) else "failed"
+            node_plan.detail = "local uninstall applied"
+            continue
+
+        remote_command = f"sudo bash -lc {shlex.quote(_remote_uninstall_command(local_plan))}"
+        ok, detail = ssh_runner(
+            node_plan.target_host,
+            remote_command,
+            port=node_plan.ssh_port,
+            jump=node_plan.ssh_jump,
+        )
+        node_plan.status = "removed" if ok else "failed"
+        node_plan.detail = detail
+
+    return plan
+
+
+def render_uninstall_text(plan: UninstallPlan, *, dry_run: bool = False) -> str:
+    mode = "dry-run (no changes made)" if dry_run else "apply"
+    lines = [
+        "Styx Uninstall Plan",
+        "===================",
+        "",
+        f"Node: {plan.hostname}",
+        f"Interface: {plan.interface}",
+        f"Mode: {mode}",
+        "",
+        "Steps:",
+    ]
+    for step in plan.steps:
+        lines.append(f"  - {step.name} [{step.status}] ({step.action})")
+        if step.reason:
+            lines.append(f"    reason: {step.reason}")
+        if step.command_display:
+            lines.append(f"    command: {step.command_display}")
+        if step.detail:
+            lines.append(f"    detail: {step.detail}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_cluster_uninstall_text(plan: ClusterUninstallPlan, *, dry_run: bool = False) -> str:
+    mode = "dry-run (no changes made)" if dry_run else "apply"
+    lines = [
+        "Styx Cluster Uninstall Plan",
+        "===========================",
+        "",
+        f"Operator node: {plan.hostname}",
+        f"Mode: {mode}",
+        "",
+        "Nodes:",
+    ]
+    for node in plan.nodes:
+        execution = "local" if node.local_execution else "ssh"
+        lines.append(f"  - {node.node_name} [{node.status}] via {execution} -> {node.target_host}")
+        if node.ssh_jump:
+            lines.append(f"    jump: {node.ssh_jump}")
+        if node.detail:
+            lines.append(f"    detail: {node.detail}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _build_uninstall_report(plan: UninstallPlan, *, dry_run: bool) -> dict[str, Any]:
+    failed = [step for step in plan.steps if step.status == "failed"]
+    pending = [step for step in plan.steps if step.status == "pending"]
+    if dry_run:
+        status = "DRY_RUN"
+    elif failed:
+        status = "FAILED"
+    elif pending:
+        status = "PARTIAL"
+    else:
+        status = "UNINSTALLED"
+
+    return {
+        "tool": "styxctl",
+        "report_type": "uninstall",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "hostname": plan.hostname,
+        "status": status,
+        "dry_run": dry_run,
+        "plan": plan.to_dict(),
+    }
+
+
+def _build_cluster_uninstall_report(plan: ClusterUninstallPlan, *, dry_run: bool) -> dict[str, Any]:
+    failed = [node for node in plan.nodes if node.status == "failed"]
+    pending = [node for node in plan.nodes if node.status == "pending"]
+    if dry_run:
+        status = "DRY_RUN"
+    elif failed:
+        status = "FAILED"
+    elif pending:
+        status = "PARTIAL"
+    else:
+        status = "UNINSTALLED"
+
+    return {
+        "tool": "styxctl",
+        "report_type": "uninstall-cluster",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "hostname": plan.hostname,
+        "status": status,
+        "dry_run": dry_run,
+        "cluster": plan.to_dict(),
+    }
+
+
+def run_uninstall_local(
+    *,
+    dry_run: bool = False,
+    yes: bool = False,
+    config_path: str | Path | None = None,
+) -> tuple[dict[str, Any], int]:
+    inventory = collect_inventory()
+    resolved_path = Path(config_path) if config_path is not None else find_config()
+    plan = build_uninstall_plan(config_path=resolved_path, inventory=inventory)
+    pending = [step for step in plan.steps if step.status == "pending"]
+
+    if dry_run:
+        return _build_uninstall_report(plan, dry_run=True), 0
+
+    if not pending:
+        return _build_uninstall_report(plan, dry_run=False), 0
+
+    if not yes:
+        report = _build_uninstall_report(plan, dry_run=True)
+        report["status"] = "CONFIRMATION_REQUIRED"
+        report["pending_count"] = len(pending)
+        return report, 0
+
+    applied = apply_uninstall_plan(plan, inventory=inventory)
+    report = _build_uninstall_report(applied, dry_run=False)
+    if any(step.status == "failed" for step in applied.steps):
+        return report, 1
+    return report, 0
+
+
+def run_uninstall_cluster(
+    *,
+    dry_run: bool = False,
+    yes: bool = False,
+    config_path: str | Path | None = None,
+    runner: Callable[..., RunResult] | None = None,
+) -> tuple[dict[str, Any], int]:
+    inventory = collect_inventory()
+    resolved_path = Path(config_path) if config_path is not None else find_config()
+    plan = build_cluster_uninstall_plan(config_path=resolved_path, inventory=inventory)
+    pending = [node for node in plan.nodes if not node.local_execution or any(
+        step.status == "pending" for step in build_uninstall_plan(config_path=resolved_path, inventory=inventory).steps
+    )]
+
+    if dry_run:
+        return _build_cluster_uninstall_report(plan, dry_run=True), 0
+
+    if not pending:
+        return _build_cluster_uninstall_report(plan, dry_run=False), 0
+
+    if not yes:
+        report = _build_cluster_uninstall_report(plan, dry_run=True)
+        report["status"] = "CONFIRMATION_REQUIRED"
+        report["pending_count"] = len(plan.nodes)
+        return report, 0
+
+    applied = apply_cluster_uninstall_plan(
+        plan,
+        config_path=resolved_path,
+        inventory=inventory,
+        runner=runner,
+    )
+    report = _build_cluster_uninstall_report(applied, dry_run=False)
+    if any(node.status == "failed" for node in applied.nodes):
+        return report, 1
+    return report, 0

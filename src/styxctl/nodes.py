@@ -131,7 +131,7 @@ def node_bootstrap_host(
     if node.public_ipv4:
         return node.public_ipv4
     if inventory is not None and local_node is not None and node.name == local_node.name:
-        from .dns_update import detect_public_ipv4
+        from .network_detect import detect_public_ipv4
 
         return detect_public_ipv4()
     return None
@@ -259,11 +259,19 @@ def node_effective_lan_ip(
     node: ClusterNode,
     *,
     election_lan_ips: dict[str, str] | None = None,
+    inventory: SystemInventory | None = None,
+    local_node: ClusterNode | None = None,
 ) -> str | None:
     if node.lan_ip:
         return node.lan_ip
     if election_lan_ips:
-        return election_lan_ips.get(node.name)
+        elected = election_lan_ips.get(node.name)
+        if elected:
+            return elected
+    if inventory is not None and local_node is not None and node.name == local_node.name:
+        from .network_detect import detect_lan_ipv4
+
+        return detect_lan_ipv4(inventory)
     return None
 
 
@@ -274,6 +282,8 @@ def validate_nodes(
     election_lan_ips: dict[str, str] | None = None,
     election_leader: str | None = None,
     require_lan_ip: bool = False,
+    inventory: SystemInventory | None = None,
+    local_node: ClusterNode | None = None,
 ) -> list[str]:
     errors: list[str] = []
     if not nodes:
@@ -292,7 +302,12 @@ def validate_nodes(
         if node.role not in VALID_ROLES:
             errors.append(f"nodes.{node.name}.role: expected init-server, server, or agent")
 
-        host = node_bootstrap_host(config or {}, node) if config else node.public_ipv4
+        host = node_bootstrap_host(
+            config or {},
+            node,
+            inventory=inventory,
+            local_node=local_node,
+        ) if config else node.public_ipv4
         if not host:
             errors.append(
                 f"nodes.{node.name}: set public_ipv4 (router WAN IP with port forwards) for bootstrap connectivity"
@@ -332,7 +347,12 @@ def validate_nodes(
         for site_node in site_nodes:
             if entrypoint is not None and site_node.name == entrypoint.name:
                 continue
-            effective_lan_ip = node_effective_lan_ip(site_node, election_lan_ips=election_lan_ips)
+            effective_lan_ip = node_effective_lan_ip(
+                site_node,
+                election_lan_ips=election_lan_ips,
+                inventory=inventory,
+                local_node=local_node,
+            )
             if not effective_lan_ip:
                 if require_lan_ip or not lan_elected:
                     errors.append(
@@ -375,6 +395,8 @@ def validate_nodes_warnings(
     *,
     election_lan_ips: dict[str, str] | None = None,
     election_leader: str | None = None,
+    inventory: SystemInventory | None = None,
+    local_node: ClusterNode | None = None,
 ) -> list[str]:
     warnings: list[str] = []
     if not nodes or not lan_election_enabled(config):
@@ -393,7 +415,12 @@ def validate_nodes_warnings(
         for site_node in site_nodes:
             if entrypoint is not None and site_node.name == entrypoint.name:
                 continue
-            if not node_effective_lan_ip(site_node, election_lan_ips=election_lan_ips):
+            if not node_effective_lan_ip(
+                site_node,
+                election_lan_ips=election_lan_ips,
+                inventory=inventory,
+                local_node=local_node,
+            ):
                 warnings.append(
                     f"nodes.{site_node.name}: lan_ip unset; local election will fill it when "
                     f"styxctl runs on the LAN sharing public_ipv4 {public_ip}"
@@ -402,12 +429,15 @@ def validate_nodes_warnings(
 
 
 def identify_local_node(nodes: list[ClusterNode], inventory: SystemInventory, config: dict[str, Any] | None = None) -> ClusterNode | None:
+    from .network_detect import detect_lan_ipv4
+
     local_ips = {
         value
         for value in (
             inventory.bootstrap_ipv4,
             inventory.bootstrap_ipv6,
             inventory.primary_lan_ip,
+            detect_lan_ipv4(inventory),
         )
         if value
     }
@@ -426,6 +456,8 @@ def identify_local_node(nodes: list[ClusterNode], inventory: SystemInventory, co
                 host_short = host.split(".", 1)[0].lower()
                 if host_short in local_names or host.lower() in local_names:
                     return node
+
+    for node in nodes:
         if any(ip in local_ips for ip in node.all_ips()):
             return node
     return None
@@ -443,13 +475,26 @@ def sort_nodes_for_install(nodes: list[ClusterNode]) -> list[ClusterNode]:
     return sorted(nodes, key=lambda node: (order.get(node.role, 9), node.name))
 
 
-def all_node_tls_sans(nodes: list[ClusterNode], config: dict[str, Any] | None = None) -> list[str]:
+def all_node_tls_sans(
+    nodes: list[ClusterNode],
+    config: dict[str, Any] | None = None,
+    *,
+    election_lan_ips: dict[str, str] | None = None,
+    inventory: SystemInventory | None = None,
+    local_node: ClusterNode | None = None,
+) -> list[str]:
     sans: list[str] = []
     for node in nodes:
         if node.public_ipv4 and node.public_ipv4 not in sans:
             sans.append(node.public_ipv4)
-        if node.lan_ip and node.lan_ip not in sans:
-            sans.append(node.lan_ip)
+        effective_lan_ip = node_effective_lan_ip(
+            node,
+            election_lan_ips=election_lan_ips,
+            inventory=inventory,
+            local_node=local_node,
+        )
+        if effective_lan_ip and effective_lan_ip not in sans:
+            sans.append(effective_lan_ip)
         if config:
             host = node_hostname(config, node)
             if host and host not in sans:

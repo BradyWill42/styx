@@ -256,8 +256,43 @@ def test_is_colocated_detects_shared_wan_site():
     assert not is_colocated(by_name["thor"], nodes)
 
 
-def test_all_node_tls_sans_includes_lan_ip():
+def test_all_node_tls_sans_includes_explicit_lan_ip():
     nodes = parse_nodes(_colocated_config())
     sans = all_node_tls_sans(nodes)
     assert "192.168.1.10" in sans
     assert "192.168.1.11" in sans
+
+
+def test_validate_nodes_allows_local_colocated_node_without_lan_ip():
+    config = _colocated_config(atlas_lan_ip=None)
+    nodes = parse_nodes(config)
+    inventory = _inventory(
+        hostname="atlas",
+        fqdn="atlas.local",
+        bootstrap_ipv4="192.168.1.11",
+        bootstrap_ipv6=None,
+        primary_lan_ip="192.168.1.11",
+        network_interfaces=["eth0 UP 192.168.1.11/24"],
+    )
+    local_node = identify_local_node(nodes, inventory, config)
+    assert local_node is not None
+    errors = validate_nodes(nodes, config, inventory=inventory, local_node=local_node)
+    assert not any("nodes.atlas" in error and "lan_ip is required" in error for error in errors)
+
+
+def test_all_node_tls_sans_uses_auto_detected_lan_ip():
+    config = _colocated_config(atlas_lan_ip=None)
+    nodes = parse_nodes(config)
+    inventory = _inventory(
+        hostname="atlas",
+        fqdn="atlas.local",
+        bootstrap_ipv4="192.168.1.11",
+        bootstrap_ipv6=None,
+        primary_lan_ip="192.168.1.11",
+        network_interfaces=["eth0 UP 192.168.1.11/24"],
+    )
+    local_node = identify_local_node(nodes, inventory, config)
+    assert local_node is not None
+    sans = all_node_tls_sans(nodes, config, inventory=inventory, local_node=local_node)
+    assert "192.168.1.11" in sans
+

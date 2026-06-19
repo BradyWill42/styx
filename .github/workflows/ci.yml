@@ -66,6 +66,8 @@ jobs:
           styxctl config validate
           styxctl install plan local
           styxctl install plan cluster
+          styxctl uninstall plan local
+          styxctl uninstall plan cluster
           styxctl install status cluster || true
           styxctl install doctor cluster || true
 
