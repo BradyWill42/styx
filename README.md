@@ -142,7 +142,7 @@ styxctl sysprep check local          # re-check until READY
 
 ```bash
 cp styx.yaml.example styx.yaml
-# Set each node's public_ipv4 (router WAN), DuckDNS hostname, and lan_ip when co-located
+# Set each node's hostname and LAN interface name (e.g. eth0)
 # Export DUCKDNS_TOKEN for post-cluster DNS publish
 export DUCKDNS_TOKEN=your-token
 styxctl config validate
@@ -151,7 +151,7 @@ styxctl install plan local
 styxctl install apply local          # on every node
 
 styxctl install plan cluster
-styxctl install apply cluster        # bootstrap over public_ipv4 + gateway ports
+styxctl install apply cluster        # bootstrap over DNS + gateway ports
 
 styxctl install status local
 styxctl install status cluster
@@ -428,29 +428,26 @@ Styx ships with a fixed backbone IP plan (mesh, pod, service, and infra CIDRs). 
 cluster:
   name: styx
   ssh_user: ubuntu          # default SSH user for cluster join
+  lan_interface: eth0       # LAN interface name used for co-located routing and election
   # mode: dual-stack        # optional: dual-stack | ipv4-only | ipv6-only
   # leader: lan-elected     # optional: static | lan-elected (default)
 
 nodes:
   - name: node-init
     hostname: styx-lab-init.duckdns.org   # DuckDNS subdomain (published after cluster join)
-    public_ipv4: 203.0.113.10           # router WAN IP with 1:1 port forwards
-    lan_ip: 192.168.1.10                # required when co-located behind one WAN IP
     role: init-server
   - name: node-server
     hostname: styx-lab-server.duckdns.org
-    public_ipv4: 203.0.113.11
     role: server
   - name: node-agent
     hostname: styx-lab-agent.duckdns.org
-    public_ipv4: 203.0.113.12
     role: agent
 
 dns:
   token_env: DUCKDNS_TOKEN
 ```
 
-**Important:** `public_ipv4` is each node's router WAN address with port forwards to `47810` (SSH) and `47811` (k3s API) — used for bootstrap SSH and k3s joins. `hostname` is published to DuckDNS **after** the cluster is connected. Mesh overlay IPs are assigned automatically; you only need `lan_ip` when multiple nodes share one `public_ipv4`.
+**Important:** `hostname` is used for bootstrap SSH and k3s joins (ports `47810`/`47811`), and is refreshed/published after cluster join. Mesh overlay IPs are assigned automatically; LAN IPs are detected from `cluster.lan_interface` and local election.
 
 Built-in defaults (no YAML required):
 

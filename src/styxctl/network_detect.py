@@ -28,7 +28,7 @@ def detect_lan_ipv4(inventory: SystemInventory) -> str | None:
         if candidate and is_private_ipv4(candidate):
             return candidate.split("%", 1)[0]
 
-    for address, _network in parse_interface_ipv4(inventory.network_interfaces):
+    for _iface, address, _network in parse_interface_ipv4(inventory.network_interfaces):
         if is_private_ipv4(address):
             return address
     return None

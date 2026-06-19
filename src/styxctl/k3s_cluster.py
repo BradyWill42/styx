@@ -52,6 +52,7 @@ def _operator_on_lan(inventory: SystemInventory | None, lan_ip: str | None) -> b
 
 
 def _init_join_host(
+    config: dict[str, Any],
     init_node: ClusterNode,
     joining_node: ClusterNode,
     *,
@@ -59,21 +60,33 @@ def _init_join_host(
     inventory: SystemInventory | None = None,
     local_node: ClusterNode | None = None,
 ) -> str | None:
-    if (
-        init_node.public_ipv4
-        and joining_node.public_ipv4
-        and init_node.public_ipv4 == joining_node.public_ipv4
-    ):
+    init_bootstrap = node_connectivity_host(
+        config,
+        init_node,
+        mode=CONNECTIVITY_BOOTSTRAP,
+        inventory=inventory,
+        local_node=local_node,
+    )
+    joining_bootstrap = node_connectivity_host(
+        config,
+        joining_node,
+        mode=CONNECTIVITY_BOOTSTRAP,
+        inventory=inventory,
+        local_node=local_node,
+    )
+
+    if init_bootstrap and joining_bootstrap and init_bootstrap == joining_bootstrap:
         return node_effective_lan_ip(
             init_node,
             election_lan_ips=election_lan_ips,
             inventory=inventory,
             local_node=local_node,
-        ) or init_node.public_ipv4
-    return init_node.public_ipv4
+        ) or init_bootstrap
+    return init_bootstrap
 
 
 def _init_ssh_host(
+    config: dict[str, Any],
     init_node: ClusterNode,
     *,
     inventory: SystemInventory | None = None,
@@ -88,7 +101,13 @@ def _init_ssh_host(
     )
     if init_lan and _operator_on_lan(inventory, init_lan):
         return init_lan
-    return init_node.public_ipv4
+    return node_connectivity_host(
+        config,
+        init_node,
+        mode=CONNECTIVITY_BOOTSTRAP,
+        inventory=inventory,
+        local_node=local_node,
+    )
 
 
 def _node_ssh_connection(
@@ -325,6 +344,7 @@ def build_cluster_plan(
         node_join_url = default_join_url
         if node.role != "init-server":
             join_host = _init_join_host(
+                config,
                 init_node,
                 node,
                 election_lan_ips=election_lan_ips,
@@ -370,6 +390,7 @@ def build_cluster_plan(
     representative_join_url = default_join_url
     if representative_join_url is None and init_node:
         join_host = _init_ssh_host(
+            config,
             init_node,
             inventory=inventory,
             election_lan_ips=election_lan_ips,
@@ -644,6 +665,7 @@ def assess_cluster_nodes(
         "join_url": (
             k3s_join_url(
                 _init_ssh_host(
+                    config,
                     init_node,
                     inventory=inventory,
                     election_lan_ips=election_lan_ips,
@@ -654,6 +676,7 @@ def assess_cluster_nodes(
             )
             if init_node
             and _init_ssh_host(
+                config,
                 init_node,
                 inventory=inventory,
                 election_lan_ips=election_lan_ips,

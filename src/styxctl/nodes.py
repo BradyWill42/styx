@@ -130,6 +130,9 @@ def node_bootstrap_host(
     """Router WAN / port-forward target used before DuckDNS is published."""
     if node.public_ipv4:
         return node.public_ipv4
+    if node.hostname:
+        resolved = resolve_hostname(node.hostname)
+        return resolved or node.hostname
     if inventory is not None and local_node is not None and node.name == local_node.name:
         from .network_detect import detect_public_ipv4
 

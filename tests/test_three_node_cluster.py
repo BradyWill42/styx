@@ -103,8 +103,8 @@ def test_run_install_cluster_reaches_all_three_nodes(tmp_path, monkeypatch):
 
     assert report["cluster"] is not None
     assert len(seen_targets) >= 2
-    assert any("203.0.113.11" in target for target in seen_targets)
-    assert any("203.0.113.12" in target for target in seen_targets)
+    assert any("styx-lab-server.duckdns.org" in target for target in seen_targets)
+    assert any("styx-lab-agent.duckdns.org" in target for target in seen_targets)
     assert exit_code in (0, 1)
 
 
@@ -143,8 +143,8 @@ def test_apply_cluster_uninstall_plan_runs_ssh_for_remote_nodes(tmp_path, monkey
 
     assert len(seen_targets) == 2
     assert all(node.status == "removed" for node in applied.nodes)
-    assert any("203.0.113.11" in target for target in seen_targets)
-    assert any("203.0.113.12" in target for target in seen_targets)
+    assert any("styx-lab-server.duckdns.org" in target for target in seen_targets)
+    assert any("styx-lab-agent.duckdns.org" in target for target in seen_targets)
 
 
 def test_uninstall_plan_cluster_cli(tmp_path, monkeypatch):

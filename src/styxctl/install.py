@@ -321,7 +321,7 @@ def _join_credentials(
     init = init_server_node(nodes)
     if init is None or local_node is None:
         return None, None
-    init_host = _init_join_host(init, local_node, election_lan_ips=election_lan_ips)
+    init_host = _init_join_host(config, init, local_node, election_lan_ips=election_lan_ips)
     if not init_host:
         return None, None
     gateway = parse_gateway_ports(config)
@@ -1725,6 +1725,7 @@ def run_install_cluster(
                     if token_ok:
                         join_token = token_detail.strip()
                         init_host = _init_join_host(
+                            effective_config,
                             init,
                             node_plan.node,
                             election_lan_ips=election_lan_ips,
@@ -1769,6 +1770,7 @@ def run_install_cluster(
                 if token_ok:
                     join_token = token_detail.strip()
                     init_host = _init_ssh_host(
+                        effective_config,
                         init,
                         inventory=pre_inventory,
                         election_lan_ips=election_lan_ips,

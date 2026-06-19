@@ -1,23 +1,20 @@
 cluster:
   name: styx
   ssh_user: ubuntu
+  lan_interface: eth0
 
 nodes:
-  # Replace hostnames and public_ipv4 with your DuckDNS subdomains and router WAN IPs.
+  # Replace hostnames with your DuckDNS subdomains (or other stable DNS names).
   # Mesh overlay IPs (10.0.0.x / fd00:cafe::x) are assigned automatically from node order.
-  # Co-located nodes behind one WAN IP may share public_ipv4; lan_ip is auto-detected
-  # on each node when styxctl runs locally, or set it explicitly when needed.
+  # LAN IPs and public WAN IPs are auto-detected at install time.
   - name: node-init
     hostname: styx-lab-init.duckdns.org
-    public_ipv4: 203.0.113.10
     role: init-server
   - name: node-server
     hostname: styx-lab-server.duckdns.org
-    public_ipv4: 203.0.113.11
     role: server
   - name: node-agent
     hostname: styx-lab-agent.duckdns.org
-    public_ipv4: 203.0.113.12
     role: agent
 
 dns:

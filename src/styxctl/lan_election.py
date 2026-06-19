@@ -169,9 +169,10 @@ def _read_proc_meminfo() -> str:
         return ""
 
 
-def parse_interface_ipv4(network_interfaces: list[str]) -> list[tuple[str, ipaddress.IPv4Network]]:
-    parsed: list[tuple[str, ipaddress.IPv4Network]] = []
+def parse_interface_ipv4(network_interfaces: list[str]) -> list[tuple[str, str, ipaddress.IPv4Network]]:
+    parsed: list[tuple[str, str, ipaddress.IPv4Network]] = []
     for line in network_interfaces:
+        iface = line.split(maxsplit=1)[0].split("@", 1)[0] if line.strip() else ""
         for address, prefix in re.findall(r"\b(\d+\.\d+\.\d+\.\d+)/(\d+)\b", line):
             if address.startswith("127."):
                 continue
@@ -179,21 +180,34 @@ def parse_interface_ipv4(network_interfaces: list[str]) -> list[tuple[str, ipadd
                 network = ipaddress.ip_network(f"{address}/{prefix}", strict=False)
             except ValueError:
                 continue
-            parsed.append((address, network))
+            parsed.append((iface, address, network))
     return parsed
 
 
-def local_lan_subnet(inventory: SystemInventory) -> ipaddress.IPv4Network | None:
+def local_lan_subnet(inventory: SystemInventory, config: dict[str, Any] | None = None) -> ipaddress.IPv4Network | None:
     interfaces = parse_interface_ipv4(inventory.network_interfaces)
     if not interfaces:
         return None
 
+    preferred_iface: str | None = None
+    if config:
+        cluster = config.get("cluster")
+        if isinstance(cluster, dict):
+            raw_iface = cluster.get("lan_interface")
+            if isinstance(raw_iface, str) and raw_iface.strip():
+                preferred_iface = raw_iface.strip()
+
+    if preferred_iface:
+        for iface, _address, network in interfaces:
+            if iface == preferred_iface:
+                return network
+
     if inventory.primary_lan_ip:
-        for address, network in interfaces:
+        for _iface, address, network in interfaces:
             if address == inventory.primary_lan_ip:
                 return network
 
-    for _address, network in interfaces:
+    for _iface, _address, network in interfaces:
         if not network.is_loopback:
             return network
     return None

@@ -159,7 +159,7 @@ def test_node_bootstrap_host_uses_public_ipv4():
     config = load_config(EXAMPLE_CONFIG_PATH)
     nodes = parse_nodes(config)
     by_name = {node.name: node for node in nodes}
-    assert node_bootstrap_host(config, by_name["node-init"]) == "203.0.113.10"
+    assert node_bootstrap_host(config, by_name["node-init"]) == "styx-lab-init.duckdns.org"
 
 
 def test_identify_local_node_by_current_ip():

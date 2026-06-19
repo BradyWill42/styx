@@ -88,7 +88,8 @@ def test_local_lan_subnet_from_interfaces():
 def test_parse_interface_ipv4_skips_loopback():
     parsed = parse_interface_ipv4(["lo  UNKNOWN  127.0.0.1/8", "eth0  UP  10.0.0.5/24"])
     assert len(parsed) == 1
-    assert parsed[0][0] == "10.0.0.5"
+    assert parsed[0][0] == "eth0"
+    assert parsed[0][1] == "10.0.0.5"
 
 
 def test_apply_lan_election_roles_promotes_leader():
