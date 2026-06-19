@@ -1,74 +1,24 @@
 cluster:
   name: styx
-  domain: styx.net
-  mode: dual-stack
   ssh_user: ubuntu
-  leader: lan-elected
-  lan_election:
-    port: 47802
-    collect_sec: 3
-
-gateway:
-  ssh_port: 47810
-  k3s_api_port: 47811
-
-network:
-  ipv4_supernet: 10.0.0.0/14
-  ipv6_supernet: fd00:cafe::/48
-
-  mesh_ipv4: 10.0.0.0/16
-  infra_ipv4: 10.1.0.0/16
-  pod_ipv4: 10.2.0.0/16
-  service_ipv4: 10.3.0.0/16
-
-  mesh_ipv6: fd00:cafe:0::/48
-  infra_ipv6: fd00:cafe:1::/56
-  pod_ipv6: fd00:cafe:2::/56
-  service_ipv6: fd00:cafe:3::/112
-
-  roadwarrior_ipv4: 10.0.250.0/24
-  roadwarrior_ipv6: fd00:cafe:0:250::/64
-
-wireguard:
-  interface: Styx
-  port: 47800
-  shared_server_identity: true
 
 nodes:
-  # Replace names and hostnames with your own DuckDNS subdomains before deploy.
-  # Each node normally has its own public_ipv4 (router WAN IP with 1:1 port forwards).
-  # Co-located nodes behind one WAN IP may share public_ipv4 when cluster.leader is
-  # lan-elected. lan_ip is auto-detected on each node when styxctl runs locally.
+  # Replace hostnames and public_ipv4 with your DuckDNS subdomains and router WAN IPs.
+  # Mesh overlay IPs (10.0.0.x / fd00:cafe::x) are assigned automatically from node order.
+  # Co-located nodes behind one WAN IP may share public_ipv4; lan_ip is auto-detected
+  # on each node when styxctl runs locally, or set it explicitly when needed.
   - name: node-init
     hostname: styx-lab-init.duckdns.org
     public_ipv4: 203.0.113.10
-    ipv4: 10.0.0.1
-    ipv6: fd00:cafe::1
     role: init-server
   - name: node-server
     hostname: styx-lab-server.duckdns.org
     public_ipv4: 203.0.113.11
-    ipv4: 10.0.0.2
-    ipv6: fd00:cafe::2
     role: server
   - name: node-agent
     hostname: styx-lab-agent.duckdns.org
     public_ipv4: 203.0.113.12
-    ipv4: 10.0.0.3
-    ipv6: fd00:cafe::3
     role: agent
 
 dns:
-  provider: duckdns
-  domain: duckdns.org
   token_env: DUCKDNS_TOKEN
-  auto_endpoint: node-init
-  fixed_endpoints:
-    node-server: styx-lab-server
-    node-agent: styx-lab-agent
-
-siem:
-  enabled: true
-  provider: wazuh
-  namespace: wazuh
-  profile: small-lab

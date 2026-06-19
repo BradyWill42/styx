@@ -142,7 +142,7 @@ styxctl sysprep check local          # re-check until READY
 
 ```bash
 cp styx.yaml.example styx.yaml
-# Set each node's public_ipv4 (router WAN), DuckDNS hostname, and mesh ipv4/ipv6
+# Set each node's public_ipv4 (router WAN), DuckDNS hostname, and lan_ip when co-located
 # Export DUCKDNS_TOKEN for post-cluster DNS publish
 export DUCKDNS_TOKEN=your-token
 styxctl config validate
@@ -259,7 +259,7 @@ After MVP1 reports `READY` or `READY_WITH_WARNINGS`, MVP2 installs the local fou
 
 ```bash
 cp styx.yaml.example styx.yaml
-# Set each node's public_ipv4 (router WAN), DuckDNS hostname, and mesh ipv4/ipv6
+# Set each node's public_ipv4 (router WAN), DuckDNS hostname, and lan_ip when co-located
 # Export DUCKDNS_TOKEN for post-cluster DNS publish
 export DUCKDNS_TOKEN=your-token
 styxctl config validate
@@ -420,82 +420,49 @@ styxctl config show
 styxctl config validate
 ```
 
-### Key sections
+Styx ships with a fixed backbone IP plan (mesh, pod, service, and infra CIDRs). You do not configure those in `styx.yaml` — `styxctl` applies them automatically. Per-node mesh addresses (`10.0.0.1`, `10.0.0.2`, … and matching IPv6) are assigned from node list order.
+
+### What you configure
 
 ```yaml
 cluster:
   name: styx
-  domain: styx.net
-  mode: dual-stack          # dual-stack | ipv4-only | ipv6-only
   ssh_user: ubuntu          # default SSH user for cluster join
-  leader: lan-elected
-  lan_election:
-    port: 47802
-    collect_sec: 3
-
-gateway:
-  ssh_port: 47810
-  k3s_api_port: 47811
-
-network:
-  ipv4_supernet: 10.0.0.0/14
-  ipv6_supernet: fd00:cafe::/48
-
-  mesh_ipv4: 10.0.0.0/16    # Styx WireGuard address space
-  infra_ipv4: 10.1.0.0/16
-  pod_ipv4: 10.2.0.0/16     # k3s pods
-  service_ipv4: 10.3.0.0/16
-
-  mesh_ipv6: fd00:cafe:0::/48
-  infra_ipv6: fd00:cafe:1::/56
-  pod_ipv6: fd00:cafe:2::/56
-  service_ipv6: fd00:cafe:3::/112
-
-  roadwarrior_ipv4: 10.0.250.0/24
-  roadwarrior_ipv6: fd00:cafe:0:250::/64
-
-wireguard:
-  interface: Styx           # must NOT be wg0
-  port: 47800
-  shared_server_identity: true
+  # mode: dual-stack        # optional: dual-stack | ipv4-only | ipv6-only
+  # leader: lan-elected     # optional: static | lan-elected (default)
 
 nodes:
   - name: node-init
-    hostname: styx-lab-init.duckdns.org   # replace with your DuckDNS subdomain
+    hostname: styx-lab-init.duckdns.org   # DuckDNS subdomain (published after cluster join)
     public_ipv4: 203.0.113.10           # router WAN IP with 1:1 port forwards
-    ipv4: 10.0.0.1                        # mesh address for k3s --node-ip
-    ipv6: fd00:cafe::1
+    lan_ip: 192.168.1.10                # required when co-located behind one WAN IP
     role: init-server
   - name: node-server
     hostname: styx-lab-server.duckdns.org
     public_ipv4: 203.0.113.11
-    ipv4: 10.0.0.2
-    ipv6: fd00:cafe::2
     role: server
   - name: node-agent
     hostname: styx-lab-agent.duckdns.org
     public_ipv4: 203.0.113.12
-    ipv4: 10.0.0.3
-    ipv6: fd00:cafe::3
     role: agent
 
 dns:
-  provider: duckdns
-  domain: duckdns.org
   token_env: DUCKDNS_TOKEN
-  auto_endpoint: node-init
-  fixed_endpoints:
-    node-server: styx-lab-server
-    node-agent: styx-lab-agent
-
-siem:
-  enabled: true
-  provider: wazuh           # MVP4 placeholder
-  namespace: wazuh
-  profile: small-lab
 ```
 
-**Important:** `public_ipv4` is each node's router WAN address with port forwards to `47810`/`47811` — used for bootstrap SSH and k3s joins. `hostname` is published to DuckDNS **after** the cluster is connected. Mesh `ipv4` / `ipv6` values are k3s `--node-ip` addresses and Styx WireGuard overlay space, not LAN or public IPs.
+**Important:** `public_ipv4` is each node's router WAN address with port forwards to `47810` (SSH) and `47811` (k3s API) — used for bootstrap SSH and k3s joins. `hostname` is published to DuckDNS **after** the cluster is connected. Mesh overlay IPs are assigned automatically; you only need `lan_ip` when multiple nodes share one `public_ipv4`.
+
+Built-in defaults (no YAML required):
+
+| Setting | Default |
+|---------|---------|
+| Cluster mode | `dual-stack` |
+| LAN leader election | `lan-elected` on UDP `47802` |
+| WireGuard interface / port | `Styx` / `47800` |
+| Gateway SSH / k3s API ports | `47810` / `47811` |
+| Pod CIDR (v4 / v6) | `10.2.0.0/16` / `fd00:cafe:2::/56` |
+| Service CIDR (v4 / v6) | `10.3.0.0/16` / `fd00:cafe:3::/112` |
+| Mesh CIDR (v4 / v6) | `10.0.0.0/16` / `fd00:cafe:0::/48` |
 
 Config validation status:
 
