@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from styxctl.inventory import SystemInventory
 from styxctl.ports import PortScanResult
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_CONFIG_PATH = REPO_ROOT / "styx.yaml.example"
+HOMELAB_CONFIG_PATH = REPO_ROOT / "styx.yaml.homelab"
 
 ARTIFACT_KEYS = (
     "old_k3s_files",
@@ -24,6 +26,51 @@ ARTIFACT_KEYS = (
 
 def example_config_text() -> str:
     return EXAMPLE_CONFIG_PATH.read_text(encoding="utf-8")
+
+
+def homelab_config(*, leader: str = "lan-elected", atlas_lan_ip: str | None = "192.168.1.11") -> dict[str, Any]:
+    """Homelab topology: pegasus + atlas co-located, thor remote."""
+    return {
+        "cluster": {"leader": leader, "ssh_user": "ubuntu"},
+        "gateway": {"ssh_port": 47810, "k3s_api_port": 47811},
+        "dns": {
+            "provider": "duckdns",
+            "domain": "duckdns.org",
+            "fixed_endpoints": {
+                "pegasus": "pegasus",
+                "atlas": "atlas",
+                "thor": "thor",
+            },
+        },
+        "nodes": [
+            {
+                "name": "pegasus",
+                "public_ipv4": "71.104.114.70",
+                "lan_ip": "192.168.1.10",
+                "ipv4": "10.0.0.1",
+                "ipv6": "fd00:cafe::1",
+                "role": "init-server",
+                "hostname": "pegasus.duckdns.org",
+            },
+            {
+                "name": "atlas",
+                "public_ipv4": "71.104.114.70",
+                "lan_ip": atlas_lan_ip,
+                "ipv4": "10.0.0.2",
+                "ipv6": "fd00:cafe::2",
+                "role": "server",
+                "hostname": "atlas.duckdns.org",
+            },
+            {
+                "name": "thor",
+                "public_ipv4": "108.35.35.192",
+                "ipv4": "10.0.0.3",
+                "ipv6": "fd00:cafe::3",
+                "role": "server",
+                "hostname": "thor.duckdns.org",
+            },
+        ],
+    }
 
 
 def empty_artifacts() -> dict[str, list[str]]:
