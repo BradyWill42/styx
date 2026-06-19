@@ -678,6 +678,10 @@ def uninstall_local() -> None:
     if not pending:
         console.print("[green]Nothing to uninstall.[/green]")
         return
+    console.print(
+        f"[cyan]{len(plan.preserved)} config(s)/service(s) will be preserved "
+        f"(including /etc/styx/styx.yaml and wg0 when present).[/cyan]"
+    )
     if not typer.confirm(f"Apply {len(pending)} uninstall step(s)?", default=False):
         console.print("No changes were made.")
         raise typer.Exit(code=0)
@@ -710,6 +714,10 @@ def uninstall_cluster() -> None:
     if not plan.nodes:
         console.print("[green]No cluster nodes configured.[/green]")
         return
+    console.print(
+        "[cyan]Persistent runner configs (/etc/styx/styx.yaml), wg0, and GitHub Actions "
+        "runner registration are preserved on every node.[/cyan]"
+    )
     if not typer.confirm(f"Apply uninstall to {len(plan.nodes)} cluster node(s)?", default=False):
         console.print("No changes were made.")
         raise typer.Exit(code=0)

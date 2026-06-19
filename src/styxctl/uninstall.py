@@ -1,7 +1,7 @@
 """Uninstall Styx config and k3s from local and cluster gateway nodes.
 
-Only removes artifacts that Styx installed. Preserves wg0 and
-unrelated host infrastructure.
+Only removes artifacts that Styx installed. Preserves wg0, persistent
+runner configs under /etc/styx, and unrelated host infrastructure.
 """
 
 from __future__ import annotations
@@ -17,8 +17,10 @@ from .gateway import parse_gateway_ports
 from .install import (
     STYX_SSHD_DROPIN,
     STYX_WG_DIR,
+    WG0_CONFIG_PATH,
     _revoke_gateway_firewall,
     _wireguard_settings,
+    build_firewall_revoke_shell,
 )
 from .inventory import SystemInventory, collect_inventory
 from .k3s_cluster import _node_ssh_connection, _run_ssh_command
@@ -36,8 +38,22 @@ LEFTOVER_ARTIFACT_KEYS = (
     "old_flannel_state",
 )
 PRESERVED_INTERFACES = frozenset({"wg0"})
+STYX_SYSTEM_CONFIG_PATH = Path("/etc/styx/styx.yaml")
+PROTECTED_REMOVAL_PREFIXES = ("/etc/styx/",)
+PROTECTED_REMOVAL_PATHS = frozenset({str(WG0_CONFIG_PATH)})
+GITHUB_RUNNER_MARKERS = (".runner", "config.sh", "run.sh")
 
 RunResult = tuple[bool, str]
+
+
+@dataclass(slots=True)
+class PreservedItem:
+    category: str
+    path: str
+    reason: str
+
+    def to_dict(self) -> dict[str, str]:
+        return asdict(self)
 
 
 @dataclass(slots=True)
@@ -63,6 +79,7 @@ class UninstallPlan:
     gateway_ssh_port: int = 47810
     gateway_k3s_port: int = 47811
     steps: list[UninstallStep] = field(default_factory=list)
+    preserved: list[PreservedItem] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -72,6 +89,7 @@ class UninstallPlan:
             "gateway_ssh_port": self.gateway_ssh_port,
             "gateway_k3s_port": self.gateway_k3s_port,
             "steps": [step.to_dict() for step in self.steps],
+            "preserved": [item.to_dict() for item in self.preserved],
         }
 
 
@@ -116,6 +134,109 @@ def _detect_k3s_uninstall_script() -> str | None:
         if Path(path).is_file():
             return path
     return None
+
+
+def _is_protected_removal_path(path: str, *, styx_interface: str) -> bool:
+    """Return True when a detected path must never be removed by uninstall."""
+    normalized = path.rstrip("/")
+    if normalized in PROTECTED_REMOVAL_PATHS:
+        return True
+    if any(normalized.startswith(prefix.rstrip("/")) for prefix in PROTECTED_REMOVAL_PREFIXES):
+        return True
+    wg_prefix = f"{STYX_WG_DIR}/"
+    if normalized.startswith(wg_prefix) and normalized.endswith(".conf"):
+        conf_name = Path(normalized).name
+        if conf_name != f"{styx_interface}.conf":
+            return True
+    return False
+
+
+def _detect_github_runner_path() -> Path | None:
+    candidates = (
+        Path.home() / "actions-runner",
+        Path("/actions-runner"),
+        Path("/home/runner/actions-runner"),
+    )
+    for candidate in candidates:
+        if any((candidate / marker).is_file() for marker in GITHUB_RUNNER_MARKERS):
+            return candidate
+    return None
+
+
+def collect_preserved_items(
+    inventory: SystemInventory,
+    *,
+    interface: str,
+    config_path: Path | None,
+) -> list[PreservedItem]:
+    """Inventory host configs and services that uninstall intentionally leaves alone."""
+    items: list[PreservedItem] = []
+
+    if WG0_CONFIG_PATH.is_file():
+        items.append(
+            PreservedItem(
+                category="wireguard",
+                path=str(WG0_CONFIG_PATH),
+                reason="pre-existing tunnel; never modified by Styx",
+            )
+        )
+    if "wg0" in inventory.interface_names or "wg0" in inventory.wireguard_interfaces:
+        items.append(
+            PreservedItem(
+                category="wireguard",
+                path="wg0 interface",
+                reason="pre-existing tunnel interface",
+            )
+        )
+
+    if STYX_SYSTEM_CONFIG_PATH.is_file():
+        items.append(
+            PreservedItem(
+                category="config",
+                path=str(STYX_SYSTEM_CONFIG_PATH),
+                reason="persistent runner/site config on self-hosted gateways",
+            )
+        )
+
+    if STYX_WG_DIR.is_dir():
+        for conf in sorted(STYX_WG_DIR.glob("*.conf")):
+            if conf.name in {f"{interface}.conf", "wg0.conf"}:
+                continue
+            items.append(
+                PreservedItem(
+                    category="wireguard",
+                    path=str(conf),
+                    reason="WireGuard config not managed by Styx",
+                )
+            )
+
+    if config_path and config_path.is_file():
+        items.append(
+            PreservedItem(
+                category="config",
+                path=str(config_path),
+                reason="operator config file in working directory",
+            )
+        )
+
+    runner_path = _detect_github_runner_path()
+    if runner_path is not None:
+        items.append(
+            PreservedItem(
+                category="runner",
+                path=str(runner_path),
+                reason="GitHub Actions self-hosted runner registration",
+            )
+        )
+
+    items.append(
+        PreservedItem(
+            category="packages",
+            path="system packages (wireguard, curl, iproute2, ...)",
+            reason="installed by Styx but not removed on uninstall",
+        )
+    )
+    return items
 
 
 def _leftover_artifact_paths(inventory: SystemInventory) -> list[str]:
@@ -167,8 +288,15 @@ def _append_k3s_uninstall_steps(steps: list[UninstallStep], inventory: SystemInv
         )
 
 
-def _append_leftover_artifact_steps(steps: list[UninstallStep], inventory: SystemInventory) -> None:
+def _append_leftover_artifact_steps(
+    steps: list[UninstallStep],
+    inventory: SystemInventory,
+    *,
+    interface: str,
+) -> None:
     for path in _leftover_artifact_paths(inventory):
+        if _is_protected_removal_path(path, styx_interface=interface):
+            continue
         steps.append(
             UninstallStep(
                 name=f"remove-artifact:{path}",
@@ -326,7 +454,7 @@ def build_uninstall_plan(
     steps: list[UninstallStep] = []
 
     _append_k3s_uninstall_steps(steps, inventory)
-    _append_leftover_artifact_steps(steps, inventory)
+    _append_leftover_artifact_steps(steps, inventory, interface=interface)
     _append_wireguard_steps(steps, interface=interface, inventory=inventory)
     _append_gateway_steps(steps)
     _append_firewall_step(
@@ -336,6 +464,11 @@ def build_uninstall_plan(
         gateway_k3s_port=gateway.k3s_api,
     )
     _append_temp_file_steps(steps, inventory)
+    preserved = collect_preserved_items(
+        inventory,
+        interface=interface,
+        config_path=resolved_path,
+    )
 
     return UninstallPlan(
         hostname=inventory.hostname,
@@ -344,6 +477,7 @@ def build_uninstall_plan(
         gateway_ssh_port=gateway.ssh,
         gateway_k3s_port=gateway.k3s_api,
         steps=steps,
+        preserved=preserved,
     )
 
 
@@ -412,6 +546,13 @@ def _execute_uninstall_step(
         )
     elif step.name.startswith("remove-artifact:") or step.name.startswith("remove-temp:"):
         path = step.name.split(":", 1)[1]
+        if step.name.startswith("remove-artifact:") and _is_protected_removal_path(
+            path,
+            styx_interface=interface,
+        ):
+            step.status = "skipped"
+            step.detail = "protected path; preserved by uninstall policy"
+            return step
         outcome = _remove_path(path, inventory)
         ok = outcome.status == "applied"
         detail = outcome.detail
@@ -446,6 +587,8 @@ def apply_uninstall_plan(
         step_name = f"remove-artifact:{path}"
         if step_name in existing_names:
             continue
+        if _is_protected_removal_path(path, styx_interface=plan.interface):
+            continue
         extra = UninstallStep(
             name=step_name,
             category="artifact",
@@ -463,6 +606,7 @@ def apply_uninstall_plan(
         gateway_ssh_port=plan.gateway_ssh_port,
         gateway_k3s_port=plan.gateway_k3s_port,
         steps=updated_steps,
+        preserved=plan.preserved,
     )
 
 
@@ -511,20 +655,38 @@ def build_cluster_uninstall_plan(
 def _remote_uninstall_command(plan: UninstallPlan) -> str:
     commands: list[str] = []
     for step in plan.steps:
-        if step.status != "pending" or not step.command_display:
+        if step.status != "pending":
             continue
         if step.name == "k3s-uninstall":
-            commands.append("if [ -x /usr/local/bin/k3s-uninstall.sh ]; then /usr/local/bin/k3s-uninstall.sh; elif [ -x /usr/local/bin/k3s-agent-uninstall.sh ]; then /usr/local/bin/k3s-agent-uninstall.sh; fi")
+            commands.append(
+                "if [ -x /usr/local/bin/k3s-uninstall.sh ]; then /usr/local/bin/k3s-uninstall.sh; "
+                "elif [ -x /usr/local/bin/k3s-agent-uninstall.sh ]; then /usr/local/bin/k3s-agent-uninstall.sh; fi"
+            )
         elif step.name == "wg-down":
-            commands.append(f"wg-quick down {plan.interface} || true")
+            if plan.interface not in PRESERVED_INTERFACES:
+                commands.append(f"wg-quick down {plan.interface} || true")
         elif step.name == "remove-wg-config":
-            commands.append(f"rm -f /etc/wireguard/{plan.interface}.conf")
+            if plan.interface not in PRESERVED_INTERFACES:
+                commands.append(f"rm -f /etc/wireguard/{plan.interface}.conf")
         elif step.name == "remove-gateway-ssh":
             commands.append("rm -f /etc/ssh/sshd_config.d/styx-gateway.conf")
             commands.append("systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true")
+        elif step.name == "remove-gateway-firewall":
+            commands.append(
+                build_firewall_revoke_shell(
+                    plan.wireguard_port,
+                    plan.gateway_ssh_port,
+                    plan.gateway_k3s_port,
+                )
+            )
         elif step.name.startswith("remove-artifact:") or step.name.startswith("remove-temp:"):
             path = step.name.split(":", 1)[1]
-            commands.append(f"rm -rf {path}")
+            if step.name.startswith("remove-artifact:") and _is_protected_removal_path(
+                path,
+                styx_interface=plan.interface,
+            ):
+                continue
+            commands.append(f"rm -rf {shlex.quote(path)}")
     return " && ".join(commands) if commands else "true"
 
 
@@ -563,24 +725,53 @@ def apply_cluster_uninstall_plan(
 
 def render_uninstall_text(plan: UninstallPlan, *, dry_run: bool = False) -> str:
     mode = "dry-run (no changes made)" if dry_run else "apply"
+    pending = [step for step in plan.steps if step.status == "pending"]
+    skipped = [step for step in plan.steps if step.status in {"skipped", "deferred"}]
+    completed = [step for step in plan.steps if step.status not in {"pending", "skipped", "deferred"}]
+
     lines = [
         "Styx Uninstall Plan",
         "===================",
         "",
         f"Node: {plan.hostname}",
-        f"Interface: {plan.interface}",
+        f"Styx WireGuard interface: {plan.interface} (only /etc/wireguard/{plan.interface}.conf is removed)",
         f"Mode: {mode}",
         "",
-        "Steps:",
     ]
-    for step in plan.steps:
-        lines.append(f"  - {step.name} [{step.status}] ({step.action})")
-        if step.reason:
-            lines.append(f"    reason: {step.reason}")
-        if step.command_display:
-            lines.append(f"    command: {step.command_display}")
-        if step.detail:
-            lines.append(f"    detail: {step.detail}")
+
+    if pending:
+        lines.append(f"Will remove ({len(pending)} step(s)):")
+        for step in pending:
+            lines.append(f"  - {step.name} [{step.status}] ({step.action})")
+            if step.reason:
+                lines.append(f"    reason: {step.reason}")
+            if step.command_display:
+                lines.append(f"    command: {step.command_display}")
+        lines.append("")
+
+    if skipped:
+        lines.append(f"Skipped / deferred ({len(skipped)} step(s)):")
+        for step in skipped:
+            lines.append(f"  - {step.name} [{step.status}]")
+            if step.reason:
+                lines.append(f"    reason: {step.reason}")
+        lines.append("")
+
+    if completed and not dry_run:
+        lines.append(f"Completed ({len(completed)} step(s)):")
+        for step in completed:
+            lines.append(f"  - {step.name} [{step.status}]")
+            if step.detail:
+                lines.append(f"    detail: {step.detail}")
+        lines.append("")
+
+    if plan.preserved:
+        lines.append(f"Will preserve ({len(plan.preserved)} item(s); untouched):")
+        for item in plan.preserved:
+            lines.append(f"  - [{item.category}] {item.path}")
+            lines.append(f"    reason: {item.reason}")
+        lines.append("")
+
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -593,15 +784,30 @@ def render_cluster_uninstall_text(plan: ClusterUninstallPlan, *, dry_run: bool =
         f"Operator node: {plan.hostname}",
         f"Mode: {mode}",
         "",
+        "Preserved on every node (never removed by styxctl uninstall):",
+        f"  - {WG0_CONFIG_PATH} and any non-Styx WireGuard configs",
+        f"  - {STYX_SYSTEM_CONFIG_PATH} (self-hosted runner persistent config)",
+        "  - GitHub Actions runner registration (if present)",
+        "  - Operator styx.yaml in the working directory",
+        "",
         "Nodes:",
     ]
     for node in plan.nodes:
         execution = "local" if node.local_execution else "ssh"
-        lines.append(f"  - {node.node_name} [{node.status}] via {execution} -> {node.target_host}")
+        pending_count = sum(1 for step in node.steps if step.status == "pending")
+        lines.append(
+            f"  - {node.node_name} [{node.status}] via {execution} -> {node.target_host} "
+            f"({pending_count} pending step(s))"
+        )
         if node.ssh_jump:
             lines.append(f"    jump: {node.ssh_jump}")
         if node.detail:
             lines.append(f"    detail: {node.detail}")
+        if dry_run and pending_count:
+            for step in node.steps:
+                if step.status != "pending":
+                    continue
+                lines.append(f"    - {step.name}: {step.reason or step.action}")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -624,6 +830,7 @@ def _build_uninstall_report(plan: UninstallPlan, *, dry_run: bool) -> dict[str, 
         "hostname": plan.hostname,
         "status": status,
         "dry_run": dry_run,
+        "preserved_count": len(plan.preserved),
         "plan": plan.to_dict(),
     }
 

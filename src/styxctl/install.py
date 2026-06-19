@@ -1078,6 +1078,34 @@ def _revoke_firewall_port(port: int, protocol: str, inventory: SystemInventory) 
     return True, f"no active firewall backend detected; skipped {label}"
 
 
+def build_firewall_revoke_shell(
+    wireguard_port: int,
+    gateway_ssh_port: int,
+    gateway_k3s_port: int,
+) -> str:
+    """Shell snippet to revoke Styx gateway firewall rules on a remote node."""
+    labels = (
+        f"{wireguard_port}/udp",
+        f"{gateway_ssh_port}/tcp",
+        f"{gateway_k3s_port}/tcp",
+    )
+    commands: list[str] = []
+    for label in labels:
+        commands.append(
+            "if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; then "
+            f"ufw delete allow {label} 2>/dev/null || true; fi"
+        )
+        commands.append(
+            "if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -qi running; then "
+            f"firewall-cmd --permanent --remove-port={label} 2>/dev/null || true; fi"
+        )
+    commands.append(
+        "if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -qi running; then "
+        "firewall-cmd --reload 2>/dev/null || true; fi"
+    )
+    return " && ".join(commands)
+
+
 def _revoke_gateway_firewall(
     wireguard_port: int,
     gateway_ssh_port: int,

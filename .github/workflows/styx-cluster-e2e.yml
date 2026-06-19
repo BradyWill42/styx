@@ -161,5 +161,16 @@ jobs:
             cp styx.yaml.example styx.yaml
           fi
 
+      - name: Preview uninstall (preserves /etc/styx/styx.yaml and wg0)
+        run: styxctl uninstall plan cluster
+
       - name: Uninstall cluster
         run: styxctl uninstall apply cluster
+
+      - name: Verify preserved runner config
+        run: |
+          if [ -f /etc/styx/styx.yaml ]; then
+            echo "OK: /etc/styx/styx.yaml preserved"
+          else
+            echo "No persistent styx config on this runner (using repo example is fine)"
+          fi

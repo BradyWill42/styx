@@ -511,8 +511,8 @@ Styx is designed for gateway nodes that may already run critical services. `styx
 
 | Command class | Mutates host? | Scope |
 |---------------|---------------|-------|
-| `sysprep check`, `ports check`, `ports list`, `config show`, `install plan`, `install status`, `install doctor`, `report`, `version`, `completion` | No | Read-only host inspection |
-| `sysprep safe`, `ports clear`, `install apply` | Yes | Only pre-identified safe targets |
+| `sysprep check`, `ports check`, `ports list`, `config show`, `install plan`, `install status`, `install doctor`, `uninstall plan`, `report`, `version`, `completion` | No | Read-only host inspection |
+| `sysprep safe`, `ports clear`, `install apply`, `uninstall apply` | Yes | Only pre-identified safe targets |
 | `sysprep reset`, `sysprep nuke`, `deploy` | MVP3 | Not implemented yet |
 
 **`wg0` is sacred.** It is inventoried, reported, and hash-verified — never removed or modified by MVP1 or MVP2.
@@ -578,6 +578,28 @@ styxctl install <TAB>
 | `install status lan` | Show LAN peers and elected leader |
 | `install doctor local` | Actionable local health diagnosis |
 | `install doctor cluster` | Site-aware cluster-wide health diagnosis |
+
+### Uninstall
+
+Removes only what Styx installed: k3s, the `Styx` WireGuard interface, gateway SSH drop-in, and Styx firewall allowances. **Does not** remove persistent runner configs, `wg0`, other WireGuard tunnels, GitHub Actions runner registration, or OS packages.
+
+| Command | Description |
+|---------|-------------|
+| `uninstall plan local` | Preview local removal steps and preserved configs |
+| `uninstall plan cluster` | Preview cluster-wide removal (per-node pending steps) |
+| `uninstall local` | Local uninstall with confirm |
+| `uninstall apply local` | Local uninstall without confirm |
+| `uninstall cluster` | Cluster uninstall with confirm |
+| `uninstall apply cluster` | Cluster uninstall without confirm |
+
+On self-hosted runners, `/etc/styx/styx.yaml` is preserved so the next workflow run can reuse site-specific settings. Always run `uninstall plan` first to review **Will remove** vs **Will preserve** sections.
+
+```bash
+styxctl uninstall plan local      # dry-run: shows preserved /etc/styx/styx.yaml, wg0, runner
+styxctl uninstall apply local     # apply without prompt
+styxctl uninstall plan cluster    # preview all nodes before CI teardown
+styxctl uninstall apply cluster   # used by Styx cluster E2E workflow
+```
 
 ### DNS
 

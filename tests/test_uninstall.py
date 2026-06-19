@@ -6,12 +6,15 @@ from typer.testing import CliRunner
 
 from styxctl.cli import app
 from styxctl.uninstall import (
+    PreservedItem,
     UninstallPlan,
     UninstallStep,
     apply_uninstall_plan,
     build_uninstall_plan,
     render_uninstall_text,
     run_uninstall_local,
+    _is_protected_removal_path,
+    _remote_uninstall_command,
 )
 
 from tests.support import make_inventory
@@ -291,3 +294,150 @@ def test_uninstall_in_help(tmp_path, monkeypatch):
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     assert "uninstall" in result.stdout
+
+
+def test_is_protected_removal_path_blocks_wg0_and_styx_config():
+    assert _is_protected_removal_path("/etc/wireguard/wg0.conf", styx_interface="Styx")
+    assert _is_protected_removal_path("/etc/styx/styx.yaml", styx_interface="Styx")
+    assert _is_protected_removal_path("/etc/wireguard/home.conf", styx_interface="Styx")
+    assert not _is_protected_removal_path("/etc/wireguard/Styx.conf", styx_interface="Styx")
+    assert not _is_protected_removal_path("/var/lib/rancher/k3s", styx_interface="Styx")
+
+
+def test_build_uninstall_plan_includes_preserved_items(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    system_config = tmp_path / "etc" / "styx"
+    system_config.mkdir(parents=True)
+    styx_yaml = system_config / "styx.yaml"
+    styx_yaml.write_text("nodes: []\n", encoding="utf-8")
+    monkeypatch.setattr("styxctl.uninstall.STYX_SYSTEM_CONFIG_PATH", styx_yaml)
+    monkeypatch.setattr("styxctl.uninstall._detect_k3s_uninstall_script", lambda: None)
+
+    inventory = _base_inventory()
+    plan = build_uninstall_plan(inventory=inventory)
+
+    preserved_paths = {item.path for item in plan.preserved}
+    assert str(styx_yaml) in preserved_paths
+
+
+def test_build_uninstall_plan_skips_protected_artifact_paths(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("styxctl.uninstall._detect_k3s_uninstall_script", lambda: None)
+    inventory = _base_inventory(
+        detected_artifacts={
+            "old_k3s_files": ["/var/lib/rancher/k3s", "/etc/styx/styx.yaml"],
+            "old_kubelet_state": [],
+            "old_cni_configs": [],
+            "old_flannel_state": [],
+        }
+    )
+    plan = build_uninstall_plan(inventory=inventory)
+    artifact_steps = [step for step in plan.steps if step.name.startswith("remove-artifact:")]
+    artifact_paths = {step.name.split(":", 1)[1] for step in artifact_steps}
+    assert "/var/lib/rancher/k3s" in artifact_paths
+    assert "/etc/styx/styx.yaml" not in artifact_paths
+
+
+def test_apply_uninstall_plan_skips_protected_artifact(monkeypatch):
+    calls: list[str] = []
+
+    def fake_remove(path, inventory):
+        calls.append(path)
+        from styxctl.remediation import ActionOutcome
+
+        return ActionOutcome("file", path, "remove", "applied", "removed")
+
+    monkeypatch.setattr("styxctl.uninstall._remove_path", fake_remove)
+    plan = UninstallPlan(
+        hostname="test-node",
+        interface="Styx",
+        steps=[
+            UninstallStep(
+                name="remove-artifact:/etc/styx/styx.yaml",
+                category="artifact",
+                action="remove",
+                status="pending",
+                reason="should not run",
+            )
+        ],
+    )
+    applied = apply_uninstall_plan(plan, inventory=_base_inventory())
+    assert applied.steps[0].status == "skipped"
+    assert "protected" in (applied.steps[0].detail or "")
+    assert calls == []
+
+
+def test_render_uninstall_text_shows_preserved_section():
+    plan = UninstallPlan(
+        hostname="myhost",
+        interface="Styx",
+        steps=[
+            UninstallStep(
+                name="wg-down",
+                category="wireguard",
+                action="down",
+                status="pending",
+                reason="interface is up",
+                command_display="sudo wg-quick down Styx",
+            )
+        ],
+        preserved=[
+            PreservedItem(
+                category="config",
+                path="/etc/styx/styx.yaml",
+                reason="persistent runner config",
+            )
+        ],
+    )
+    text = render_uninstall_text(plan, dry_run=True)
+    assert "Will remove" in text
+    assert "Will preserve" in text
+    assert "/etc/styx/styx.yaml" in text
+
+
+def test_remote_uninstall_command_includes_firewall_revoke():
+    plan = UninstallPlan(
+        hostname="node",
+        interface="Styx",
+        wireguard_port=47800,
+        gateway_ssh_port=47810,
+        gateway_k3s_port=47811,
+        steps=[
+            UninstallStep(
+                name="remove-gateway-firewall",
+                category="firewall",
+                action="revoke",
+                status="pending",
+                reason="revoke styx ports",
+            )
+        ],
+    )
+    command = _remote_uninstall_command(plan)
+    assert "ufw delete allow 47800/udp" in command
+    assert "firewall-cmd --permanent --remove-port=47811/tcp" in command
+
+
+def test_remote_uninstall_command_skips_protected_artifacts():
+    plan = UninstallPlan(
+        hostname="node",
+        interface="Styx",
+        steps=[
+            UninstallStep(
+                name="remove-artifact:/etc/styx/styx.yaml",
+                category="artifact",
+                action="remove",
+                status="pending",
+                reason="must not run remotely",
+            ),
+            UninstallStep(
+                name="remove-artifact:/var/lib/rancher/k3s",
+                category="artifact",
+                action="remove",
+                status="pending",
+                reason="safe to remove",
+            ),
+        ],
+    )
+    command = _remote_uninstall_command(plan)
+    assert "/etc/styx/styx.yaml" not in command
+    assert "/var/lib/rancher/k3s" in command
