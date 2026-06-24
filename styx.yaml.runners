@@ -1,0 +1,19 @@
+# Minimal styx config for pegasus, atlas, and thor self-hosted runners.
+# No DuckDNS hostnames — DNS publish comes after the cluster is up.
+# public_ipv4 and lan_ip are auto-detected (local + SSH to peers on port 22).
+#
+# Requirements on each runner: hostname matches node name, SSH keys between nodes.
+
+cluster:
+  name: styx
+  leader: lan-elected
+  ssh_user: ubuntu
+  bootstrap: true
+
+nodes:
+  - name: pegasus
+    role: init-server
+  - name: atlas
+    role: agent
+  - name: thor
+    role: server

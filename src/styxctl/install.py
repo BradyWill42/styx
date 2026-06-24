@@ -18,7 +18,8 @@ import subprocess
 import tempfile
 from typing import Any, Callable
 
-from .config import config_status, find_config, load_config, validate_config
+from .bootstrap_config import enrich_operational_config
+from .config import config_status, find_config, load_config, resolve_config, validate_config
 from .gateway import k3s_join_url, parse_gateway_ports
 from .inventory import SystemInventory, collect_inventory, safe_run
 from .k3s_cluster import (
@@ -383,8 +384,8 @@ def check_install_gate(
         return InstallGateResult(
             ok=False,
             message=(
-                "styx.yaml not found. Copy styx.yaml.example to styx.yaml and run "
-                "`styxctl config validate` before installing."
+                "styx.yaml not found. Copy styx.yaml.runners (minimal) or styx.yaml.example to "
+                "styx.yaml and run `styxctl config validate` before installing."
             ),
             config={},
             config_path=None,
@@ -395,8 +396,8 @@ def check_install_gate(
             blocking=["styx.yaml is required for MVP2 install"],
         )
 
-    config = load_config(resolved_path)
-    issues = validate_config(config)
+    config = enrich_operational_config(resolve_config(load_config(resolved_path)), inventory)
+    issues = validate_config(config, inventory=inventory)
     status = config_status(issues)
     sysprep_status, warnings, blocking = evaluate_readiness(inventory)
 
@@ -1315,8 +1316,9 @@ def assess_install_health(
 ) -> InstallHealth:
     inventory = inventory or collect_inventory()
     resolved_path = Path(config_path) if config_path is not None else find_config()
-    config = load_config(resolved_path) if resolved_path else {}
-    issues = validate_config(config)
+    raw = load_config(resolved_path) if resolved_path else {}
+    config = enrich_operational_config(resolve_config(raw), inventory) if raw else {}
+    issues = validate_config(config, inventory=inventory)
     status = config_status(issues)
     interface, port = _wireguard_settings(config)
 

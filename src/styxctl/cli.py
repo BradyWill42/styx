@@ -323,7 +323,7 @@ def config_validate() -> None:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
 
-    issues = validate_config(config)
+    issues = validate_config(config, inventory=collect_inventory())
     status = config_status(issues)
     console.print(f"Config status: {status}")
     if config_path:

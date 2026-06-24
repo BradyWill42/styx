@@ -17,6 +17,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 REPORT_DIR = Path("reports/styx/runner-integration")
 HUB_RUNNERS = frozenset({"pegasus", "atlas"})
 
+sys.path.insert(0, str(REPO_ROOT / ".github" / "scripts"))
+from runner_config import prepare_styx_yaml  # noqa: E402
+
 
 def _run(cmd: list[str], *, timeout: float = 120.0) -> tuple[int, str]:
     completed = subprocess.run(
@@ -36,21 +39,7 @@ def _run_styxctl(*args: str, timeout: float = 120.0) -> tuple[int, str]:
 
 
 def _prepare_styx_yaml() -> Path:
-    target = REPO_ROOT / "styx.yaml"
-    system_config = Path("/etc/styx/styx.yaml")
-    if system_config.is_file():
-        target.write_text(system_config.read_text(encoding="utf-8"), encoding="utf-8")
-        print(f"Using {system_config}")
-        return target
-    homelab = REPO_ROOT / "styx.yaml.homelab"
-    if homelab.is_file():
-        target.write_text(homelab.read_text(encoding="utf-8"), encoding="utf-8")
-        print(f"Using {homelab}")
-        return target
-    example = REPO_ROOT / "styx.yaml.example"
-    target.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
-    print(f"Using {example}")
-    return target
+    return prepare_styx_yaml(REPO_ROOT)
 
 
 def _fail(checks: list[dict[str, object]], name: str, detail: str) -> None:
@@ -192,10 +181,13 @@ def _check_hub_lan_election(checks: list[dict[str, object]], runner_name: str) -
 
 
 def _check_hub_lan_reachability(checks: list[dict[str, object]], runner_name: str) -> None:
-    from styxctl.config import load_config
+    from styxctl.bootstrap_config import load_operational_config
+    from styxctl.inventory import collect_inventory
     from styxctl.nodes import parse_nodes
 
-    nodes = {node.name: node for node in parse_nodes(load_config(REPO_ROOT / "styx.yaml"))}
+    config_path = REPO_ROOT / "styx.yaml"
+    config = load_operational_config(config_path, inventory=collect_inventory())
+    nodes = {node.name: node for node in parse_nodes(config)}
     peer_name = "atlas" if runner_name == "pegasus" else "pegasus"
     peer = nodes.get(peer_name)
     if peer is None or not peer.lan_ip:

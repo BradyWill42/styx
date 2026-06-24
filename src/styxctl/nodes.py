@@ -7,6 +7,7 @@ import ipaddress
 import socket
 from typing import Any
 
+from .bootstrap_mode import bootstrap_mode, dns_publish_enabled
 from .inventory import SystemInventory
 
 VALID_ROLES = frozenset({"init-server", "server", "agent"})
@@ -369,7 +370,7 @@ def validate_nodes(
                 )
 
     for node in nodes:
-        if config and not node_hostname(config, node):
+        if config and dns_publish_enabled(config) and not node_hostname(config, node):
             errors.append(
                 f"nodes.{node.name}: set hostname (DuckDNS) for post-cluster DNS publish"
             )
@@ -399,6 +400,12 @@ def validate_nodes_warnings(
     local_node: ClusterNode | None = None,
 ) -> list[str]:
     warnings: list[str] = []
+    if config and not dns_publish_enabled(config):
+        for node in nodes:
+            if not node_hostname(config, node):
+                warnings.append(
+                    f"nodes.{node.name}: hostname unset; DuckDNS publish comes after cluster join"
+                )
     if not nodes or not lan_election_enabled(config):
         return warnings
 

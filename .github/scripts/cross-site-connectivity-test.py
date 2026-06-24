@@ -11,18 +11,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REPORT_PATH = Path("reports/styx/runner-integration/cross-site.json")
 
+sys.path.insert(0, str(REPO_ROOT / ".github" / "scripts"))
+from runner_config import prepare_styx_yaml  # noqa: E402
+
 
 def _prepare_styx_yaml() -> None:
-    target = REPO_ROOT / "styx.yaml"
-    system_config = Path("/etc/styx/styx.yaml")
-    if system_config.is_file():
-        target.write_text(system_config.read_text(encoding="utf-8"), encoding="utf-8")
-        return
-    homelab = REPO_ROOT / "styx.yaml.homelab"
-    if homelab.is_file():
-        target.write_text(homelab.read_text(encoding="utf-8"), encoding="utf-8")
-        return
-    target.write_text((REPO_ROOT / "styx.yaml.example").read_text(encoding="utf-8"), encoding="utf-8")
+    prepare_styx_yaml(REPO_ROOT)
 
 
 def main() -> int:
@@ -34,18 +28,19 @@ def main() -> int:
     print("=== Cross-site connectivity (thor -> hub) ===")
     _prepare_styx_yaml()
 
-    from styxctl.config import load_config
+    from styxctl.bootstrap_config import effective_ssh_port, load_operational_config
     from styxctl.gateway import parse_gateway_ports
     from styxctl.install import run_lan_election_preview
     from styxctl.inventory import collect_inventory
     from styxctl.k3s_cluster import _node_ssh_connection, _run_ssh_command
     from styxctl.nodes import identify_local_node, parse_nodes, site_entrypoint_for
 
-    config = load_config(REPO_ROOT / "styx.yaml")
-    nodes = parse_nodes(config)
     inventory = collect_inventory()
+    config = load_operational_config(REPO_ROOT / "styx.yaml", inventory=inventory)
+    nodes = parse_nodes(config)
     local_node = identify_local_node(nodes, inventory, config)
     gateway = parse_gateway_ports(config)
+    ssh_port = effective_ssh_port(config, gateway.ssh)
     by_name = {node.name: node for node in nodes}
 
     checks: list[dict[str, object]] = []
@@ -70,7 +65,7 @@ def main() -> int:
             {
                 "name": "hub_nodes_configured",
                 "status": "skipped",
-                "detail": "styx.yaml has no pegasus/atlas hub; use /etc/styx/styx.yaml",
+                "detail": "styx.yaml has no pegasus/atlas hub; use styx.yaml.runners",
             }
         )
         print("SKIP: no pegasus/atlas in styx.yaml")
@@ -79,7 +74,7 @@ def main() -> int:
         if entrypoint is None:
             entrypoint = by_name.get("pegasus") or hub_nodes[0]
 
-        # SSH to elected site entrypoint on gateway port (Styx bootstrap path).
+        # SSH to elected site entrypoint (port 22 before Styx gateway install).
         connection = _node_ssh_connection(
             entrypoint,
             nodes,
@@ -88,7 +83,7 @@ def main() -> int:
             inventory=inventory,
             local_node=local_node,
             election_leader=election_leader,
-            gateway_ssh_port=gateway.ssh,
+            gateway_ssh_port=ssh_port,
         )
         ok, detail = _run_ssh_command(
             connection.target,
@@ -116,7 +111,7 @@ def main() -> int:
                 inventory=inventory,
                 local_node=local_node,
                 election_leader=election_leader or entrypoint.name,
-                gateway_ssh_port=gateway.ssh,
+                gateway_ssh_port=ssh_port,
             )
             ok, detail = _run_ssh_command(
                 follower_conn.target,

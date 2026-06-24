@@ -9,9 +9,11 @@ from typing import Any
 
 import yaml
 
+from .bootstrap_config import enrich_operational_config
 from .gateway import DEFAULT_K3S_API_PORT, DEFAULT_SSH_PORT, parse_gateway_ports
+from .inventory import SystemInventory, collect_inventory
 from .network_plan import DEFAULT_NETWORK, assign_node_mesh_ips
-from .nodes import node_hostname, parse_nodes, validate_nodes, validate_nodes_warnings
+from .nodes import identify_local_node, node_hostname, parse_nodes, validate_nodes, validate_nodes_warnings
 from .ports import RESERVED_PORT_END, RESERVED_PORT_START
 
 
@@ -123,7 +125,11 @@ def _validate_network_prefix(value: Any, path: str, issues: list[ValidationIssue
         issues.append(ValidationIssue("error", path, str(exc)))
 
 
-def validate_config(config: dict[str, Any]) -> list[ValidationIssue]:
+def validate_config(
+    config: dict[str, Any],
+    *,
+    inventory: SystemInventory | None = None,
+) -> list[ValidationIssue]:
     """Validate a loaded Styx config mapping."""
     issues: list[ValidationIssue] = []
 
@@ -138,6 +144,13 @@ def validate_config(config: dict[str, Any]) -> list[ValidationIssue]:
         return issues
 
     config = resolve_config(config)
+    if inventory is not None:
+        config = enrich_operational_config(config, inventory)
+
+    local_node = None
+    nodes = parse_nodes(config)
+    if inventory is not None and nodes:
+        local_node = identify_local_node(nodes, inventory, config)
 
     cluster = _require_mapping(config.get("cluster"), "cluster", issues)
     if cluster:
@@ -237,9 +250,19 @@ def validate_config(config: dict[str, Any]) -> list[ValidationIssue]:
 
     nodes = parse_nodes(config)
     if nodes:
-        for message in validate_nodes(nodes, config):
+        for message in validate_nodes(
+            nodes,
+            config,
+            inventory=inventory,
+            local_node=local_node,
+        ):
             issues.append(ValidationIssue("error", "nodes", message))
-        for message in validate_nodes_warnings(nodes, config):
+        for message in validate_nodes_warnings(
+            nodes,
+            config,
+            inventory=inventory,
+            local_node=local_node,
+        ):
             issues.append(ValidationIssue("warning", "nodes", message))
     else:
         issues.append(

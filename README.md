@@ -140,24 +140,26 @@ styxctl sysprep check local          # re-check until READY
 
 ### 3. Install the foundation (MVP2)
 
+**Minimal bootstrap** (only SSH keys between nodes; DuckDNS comes after the cluster is up):
+
+```bash
+cp styx.yaml.runners styx.yaml   # or styx.yaml.example for full explicit config
+styxctl config validate          # auto-detects public_ipv4 / lan_ip via SSH on port 22
+
+styxctl install plan local
+styxctl install apply local      # on every node
+
+styxctl install plan cluster
+styxctl install apply cluster    # SSH on port 22 until gateway ports are configured
+```
+
+**Full config** (explicit IPs + DuckDNS hostnames):
+
 ```bash
 cp styx.yaml.example styx.yaml
 # Set each node's public_ipv4 (router WAN), DuckDNS hostname, and lan_ip when co-located
-# Export DUCKDNS_TOKEN for post-cluster DNS publish
 export DUCKDNS_TOKEN=your-token
 styxctl config validate
-
-styxctl install plan local
-styxctl install apply local          # on every node
-
-styxctl install plan cluster
-styxctl install apply cluster        # bootstrap over public_ipv4 + gateway ports
-
-styxctl install status local
-styxctl install status cluster
-styxctl install doctor local
-styxctl install doctor cluster
-styxctl dns refresh cluster           # refresh DuckDNS records after ISP IP changes
 ```
 
 ### Requirements
@@ -411,6 +413,40 @@ Remote steps use each node's `ssh_user` when set, otherwise `cluster.ssh_user` (
 ---
 
 ## Configuration (`styx.yaml`)
+
+### Minimal out-of-the-box (`styx.yaml.runners`)
+
+For a three-node lab (pegasus, atlas, thor) you only need:
+
+1. **Hostnames** match node names (`pegasus`, `atlas`, `thor`)
+2. **Passwordless SSH** between nodes on port **22**
+
+```bash
+cp styx.yaml.runners styx.yaml
+styxctl config validate
+```
+
+`styxctl` auto-detects each node's `public_ipv4` (curl on the local host; SSH to peers) and `lan_ip` for co-located nodes. Mesh overlay IPs are assigned from node order. No DuckDNS block, no `/etc/styx` setup, no manual WAN/LAN fields.
+
+```yaml
+cluster:
+  name: styx
+  leader: lan-elected
+  ssh_user: ubuntu
+  bootstrap: true
+
+nodes:
+  - name: pegasus
+    role: init-server
+  - name: atlas
+    role: agent
+  - name: thor
+    role: server
+```
+
+Add `dns:` and `hostname` per node **after** the cluster joins; `install apply cluster` publishes DuckDNS then.
+
+### Full explicit config
 
 Copy the example and edit for your lab:
 
@@ -779,14 +815,14 @@ Runs on every **online** self-hosted runner:
 | Install/uninstall **plans** (real inventory) | ✓ | ✓ |
 | **Live UDP LAN election** | ✓ | — |
 | **Ping peer on LAN** | ✓ | — |
-| **SSH to hub** (gateway port + ProxyJump) | — | ✓ |
+| **SSH to hub** (port 22 bootstrap / ProxyJump) | — | ✓ |
 
 Additional jobs:
 
 - **Hub LAN election consensus** — pegasus and atlas must discover each other and elect the **same** leader
 - **Cross-site SSH** — thor reaches the hub entrypoint and follower via WAN/ProxyJump
 
-Uses `/etc/styx/styx.yaml` on each runner when present, else `styx.yaml.homelab`.
+Uses `styx.yaml.runners` copied to `styx.yaml` on each runner (no `/etc/styx` override).
 
 ### CI (secondary)
 
@@ -798,7 +834,7 @@ Python 3.12 on `ubuntu-latest`: `pytest` + wheel build. Can pass while hardware 
 |--------|----------------|
 | `pegasus` | Hub LAN election + integration |
 | `atlas` | Hub LAN election + integration |
-| `thor` | Cross-site SSH to hub (needs thor in `styx.yaml`) |
+| `thor` | Cross-site SSH to hub |
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|

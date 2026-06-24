@@ -9,7 +9,6 @@ from pathlib import Path
 
 HUB_RUNNERS = frozenset({"pegasus", "atlas"})
 CONFIGURED_ROLES = {"pegasus": "init-server", "atlas": "agent"}
-SHARED_PUBLIC_IP = "71.104.114.70"
 
 
 def main() -> int:
@@ -95,7 +94,9 @@ def main() -> int:
                 return 1
         print(f"Leader strength: {leader_strength} (max among peers: {max_strength})")
 
+    from styxctl.bootstrap_config import load_operational_config
     from styxctl.config import load_config
+    from styxctl.inventory import collect_inventory
     from styxctl.lan_election import apply_lan_election_roles
     from styxctl.lan_election import LanElectionResult, LanElectionSettings, LanPeer
     from styxctl.nodes import parse_nodes
@@ -105,7 +106,7 @@ def main() -> int:
         print("styx.yaml not found for role verification", file=sys.stderr)
         return 1
 
-    config = load_config(config_path)
+    config = load_operational_config(config_path, inventory=collect_inventory())
     nodes_before = {node.name: node.role for node in parse_nodes(config)}
     for name, role in CONFIGURED_ROLES.items():
         if nodes_before.get(name) != role:
@@ -156,9 +157,15 @@ def main() -> int:
     if subnet:
         print(f"LAN subnet: {subnet}")
 
+    hub_nodes = [node for node in parse_nodes(config) if node.name in HUB_RUNNERS]
+    hub_public_ips = {node.public_ipv4 for node in hub_nodes if node.public_ipv4}
+    if len(hub_public_ips) == 1:
+        print(f"Hub site public IP: {hub_public_ips.pop()}")
+    elif hub_public_ips:
+        print(f"Hub site public IPs: {sorted(hub_public_ips)}")
+
     print(f"Configured roles: {CONFIGURED_ROLES}")
     print(f"Effective roles: {roles_after}")
-    print(f"Hub site public IP: {SHARED_PUBLIC_IP}")
     print("LAN hub election check passed")
     return 0
 
