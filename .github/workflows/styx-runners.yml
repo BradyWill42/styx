@@ -1,6 +1,6 @@
 # Primary CI gate: live integration on pegasus, atlas, and thor.
 #
-# Stage 1 — prerequisites (ports, sysprep, config, gateway SSH) on each runner.
+# Stage 1 — prerequisites (ports, sysprep, bootstrap SSH, config, gateway SSH).
 # Stage 2 — real SSH connectivity between all runners on gateway port 47810.
 
 name: Styx runner integration
@@ -18,6 +18,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   prerequisites:
@@ -48,12 +49,16 @@ jobs:
           RUNNER_NAME: ${{ matrix.runner }}
         run: python3 .github/scripts/stage1-prerequisites.py
 
+      - name: Print stage 1 report
+        if: always()
+        run: python3 .github/scripts/print_report.py ${{ matrix.runner }} prerequisites
+
       - name: Upload stage 1 report
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: styx-stage1-${{ matrix.runner }}
-          path: reports/styx/runner-integration/
+          path: reports/styx/runner-integration/${{ matrix.runner }}-prerequisites.json
           if-no-files-found: warn
 
   connectivity:
@@ -86,10 +91,33 @@ jobs:
           RUNNER_NAME: ${{ matrix.runner }}
         run: python3 .github/scripts/stage2-connectivity.py
 
+      - name: Print stage 2 report
+        if: always()
+        run: python3 .github/scripts/print_report.py ${{ matrix.runner }} connectivity
+
       - name: Upload stage 2 report
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: styx-stage2-${{ matrix.runner }}
-          path: reports/styx/runner-integration/
+          path: reports/styx/runner-integration/${{ matrix.runner }}-connectivity.json
           if-no-files-found: warn
+
+  summary:
+    name: Integration summary
+    needs: [prerequisites, connectivity]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download stage reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: styx-stage*
+          merge-multiple: true
+          path: reports/styx/runner-integration
+
+      - name: Summarize test output
+        run: python3 .github/scripts/summarize_reports.py reports/styx/runner-integration

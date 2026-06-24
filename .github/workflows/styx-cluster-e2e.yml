@@ -1,8 +1,6 @@
-# Full cluster install on live self-hosted runners only.
+# Full cluster install on live self-hosted runners (manual, destructive).
 #
 # Order: preflight uninstall → install local (each runner) → cluster join → teardown uninstall.
-# Offline runners are skipped. Cluster orchestration runs on the online init-server
-# runner (prefers pegasus, then atlas, then thor).
 
 name: Styx cluster E2E
 
@@ -23,54 +21,13 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  actions: read
   contents: read
 
 jobs:
-  discover-runners:
-    name: Discover online runners
-    runs-on: ubuntu-latest
-    outputs:
-      runners: ${{ steps.discover.outputs.runners }}
-      init_runner: ${{ steps.discover.outputs.init_runner }}
-    steps:
-      - name: List live self-hosted runners
-        id: discover
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { data } = await github.rest.actions.listSelfHostedRunnersForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-            });
-
-            const online = data.runners.filter((runner) => runner.status === "online");
-            const names = online.map((runner) => runner.name).sort();
-
-            const initPreference = ["pegasus", "atlas", "thor"];
-            const initCandidates = online.filter((runner) =>
-              runner.labels.some((label) => label.name === "init-server")
-            );
-            const initRunner =
-              initPreference.find((name) =>
-                initCandidates.some((runner) => runner.name === name)
-              ) || initCandidates[0]?.name || "";
-
-            core.info(`Online runners: ${names.join(", ") || "none"}`);
-            core.info(`Init runner: ${initRunner || "none"}`);
-
-            if (names.length === 0) {
-              core.setFailed("No online self-hosted runners available");
-            }
-
-            core.setOutput("runners", JSON.stringify(names));
-            core.setOutput("init_runner", initRunner);
-
   preflight-uninstall:
     name: "1. Preflight uninstall (clean slate)"
-    needs: discover-runners
-    if: inputs.skip_preflight_uninstall != true && needs.discover-runners.outputs.init_runner != ''
-    runs-on: ${{ needs.discover-runners.outputs.init_runner }}
+    if: inputs.skip_preflight_uninstall != true
+    runs-on: pegasus
 
     steps:
       - uses: actions/checkout@v4
@@ -78,65 +35,8 @@ jobs:
       - name: What styxctl uninstall does (exact scope)
         run: |
           cat <<'EOF'
-          =============================================================================
-          styxctl uninstall apply cluster — EXACTLY what it does
-          =============================================================================
-
-          Per node (local on operator, SSH to every node in styx.yaml):
-
-          REMOVES (only when detected / installed by Styx):
-            1. k3s platform
-               - Runs /usr/local/bin/k3s-uninstall.sh OR k3s-agent-uninstall.sh (if present)
-               - Else removes leftover k3s paths:
-                 /usr/local/bin/k3s
-                 /etc/systemd/system/k3s.service
-                 /etc/systemd/system/k3s-agent.service
-                 /lib/systemd/system/k3s.service
-                 /lib/systemd/system/k3s-agent.service
-                 /var/lib/rancher/k3s
-                 /etc/rancher/k3s
-                 /run/k3s
-                 /var/lib/kubelet
-                 /etc/cni
-                 /var/lib/cni
-                 /run/flannel
-
-            2. Styx WireGuard (interface from styx.yaml, default "Styx")
-               - systemctl stop/disable wg-quick@<interface>.service (if present)
-               - systemctl stop/disable styx.service or styx-wireguard.service (if present)
-               - remove /etc/systemd/system unit drop-ins and enabled symlinks
-               - systemctl daemon-reload
-               - wg-quick down <interface>
-               - rm -f /etc/wireguard/<interface>.conf   (e.g. /etc/wireguard/Styx.conf)
-
-            3. Gateway SSH drop-in
-               - rm -f /etc/ssh/sshd_config.d/styx-gateway.conf
-               - systemctl reload ssh || systemctl reload sshd
-
-            4. Gateway firewall allowances (ufw or firewalld if active)
-               - Revoke wireguard port/udp   (default 47800/udp)
-               - Revoke gateway SSH/tcp     (default 47810/tcp)
-               - Revoke gateway k3s API/tcp (default 47811/tcp)
-               - nftables rules are NOT tracked; remove manually if needed
-
-            5. Temporary Styx files
-               - rm -rf /tmp/styx*
-               - rm -rf /var/tmp/styx*
-
-          NEVER REMOVES (preserved on self-hosted runners):
-            - /etc/wireguard/wg0.conf and the wg0 interface
-            - Any other /etc/wireguard/*.conf except the Styx interface config
-            - /etc/styx/styx.yaml (persistent runner/site config)
-            - styx.yaml in the workflow working directory
-            - GitHub Actions runner registration (actions-runner directory)
-            - OS packages installed by Styx (wireguard, curl, iproute2, ca-certificates)
-            - External DNS records (managed outside styxctl until MVP3)
-            - LAN networking, unrelated SSH config, or non-Styx services
-
-          Cluster orchestration:
-            - Operator node: full uninstall plan applied locally
-            - Remote nodes: same steps over SSH (sudo), including firewall revoke
-          =============================================================================
+          styxctl uninstall apply cluster removes k3s, Styx WireGuard, gateway sshd drop-in,
+          and Styx firewall rules on each node. Preserves wg0, port 22, and /etc/styx/styx.yaml.
           EOF
 
       - name: Set up Python
@@ -146,8 +46,8 @@ jobs:
 
       - name: Install styxctl
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e .
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -e .
 
       - name: Use repo or existing styx.yaml
         run: |
@@ -165,25 +65,16 @@ jobs:
       - name: Apply preflight cluster uninstall
         run: styxctl uninstall apply cluster
 
-      - name: Verify preserved runner config
-        run: |
-          if [ -f /etc/styx/styx.yaml ]; then
-            echo "OK: /etc/styx/styx.yaml preserved after preflight uninstall"
-          else
-            echo "No persistent styx config on this runner (using repo example is fine)"
-          fi
-
   install-local:
     name: "2. Install local (${{ matrix.runner }})"
-    needs: [discover-runners, preflight-uninstall]
+    needs: preflight-uninstall
     if: |
       always() &&
-      needs.discover-runners.outputs.runners != '[]' &&
       (needs.preflight-uninstall.result == 'success' || needs.preflight-uninstall.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
-        runner: ${{ fromJson(needs.discover-runners.outputs.runners) }}
+        runner: [pegasus, atlas, thor]
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -196,8 +87,8 @@ jobs:
 
       - name: Install styxctl
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e .
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -e .
 
       - name: Use repo or existing styx.yaml
         run: |
@@ -217,9 +108,9 @@ jobs:
 
   cluster-join:
     name: "3. Cluster join"
-    needs: [discover-runners, install-local]
-    if: needs.discover-runners.outputs.init_runner != ''
-    runs-on: ${{ needs.discover-runners.outputs.init_runner }}
+    needs: install-local
+    if: needs.install-local.result == 'success'
+    runs-on: pegasus
 
     steps:
       - uses: actions/checkout@v4
@@ -231,8 +122,8 @@ jobs:
 
       - name: Install styxctl
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e .
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -e .
 
       - name: Use repo or existing styx.yaml
         run: |
@@ -250,9 +141,9 @@ jobs:
 
   teardown-uninstall:
     name: "4. Teardown uninstall"
-    needs: [discover-runners, cluster-join]
-    if: always() && inputs.skip_teardown_uninstall != true && needs.discover-runners.outputs.init_runner != ''
-    runs-on: ${{ needs.discover-runners.outputs.init_runner }}
+    needs: [install-local, cluster-join]
+    if: always() && inputs.skip_teardown_uninstall != true
+    runs-on: pegasus
 
     steps:
       - uses: actions/checkout@v4
@@ -264,8 +155,8 @@ jobs:
 
       - name: Install styxctl
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e .
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -e .
 
       - name: Use repo or existing styx.yaml
         run: |
@@ -280,11 +171,3 @@ jobs:
 
       - name: Apply teardown cluster uninstall
         run: styxctl uninstall apply cluster
-
-      - name: Verify preserved runner config
-        run: |
-          if [ -f /etc/styx/styx.yaml ]; then
-            echo "OK: /etc/styx/styx.yaml preserved after teardown"
-          else
-            echo "No persistent styx config on this runner"
-          fi

@@ -12,9 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REPORT_DIR = Path("reports/styx/runner-integration")
-
-sys.path.insert(0, str(REPO_ROOT / ".github" / "scripts"))
-from runner_config import prepare_styx_yaml  # noqa: E402
+BOOTSTRAP_SSH_PORT = 22
 
 
 def runner_name() -> str:
@@ -23,6 +21,18 @@ def runner_name() -> str:
         or os.environ.get("STYX_RUNNER_NAME")
         or Path("/etc/hostname").read_text(encoding="utf-8").strip()
     )
+
+
+def prepare_styx_yaml(repo_root: Path | None = None) -> Path:
+    """Copy styx.yaml.example into styx.yaml for runner integration."""
+    root = repo_root or REPO_ROOT
+    target = root / "styx.yaml"
+    example = root / "styx.yaml.example"
+    if not example.is_file():
+        raise FileNotFoundError(f"Missing config example: {example}")
+    target.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+    print(f"Using {example}")
+    return target
 
 
 def styxctl_command() -> list[str]:
@@ -149,15 +159,45 @@ def write_report(runner: str, stage: str, checks: list[dict[str, object]]) -> Pa
     }
     path = REPORT_DIR / f"{runner}-{stage}.json"
     path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps(summary, indent=2))
     return path
 
 
+def format_report(path: Path) -> str:
+    """Human-readable summary of a stage JSON report."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    lines = [
+        f"=== {data.get('runner')} / {data.get('stage')} ===",
+        f"passed: {data.get('passed', 0)}  failed: {data.get('failed', 0)}",
+        "",
+    ]
+    for check in data.get("checks", []):
+        status = str(check.get("status", "?")).upper()
+        name = check.get("name", "?")
+        detail = str(check.get("detail", "")).strip()
+        prefix = "OK  " if status == "PASSED" else "FAIL"
+        if detail and detail != "ok":
+            lines.append(f"{prefix}  {name}: {detail}")
+        else:
+            lines.append(f"{prefix}  {name}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def print_report(runner: str, stage: str) -> int:
+    path = REPORT_DIR / f"{runner}-{stage}.json"
+    if not path.is_file():
+        print(f"Report not found: {path}", file=sys.stderr)
+        return 1
+    print(format_report(path), end="")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return 1 if int(data.get("failed", 0)) > 0 else 0
+
+
 def exit_from_checks(runner: str, stage: str, checks: list[dict[str, object]]) -> int:
-    write_report(runner, stage, checks)
+    path = write_report(runner, stage, checks)
+    print(format_report(path), end="")
     failed = sum(1 for item in checks if item["status"] == "failed")
     if failed:
-        print(f"\n{failed} check(s) failed on {runner} ({stage})", file=sys.stderr)
+        print(f"{failed} check(s) failed on {runner} ({stage})", file=sys.stderr)
         return 1
-    print(f"\nAll {stage} checks passed on {runner}")
+    print(f"All {stage} checks passed on {runner}")
     return 0

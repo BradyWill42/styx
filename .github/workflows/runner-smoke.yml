@@ -1,5 +1,4 @@
-# Quick connectivity test for self-hosted runners.
-# Only schedules jobs on runners that are online (skips offline hosts).
+# Quick connectivity test for self-hosted runners (manual).
 
 name: Runner smoke
 
@@ -7,58 +6,23 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: read
+  contents: read
 
 jobs:
-  discover-runners:
-    name: Discover online runners
-    runs-on: ubuntu-latest
-    outputs:
-      runners: ${{ steps.discover.outputs.runners }}
-    steps:
-      - name: List live self-hosted runners
-        id: discover
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { data } = await github.rest.actions.listSelfHostedRunnersForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-            });
-
-            const names = data.runners
-              .filter((runner) => runner.status === "online")
-              .map((runner) => runner.name)
-              .sort();
-
-            core.info(`Online runners: ${names.join(", ") || "none"}`);
-            for (const runner of data.runners) {
-              core.info(`  ${runner.name}: status=${runner.status}, busy=${runner.busy}`);
-            }
-
-            if (names.length === 0) {
-              core.setFailed("No online self-hosted runners available");
-            }
-
-            core.setOutput("runners", JSON.stringify(names));
-
   ping:
     name: Runner ping (${{ matrix.runner }})
-    needs: discover-runners
-    if: needs.discover-runners.outputs.runners != '[]'
     strategy:
       fail-fast: false
       matrix:
-        runner: ${{ fromJson(needs.discover-runners.outputs.runners) }}
+        runner: [pegasus, atlas, thor]
     runs-on: ${{ matrix.runner }}
 
     steps:
       - run: |
           echo "Runner name: $RUNNER_NAME"
-          echo "Runner labels: $RUNNER_LABELS"
           echo "Hostname: $(hostname -f)"
           echo "User: $(whoami)"
-          echo "Architecture: $(uname -m)"
           command -v python3
-          command -v sudo
+          command -v ssh
+          command -v curl
           sudo -n true && echo "passwordless sudo: yes" || echo "passwordless sudo: no"

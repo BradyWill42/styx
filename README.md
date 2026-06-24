@@ -40,7 +40,7 @@ Styx is a homelab and small-site platform that combines:
 - **k3s** for lightweight Kubernetes orchestration across gateway nodes
 - **Dual-stack WireGuard** (`Styx` interface on UDP `47800`) for mesh connectivity — separate from any existing `wg0` tunnel you already run
 - **Reserved service ports** (`47800–47850`) for gateway APIs, agents, diagnostics, and metrics
-- **Declarative cluster config** in `styx.yaml` — nodes, CIDRs, DNS endpoints, and future SIEM integration
+- **Declarative cluster config** in `styx.yaml` — nodes, CIDRs, and future SIEM integration
 
 `styxctl` is the operator-facing tool that drives each phase. It collects inventory, remediates only what is provably safe, installs k3s with your network plan, and writes human-readable plus machine-readable reports at every step.
 
@@ -742,14 +742,15 @@ All three runners must be **online**. Each runs both stages:
 
 | Stage | What it checks |
 |-------|----------------|
-| **1 — prerequisites** | Identity, sudo, tools, `sysprep check local` (ports), `config validate` |
-| **2 — connectivity** | Real SSH to **pegasus, atlas, and thor** peers on gateway port **47810** |
+| **1 — prerequisites** | Identity, sudo, tools, sysprep, bootstrap SSH (port 22) to peers, enriched config + `public_ipv4`, gateway SSH on **47810** |
+| **2 — connectivity** | SSH from this runner to **every other node** on gateway port **47810** (styx routing: public IP or LAN/ProxyJump) |
 
-Uses `styx.yaml.example` copied to `styx.yaml` on each runner.
+Uses `styx.yaml.example` copied to `styx.yaml`. JSON reports are written to `reports/styx/runner-integration/` and summarized in the workflow **Integration summary** job.
 
 ```bash
-python3 .github/scripts/stage1-prerequisites.py   # on any runner
+python3 .github/scripts/stage1-prerequisites.py
 python3 .github/scripts/stage2-connectivity.py
+python3 .github/scripts/summarize_reports.py   # read all stage JSON output
 ```
 
 ### CI (GitHub-hosted)
@@ -770,7 +771,7 @@ Package install + wheel build only.
 | **Runner smoke** | Manual | Quick online-runner ping |
 | **Styx cluster E2E** | Manual | Destructive install → join → uninstall |
 
-View results in **Actions**. Artifacts: `styx-stage1-<runner>`, `styx-stage2-<runner>`.
+View results in **Actions** → **Integration summary** (aggregates all stage JSON). Per-runner artifacts: `styx-stage1-<runner>`, `styx-stage2-<runner>`.
 
 ---
 

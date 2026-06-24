@@ -144,19 +144,3 @@ def enrich_operational_config(
                     break
 
     return enriched
-
-
-def minimal_runners_config() -> dict[str, Any]:
-    """Default three-runner topology; mesh IPs assigned automatically."""
-    return {
-        "cluster": {
-            "name": "styx",
-            "leader": "lan-elected",
-            "bootstrap": True,
-        },
-        "nodes": [
-            {"name": "pegasus", "role": "init-server"},
-            {"name": "atlas", "role": "agent"},
-            {"name": "thor", "role": "server"},
-        ],
-    }

@@ -36,6 +36,8 @@ def main() -> int:
     config = load_operational_config(config_path, inventory=inventory)
     nodes = parse_nodes(config)
     local_node = identify_local_node(nodes, inventory, config)
+    if local_node is None:
+        local_node = next((node for node in nodes if node.name == name), None)
     gateway = parse_gateway_ports(config)
 
     if local_node is None:
