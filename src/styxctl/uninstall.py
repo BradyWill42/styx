@@ -42,6 +42,7 @@ STYX_SYSTEM_CONFIG_PATH = Path("/etc/styx/styx.yaml")
 PROTECTED_REMOVAL_PREFIXES = ("/etc/styx/",)
 PROTECTED_REMOVAL_PATHS = frozenset({str(WG0_CONFIG_PATH)})
 GITHUB_RUNNER_MARKERS = (".runner", "config.sh", "run.sh")
+STYX_WG_CUSTOM_SYSTEMD_UNITS = ("styx.service", "styx-wireguard.service")
 
 RunResult = tuple[bool, str]
 
@@ -239,6 +240,86 @@ def collect_preserved_items(
     return items
 
 
+def _candidate_styx_wireguard_units(interface: str) -> tuple[str, ...]:
+    return (f"wg-quick@{interface}.service", *STYX_WG_CUSTOM_SYSTEMD_UNITS)
+
+
+def _styx_wireguard_systemd_artifacts(interface: str) -> list[Path]:
+    artifacts: list[Path] = []
+    candidates = [
+        Path(f"/etc/systemd/system/wg-quick@{interface}.service"),
+        Path(f"/etc/systemd/system/wg-quick@{interface}.service.d"),
+        Path(f"/etc/systemd/system/multi-user.target.wants/wg-quick@{interface}.service"),
+        Path("/etc/systemd/system/styx.service"),
+        Path("/etc/systemd/system/styx-wireguard.service"),
+        Path("/etc/systemd/system/multi-user.target.wants/styx.service"),
+        Path("/etc/systemd/system/multi-user.target.wants/styx-wireguard.service"),
+    ]
+    for path in candidates:
+        if path.exists():
+            artifacts.append(path)
+    return artifacts
+
+
+def _styx_wireguard_service_configured(interface: str, inventory: SystemInventory) -> bool:
+    if _styx_wireguard_systemd_artifacts(interface):
+        return True
+    styx_service = inventory.detected_services.get("styx", {})
+    enabled = (styx_service.get("enabled") or "").lower()
+    active = (styx_service.get("active") or "").lower()
+    if enabled not in {"", "disabled", "missing"}:
+        return True
+    return active not in {"", "inactive", "missing", "failed"}
+
+
+def build_wireguard_service_remove_shell(interface: str) -> str:
+    """Shell snippet to stop/disable Styx WireGuard systemd units on a remote node."""
+    if interface in PRESERVED_INTERFACES:
+        return "true"
+    commands: list[str] = []
+    for unit in _candidate_styx_wireguard_units(interface):
+        commands.append(f"systemctl stop {unit} 2>/dev/null || true")
+        commands.append(f"systemctl disable {unit} 2>/dev/null || true")
+    for path in _styx_wireguard_systemd_artifacts(interface):
+        commands.append(f"rm -rf {shlex.quote(str(path))} 2>/dev/null || true")
+    commands.append("systemctl daemon-reload 2>/dev/null || true")
+    return " && ".join(commands) if commands else "true"
+
+
+def _remove_styx_wireguard_service(interface: str, inventory: SystemInventory) -> RunResult:
+    results: list[str] = []
+    overall_ok = True
+    for unit in _candidate_styx_wireguard_units(interface):
+        for action in ("stop", "disable"):
+            action_ok, action_detail = _run_mutating(
+                ["systemctl", action, unit],
+                use_sudo=True,
+                sudo_available=inventory.sudo_available,
+            )
+            lowered = action_detail.lower()
+            if action_ok:
+                results.append(f"{unit}: {action} ok")
+            elif any(token in lowered for token in ("not found", "does not exist", "not loaded", "no such")):
+                results.append(f"{unit}: {action} skipped (not present)")
+            else:
+                results.append(f"{unit}: {action} failed ({action_detail})")
+                overall_ok = False
+    for path in _styx_wireguard_systemd_artifacts(interface):
+        outcome = _remove_path(str(path), inventory)
+        results.append(f"{path}: {outcome.detail}")
+        if outcome.status == "failed":
+            overall_ok = False
+    reload_ok, reload_detail = _run_mutating(
+        ["systemctl", "daemon-reload"],
+        use_sudo=True,
+        sudo_available=inventory.sudo_available,
+    )
+    results.append(f"daemon-reload: {reload_detail}")
+    if not reload_ok:
+        overall_ok = False
+    return overall_ok, "; ".join(results)
+
+
 def _leftover_artifact_paths(inventory: SystemInventory) -> list[str]:
     paths: list[str] = []
     for key in LEFTOVER_ARTIFACT_KEYS:
@@ -326,6 +407,33 @@ def _append_wireguard_steps(
             )
         )
         return
+
+    if _styx_wireguard_service_configured(interface, inventory):
+        unit_names = ", ".join(_candidate_styx_wireguard_units(interface))
+        steps.append(
+            UninstallStep(
+                name="remove-styx-wireguard-service",
+                category="wireguard",
+                action="stop",
+                status="pending",
+                reason=f"Styx WireGuard systemd unit(s) detected for {interface}",
+                command_display=(
+                    f"sudo systemctl stop/disable {unit_names}; "
+                    "remove unit drop-ins under /etc/systemd/system; "
+                    "sudo systemctl daemon-reload"
+                ),
+            )
+        )
+    else:
+        steps.append(
+            UninstallStep(
+                name="remove-styx-wireguard-service",
+                category="wireguard",
+                action="stop",
+                status="skipped",
+                reason=f"no Styx WireGuard systemd unit detected for {interface}",
+            )
+        )
 
     if interface in inventory.interface_names or interface in inventory.wireguard_interfaces:
         steps.append(
@@ -504,6 +612,8 @@ def _execute_uninstall_step(
             sudo_available=inventory.sudo_available,
             timeout=300.0,
         )
+    elif step.name == "remove-styx-wireguard-service":
+        ok, detail = _remove_styx_wireguard_service(interface, inventory)
     elif step.name == "wg-down":
         ok, detail = _run_mutating(
             ["wg-quick", "down", interface],
@@ -662,6 +772,9 @@ def _remote_uninstall_command(plan: UninstallPlan) -> str:
                 "if [ -x /usr/local/bin/k3s-uninstall.sh ]; then /usr/local/bin/k3s-uninstall.sh; "
                 "elif [ -x /usr/local/bin/k3s-agent-uninstall.sh ]; then /usr/local/bin/k3s-agent-uninstall.sh; fi"
             )
+        elif step.name == "remove-styx-wireguard-service":
+            if plan.interface not in PRESERVED_INTERFACES:
+                commands.append(build_wireguard_service_remove_shell(plan.interface))
         elif step.name == "wg-down":
             if plan.interface not in PRESERVED_INTERFACES:
                 commands.append(f"wg-quick down {plan.interface} || true")
@@ -734,7 +847,8 @@ def render_uninstall_text(plan: UninstallPlan, *, dry_run: bool = False) -> str:
         "===================",
         "",
         f"Node: {plan.hostname}",
-        f"Styx WireGuard interface: {plan.interface} (only /etc/wireguard/{plan.interface}.conf is removed)",
+        f"Styx WireGuard interface: {plan.interface} "
+        f"(removes systemd unit, /etc/wireguard/{plan.interface}.conf; never wg0)",
         f"Mode: {mode}",
         "",
     ]

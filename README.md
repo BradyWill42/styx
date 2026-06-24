@@ -581,7 +581,7 @@ styxctl install <TAB>
 
 ### Uninstall
 
-Removes only what Styx installed: k3s, the `Styx` WireGuard interface, gateway SSH drop-in, and Styx firewall allowances. **Does not** remove persistent runner configs, `wg0`, other WireGuard tunnels, GitHub Actions runner registration, or OS packages.
+Removes only what Styx installed: k3s, the `Styx` WireGuard interface (including `wg-quick@Styx.service` if enabled), gateway SSH drop-in, and Styx firewall allowances. **Does not** remove persistent runner configs, `wg0`, other WireGuard tunnels, GitHub Actions runner registration, or OS packages.
 
 | Command | Description |
 |---------|-------------|

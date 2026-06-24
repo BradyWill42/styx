@@ -15,6 +15,7 @@ from styxctl.uninstall import (
     run_uninstall_local,
     _is_protected_removal_path,
     _remote_uninstall_command,
+    build_wireguard_service_remove_shell,
 )
 
 from tests.support import make_inventory
@@ -441,3 +442,95 @@ def test_remote_uninstall_command_skips_protected_artifacts():
     command = _remote_uninstall_command(plan)
     assert "/etc/styx/styx.yaml" not in command
     assert "/var/lib/rancher/k3s" in command
+
+
+def test_build_uninstall_plan_includes_wg_service_step_when_unit_present(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    unit = tmp_path / "wg-quick@Styx.service"
+    unit.write_text("[Unit]\nDescription=WireGuard\n", encoding="utf-8")
+    monkeypatch.setattr("styxctl.uninstall._detect_k3s_uninstall_script", lambda: None)
+    monkeypatch.setattr(
+        "styxctl.uninstall._styx_wireguard_systemd_artifacts",
+        lambda interface: [unit],
+    )
+    monkeypatch.setattr(
+        "styxctl.uninstall._styx_wireguard_service_configured",
+        lambda interface, inventory: True,
+    )
+
+    plan = build_uninstall_plan(inventory=_base_inventory())
+    step = next(step for step in plan.steps if step.name == "remove-styx-wireguard-service")
+    assert step.status == "pending"
+    assert "wg-quick@Styx.service" in (step.command_display or "")
+
+
+def test_build_uninstall_plan_skips_wg_service_when_not_configured(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("styxctl.uninstall._detect_k3s_uninstall_script", lambda: None)
+    monkeypatch.setattr(
+        "styxctl.uninstall._styx_wireguard_service_configured",
+        lambda interface, inventory: False,
+    )
+
+    plan = build_uninstall_plan(inventory=_base_inventory())
+    step = next(step for step in plan.steps if step.name == "remove-styx-wireguard-service")
+    assert step.status == "skipped"
+
+
+def test_apply_uninstall_plan_stops_wg_systemd_service(monkeypatch):
+    calls: list[list[str]] = []
+
+    def fake_mutating(command, *, use_sudo, sudo_available, timeout=30.0):
+        calls.append(list(command))
+        return True, "ok"
+
+    monkeypatch.setattr("styxctl.uninstall._run_mutating", fake_mutating)
+    monkeypatch.setattr(
+        "styxctl.uninstall._styx_wireguard_systemd_artifacts",
+        lambda interface: [],
+    )
+
+    plan = UninstallPlan(
+        hostname="test-node",
+        interface="Styx",
+        steps=[
+            UninstallStep(
+                name="remove-styx-wireguard-service",
+                category="wireguard",
+                action="stop",
+                status="pending",
+                reason="unit present",
+            )
+        ],
+    )
+    applied = apply_uninstall_plan(plan, inventory=_base_inventory())
+    assert applied.steps[0].status == "removed"
+    assert ["systemctl", "stop", "wg-quick@Styx.service"] in calls
+    assert ["systemctl", "disable", "wg-quick@Styx.service"] in calls
+    assert ["systemctl", "daemon-reload"] in calls
+
+
+def test_build_wireguard_service_remove_shell_includes_unit_commands():
+    shell = build_wireguard_service_remove_shell("Styx")
+    assert "systemctl stop wg-quick@Styx.service" in shell
+    assert "systemctl disable wg-quick@Styx.service" in shell
+    assert "systemctl daemon-reload" in shell
+
+
+def test_remote_uninstall_command_includes_wg_service_removal():
+    plan = UninstallPlan(
+        hostname="node",
+        interface="Styx",
+        steps=[
+            UninstallStep(
+                name="remove-styx-wireguard-service",
+                category="wireguard",
+                action="stop",
+                status="pending",
+                reason="unit present",
+            )
+        ],
+    )
+    command = _remote_uninstall_command(plan)
+    assert "systemctl stop wg-quick@Styx.service" in command
+    assert "systemctl disable styx.service" in command

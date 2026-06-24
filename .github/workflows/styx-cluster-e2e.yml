@@ -102,6 +102,10 @@ jobs:
                  /run/flannel
 
             2. Styx WireGuard (interface from styx.yaml, default "Styx")
+               - systemctl stop/disable wg-quick@<interface>.service (if present)
+               - systemctl stop/disable styx.service or styx-wireguard.service (if present)
+               - remove /etc/systemd/system unit drop-ins and enabled symlinks
+               - systemctl daemon-reload
                - wg-quick down <interface>
                - rm -f /etc/wireguard/<interface>.conf   (e.g. /etc/wireguard/Styx.conf)
 
