@@ -332,11 +332,9 @@ def _join_credentials(
     token = cluster.get("join_token")
     if isinstance(token, str) and token.strip():
         return join_url, token.strip()
-    ssh_user = cluster.get("ssh_user") if isinstance(cluster.get("ssh_user"), str) else None
     ok, detail = fetch_join_token_from_init(
         init,
         config=config,
-        ssh_user=ssh_user,
         inventory=inventory,
         local_node=local_node,
         election_lan_ips=election_lan_ips,
@@ -1731,7 +1729,6 @@ def run_install_cluster(
         return report, 0
 
     gateway = parse_gateway_ports(effective_config)
-    ssh_user = effective_config.get("cluster", {}).get("ssh_user")
     join_url: str | None = cluster_plan.join_url
     join_token: str | None = None
     ssh_runner = runner or _run_ssh_command
@@ -1758,7 +1755,6 @@ def run_install_cluster(
                     token_ok, token_detail = fetch_join_token_from_init(
                         init,
                         config=effective_config,
-                        ssh_user=ssh_user,
                         runner=ssh_runner,
                         inventory=pre_inventory,
                         local_node=local_node,
@@ -1788,7 +1784,6 @@ def run_install_cluster(
             apply_cluster_node_plan(
                 node_plan,
                 config=effective_config,
-                ssh_user=ssh_user,
                 runner=ssh_runner,
                 inventory=pre_inventory,
                 local_node=local_node,
@@ -1802,7 +1797,6 @@ def run_install_cluster(
                 token_ok, token_detail = fetch_join_token_from_init(
                     init,
                     config=effective_config,
-                    ssh_user=ssh_user,
                     runner=ssh_runner,
                     inventory=pre_inventory,
                     local_node=local_node,
@@ -1822,7 +1816,6 @@ def run_install_cluster(
     cluster_health = assess_cluster_nodes(
         effective_config,
         inventory=pre_inventory,
-        ssh_user=ssh_user,
         runner=ssh_runner,
         local_node=local_node,
         election_lan_ips=election_lan_ips,
@@ -1859,15 +1852,9 @@ def run_cluster_doctor(*, config_path: str | Path | None = None) -> dict[str, An
     nodes = parse_nodes(effective_config)
     local_node = identify_local_node(nodes, inventory, effective_config)
     election_lan_ips, election_leader = _election_context(election)
-    ssh_user = (
-        effective_config.get("cluster", {}).get("ssh_user")
-        if isinstance(effective_config.get("cluster"), dict)
-        else None
-    )
     return assess_cluster_nodes(
         effective_config,
         inventory=inventory,
-        ssh_user=ssh_user,
         local_node=local_node,
         election_lan_ips=election_lan_ips,
         election_leader=election_leader,

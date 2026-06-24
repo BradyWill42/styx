@@ -22,6 +22,7 @@ from .nodes import (
     node_connectivity_host,
     node_effective_lan_ip,
     node_hostname,
+    node_ssh_user,
     parse_nodes,
     site_entrypoint_for,
     sort_nodes_for_install,
@@ -103,7 +104,7 @@ def _node_ssh_connection(
     election_leader: str | None = None,
     gateway_ssh_port: int = 47810,
 ) -> SshConnection:
-    user = node.ssh_user or fallback_user
+    user = node_ssh_user(node)
     entrypoint = site_entrypoint_for(
         node,
         nodes,
@@ -134,7 +135,7 @@ def _node_ssh_connection(
         return SshConnection(target=f"{user}@{lan_ip}" if user else lan_ip, port=gateway_ssh_port)
 
     jump_host = entrypoint.public_ipv4 if entrypoint else node.public_ipv4
-    jump_user = (entrypoint.ssh_user if entrypoint else None) or fallback_user
+    jump_user = node_ssh_user(entrypoint) if entrypoint else user
     jump = f"{jump_user}@{jump_host}" if jump_user else jump_host
     final_host = lan_ip or node.name
     return SshConnection(
@@ -492,7 +493,7 @@ def apply_cluster_node_plan(
     plan: ClusterNodePlan,
     *,
     config: dict[str, Any],
-    ssh_user: str | None,
+    ssh_user: str | None = None,
     runner: Callable[..., RunResult] | None = None,
     inventory: SystemInventory | None = None,
     local_node: ClusterNode | None = None,

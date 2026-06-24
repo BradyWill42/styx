@@ -39,19 +39,10 @@ def load_operational_config(
     return enrich_operational_config(resolve_config(raw), inventory)
 
 
-def _ssh_user(config: dict[str, Any]) -> str:
-    cluster = config.get("cluster")
-    if isinstance(cluster, dict):
-        user = cluster.get("ssh_user")
-        if isinstance(user, str) and user.strip():
-            return user.strip()
-    return "ubuntu"
-
-
-def _discover_remote_value(node_name: str, ssh_user: str, remote_command: str) -> str | None:
+def _discover_remote_value(node_name: str, remote_command: str) -> str | None:
     from .k3s_cluster import _run_ssh_command
 
-    target = f"{ssh_user}@{node_name}"
+    target = f"{node_name}@{node_name}"
     ok, detail = _run_ssh_command(
         target,
         remote_command,
@@ -64,22 +55,22 @@ def _discover_remote_value(node_name: str, ssh_user: str, remote_command: str) -
     return candidate or None
 
 
-def discover_remote_public_ipv4(node_name: str, ssh_user: str) -> str | None:
-    value = _discover_remote_value(node_name, ssh_user, REMOTE_PUBLIC_IPV4_SHELL)
+def discover_remote_public_ipv4(node_name: str) -> str | None:
+    value = _discover_remote_value(node_name, REMOTE_PUBLIC_IPV4_SHELL)
     if value and "." in value:
         return value
     return None
 
 
-def discover_remote_public_ipv6(node_name: str, ssh_user: str) -> str | None:
-    value = _discover_remote_value(node_name, ssh_user, REMOTE_PUBLIC_IPV6_SHELL)
+def discover_remote_public_ipv6(node_name: str) -> str | None:
+    value = _discover_remote_value(node_name, REMOTE_PUBLIC_IPV6_SHELL)
     if value and ":" in value:
         return value.split("%", 1)[0]
     return None
 
 
-def discover_remote_lan_ipv4(node_name: str, ssh_user: str) -> str | None:
-    value = _discover_remote_value(node_name, ssh_user, _LAN_IP_COMMAND)
+def discover_remote_lan_ipv4(node_name: str) -> str | None:
+    value = _discover_remote_value(node_name, _LAN_IP_COMMAND)
     if value and not value.startswith("127."):
         return value
     return None
@@ -97,7 +88,6 @@ def enrich_operational_config(
     if not isinstance(nodes_raw, list):
         return enriched
 
-    ssh_user = _ssh_user(enriched)
     parsed = parse_nodes(enriched)
     local_node = identify_local_node(parsed, inventory, enriched)
 
@@ -128,11 +118,11 @@ def enrich_operational_config(
             if local_node is not None and name == local_node.name:
                 continue
             if not item.get("public_ipv4"):
-                discovered = discover_remote_public_ipv4(name, ssh_user)
+                discovered = discover_remote_public_ipv4(name)
                 if discovered:
                     item["public_ipv4"] = discovered
             if not item.get("public_ipv6"):
-                discovered_v6 = discover_remote_public_ipv6(name, ssh_user)
+                discovered_v6 = discover_remote_public_ipv6(name)
                 if discovered_v6:
                     item["public_ipv6"] = discovered_v6
 
@@ -148,7 +138,7 @@ def enrich_operational_config(
                     if not isinstance(item, dict) or item.get("name") != node.name:
                         continue
                     if not item.get("lan_ip"):
-                        lan = discover_remote_lan_ipv4(node.name, ssh_user)
+                        lan = discover_remote_lan_ipv4(node.name)
                         if lan:
                             item["lan_ip"] = lan
                     break
@@ -162,7 +152,6 @@ def minimal_runners_config() -> dict[str, Any]:
         "cluster": {
             "name": "styx",
             "leader": "lan-elected",
-            "ssh_user": "ubuntu",
             "bootstrap": True,
         },
         "nodes": [

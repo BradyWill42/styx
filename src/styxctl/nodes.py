@@ -154,6 +154,13 @@ def node_connectivity_host(
     return node_bootstrap_host(config, node, inventory=inventory, local_node=local_node)
 
 
+def node_ssh_user(node: ClusterNode) -> str:
+    """SSH login user for a node; defaults to the node name (hostname)."""
+    if node.ssh_user and node.ssh_user.strip():
+        return node.ssh_user.strip()
+    return node.name
+
+
 def parse_nodes(config: dict[str, Any]) -> list[ClusterNode]:
     raw_nodes = config.get("nodes")
     if raw_nodes is None:
@@ -163,7 +170,6 @@ def parse_nodes(config: dict[str, Any]) -> list[ClusterNode]:
         return []
 
     cluster = config.get("cluster", {})
-    default_ssh_user = cluster.get("ssh_user") if isinstance(cluster.get("ssh_user"), str) else None
 
     nodes: list[ClusterNode] = []
     for index, item in enumerate(raw_nodes):
@@ -182,10 +188,11 @@ def parse_nodes(config: dict[str, Any]) -> list[ClusterNode]:
         public_ipv6 = item.get("public_ipv6")
         lan_ip = item.get("lan_ip")
         site_entrypoint = item.get("site_entrypoint", False)
-        ssh_user = item.get("ssh_user")
+        user_field = item.get("ssh_user") or item.get("user")
+        name_stripped = name.strip()
         nodes.append(
             ClusterNode(
-                name=name.strip(),
+                name=name_stripped,
                 ipv4=ipv4.strip() if isinstance(ipv4, str) and ipv4.strip() else None,
                 ipv6=ipv6.strip() if isinstance(ipv6, str) and ipv6.strip() else None,
                 role=role.strip(),
@@ -194,7 +201,7 @@ def parse_nodes(config: dict[str, Any]) -> list[ClusterNode]:
                 public_ipv6=public_ipv6.strip() if isinstance(public_ipv6, str) and public_ipv6.strip() else None,
                 lan_ip=lan_ip.strip() if isinstance(lan_ip, str) and lan_ip.strip() else None,
                 site_entrypoint=bool(site_entrypoint) if isinstance(site_entrypoint, bool) else False,
-                ssh_user=ssh_user.strip() if isinstance(ssh_user, str) and ssh_user.strip() else default_ssh_user,
+                ssh_user=user_field.strip() if isinstance(user_field, str) and user_field.strip() else name_stripped,
             )
         )
     return nodes

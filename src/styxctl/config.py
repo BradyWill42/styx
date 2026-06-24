@@ -37,11 +37,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "interface": "Styx",
         "port": 47800,
     },
-    "dns": {
-        "provider": "duckdns",
-        "domain": "duckdns.org",
-        "token_env": "DUCKDNS_TOKEN",
-    },
 }
 
 

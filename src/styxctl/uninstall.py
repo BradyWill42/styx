@@ -750,7 +750,6 @@ def build_cluster_uninstall_plan(
     nodes = parse_nodes(config)
     local_node = identify_local_node(nodes, inventory, config)
     gateway = parse_gateway_ports(config)
-    ssh_user = config.get("cluster", {}).get("ssh_user") if isinstance(config.get("cluster"), dict) else None
     local_plan = build_uninstall_plan(config_path=resolved_path, inventory=inventory)
 
     node_plans: list[ClusterUninstallNodePlan] = []
@@ -758,7 +757,7 @@ def build_cluster_uninstall_plan(
         connection = _node_ssh_connection(
             node,
             nodes,
-            ssh_user,
+            None,
             config,
             inventory=inventory,
             local_node=local_node,

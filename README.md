@@ -151,8 +151,6 @@ styxctl install plan cluster
 styxctl install apply cluster    # cluster SSH on gateway.ssh_port (47810)
 ```
 
-Add `dns:` and per-node `hostname` in `styx.yaml` after the cluster is up (see commented block in `styx.yaml.example`).
-
 ### Requirements
 
 | Requirement | MVP1 | MVP2 |
@@ -386,7 +384,7 @@ Always run `install plan` before `install apply`. Interactive commands (`install
 2. `server` nodes — join with token from init-server
 3. `agent` nodes — join as k3s agents
 
-Remote steps use each node's `ssh_user` when set, otherwise `cluster.ssh_user` (default in example: `ubuntu`). styxctl connects to each node's `public_ipv4` on `gateway.ssh_port` (`47810` by default) and joins k3s at `https://<public_ipv4>:47811`. Ensure key-based SSH works from the machine running `styxctl` to every configured `public_ipv4`. After the cluster is healthy, DuckDNS hostnames are published. You can also set `cluster.join_token` when a non-init node must join without fetching the token from the init-server over SSH.
+Remote steps SSH as each node's Linux user (defaults to the node `name`, e.g. `pegasus@pegasus`). styxctl connects on `gateway.ssh_port` (`47810`) and joins k3s at `https://<public_ipv4>:47811`. Ensure key-based SSH works between every node. You can set `cluster.join_token` when a non-init node must join without fetching the token from the init-server over SSH.
 
 ### Health checks
 
@@ -413,44 +411,35 @@ styxctl config show
 styxctl config validate
 ```
 
-The shipped example is a minimal three-node layout (pegasus, atlas, thor) with `bootstrap: true`. You only need:
+The shipped example is a minimal three-node layout (pegasus, atlas, thor) with `bootstrap: true`. Per node you only set:
 
-1. **Hostnames** match node names
-2. **Passwordless SSH** between nodes on port **22**
+- `name` — must match the host's hostname
+- `role` — `init-server`, `server`, or `agent`
 
-`styxctl` auto-detects `public_ipv4` / `public_ipv6` (`curl -4` / `curl -6` on ifconfig.me) and `lan_ip` for co-located peers. Mesh overlay IPs assign from node order. Uncomment the optional block in `styx.yaml.example` for explicit IPs and DuckDNS.
+SSH login user defaults to the node `name` (override with `user:` if needed). Passwordless SSH between nodes on port **22** is required.
+
+`styxctl` auto-detects `public_ipv4` / `public_ipv6` (`curl -4` / `curl -6` on ifconfig.me) and `lan_ip` for co-located peers. Mesh overlay IPs assign from node order.
 
 Styx ships with a fixed backbone IP plan (mesh, pod, service, and infra CIDRs). You do not configure those in `styx.yaml` — `styxctl` applies them automatically.
 
-### What you configure
+### Example
 
 ```yaml
 cluster:
   name: styx
-  ssh_user: ubuntu          # default SSH user for cluster join
-  # mode: dual-stack        # optional: dual-stack | ipv4-only | ipv6-only
-  # leader: lan-elected     # optional: static | lan-elected (default)
+  leader: lan-elected
+  bootstrap: true
 
 nodes:
-  - name: node-init
-    hostname: styx-lab-init.duckdns.org   # DuckDNS subdomain (published after cluster join)
-    public_ipv4: 203.0.113.10           # router WAN IP with 1:1 port forwards
-    lan_ip: 192.168.1.10                # required when co-located behind one WAN IP
+  - name: pegasus
     role: init-server
-  - name: node-server
-    hostname: styx-lab-server.duckdns.org
-    public_ipv4: 203.0.113.11
-    role: server
-  - name: node-agent
-    hostname: styx-lab-agent.duckdns.org
-    public_ipv4: 203.0.113.12
+  - name: atlas
     role: agent
-
-dns:
-  token_env: DUCKDNS_TOKEN
+  - name: thor
+    role: server
 ```
 
-**Important:** `public_ipv4` is each node's router WAN address with port forwards to `47810` (SSH) and `47811` (k3s API) — used for bootstrap SSH and k3s joins. `hostname` is published to DuckDNS **after** the cluster is connected. Mesh overlay IPs are assigned automatically; you only need `lan_ip` when multiple nodes share one `public_ipv4`.
+**Optional later:** `public_ipv4`, `lan_ip`, and DNS publish (not in the default example).
 
 Built-in defaults (no YAML required):
 
@@ -701,7 +690,7 @@ styxctl install apply local
 
 ```bash
 # From init-server, verify SSH to each node hostname on gateway port 47810
-ssh -p 47810 ubuntu@<node-hostname> true
+ssh -p 47810 pegasus@pegasus true
 
 styxctl install status cluster
 styxctl install doctor cluster

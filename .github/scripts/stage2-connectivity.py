@@ -34,12 +34,7 @@ def main() -> int:
     nodes = parse_nodes(config)
     local_node = identify_local_node(nodes, inventory, config)
     gateway = parse_gateway_ports(config)
-    ssh_user = None
-    cluster = config.get("cluster")
-    if isinstance(cluster, dict):
-        ssh_user = cluster.get("ssh_user")
-
-    checks: list[dict[str, object]] = []
+    by_name = {node.name: node for node in nodes}
 
     if local_node is None:
         fail_check(checks, "local_node", f"host {inventory.hostname!r} not in styx.yaml")
@@ -52,7 +47,7 @@ def main() -> int:
         connection = _node_ssh_connection(
             peer,
             nodes,
-            ssh_user,
+            None,
             config,
             inventory=inventory,
             local_node=local_node,
