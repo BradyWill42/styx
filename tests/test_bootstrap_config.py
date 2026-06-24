@@ -66,13 +66,16 @@ def test_enrich_operational_config_fills_local_public_ipv4():
 
     with (
         patch("styxctl.bootstrap_config.detect_public_ipv4", return_value="203.0.113.10"),
+        patch("styxctl.bootstrap_config.detect_public_ipv6", return_value="2001:db8::1"),
         patch("styxctl.bootstrap_config.discover_remote_public_ipv4", return_value=None),
+        patch("styxctl.bootstrap_config.discover_remote_public_ipv6", return_value=None),
         patch("styxctl.bootstrap_config.discover_remote_lan_ipv4", return_value=None),
     ):
         enriched = enrich_operational_config(config, inventory)
 
     pegasus = next(node for node in parse_nodes(enriched) if node.name == "pegasus")
     assert pegasus.public_ipv4 == "203.0.113.10"
+    assert pegasus.public_ipv6 == "2001:db8::1"
     assert pegasus.lan_ip == "192.168.1.10"
 
 
@@ -86,9 +89,14 @@ def test_enrich_operational_config_discovers_remote_public_ipv4():
 
     with (
         patch("styxctl.bootstrap_config.detect_public_ipv4", return_value="203.0.113.10"),
+        patch("styxctl.bootstrap_config.detect_public_ipv6", return_value="2001:db8::1"),
         patch(
             "styxctl.bootstrap_config.discover_remote_public_ipv4",
             side_effect=lambda name, _user: {"atlas": "203.0.113.10", "thor": "198.51.100.5"}.get(name),
+        ),
+        patch(
+            "styxctl.bootstrap_config.discover_remote_public_ipv6",
+            side_effect=lambda name, _user: {"atlas": "2001:db8::1", "thor": "2001:db8::2"}.get(name),
         ),
         patch(
             "styxctl.bootstrap_config.discover_remote_lan_ipv4",
@@ -99,8 +107,10 @@ def test_enrich_operational_config_discovers_remote_public_ipv4():
 
     by_name = {node.name: node for node in parse_nodes(enriched)}
     assert by_name["atlas"].public_ipv4 == "203.0.113.10"
+    assert by_name["atlas"].public_ipv6 == "2001:db8::1"
     assert by_name["atlas"].lan_ip == "192.168.1.11"
     assert by_name["thor"].public_ipv4 == "198.51.100.5"
+    assert by_name["thor"].public_ipv6 == "2001:db8::2"
 
 
 def test_validate_minimal_bootstrap_config_without_hostname_errors():
@@ -113,9 +123,14 @@ def test_validate_minimal_bootstrap_config_without_hostname_errors():
 
     with (
         patch("styxctl.bootstrap_config.detect_public_ipv4", return_value="203.0.113.10"),
+        patch("styxctl.bootstrap_config.detect_public_ipv6", return_value="2001:db8::1"),
         patch(
             "styxctl.bootstrap_config.discover_remote_public_ipv4",
             side_effect=lambda name, _user: {"atlas": "203.0.113.10", "thor": "198.51.100.5"}.get(name),
+        ),
+        patch(
+            "styxctl.bootstrap_config.discover_remote_public_ipv6",
+            side_effect=lambda name, _user: {"atlas": "2001:db8::1", "thor": "2001:db8::2"}.get(name),
         ),
         patch(
             "styxctl.bootstrap_config.discover_remote_lan_ipv4",

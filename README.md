@@ -144,7 +144,7 @@ styxctl sysprep check local          # re-check until READY
 
 ```bash
 cp styx.yaml.runners styx.yaml   # or styx.yaml.example for full explicit config
-styxctl config validate          # auto-detects public_ipv4 / lan_ip via SSH on port 22
+styxctl config validate          # auto-detects public_ipv4/public_ipv6 (curl -4/-6) + lan_ip via SSH:22
 
 styxctl install plan local
 styxctl install apply local      # on every node
@@ -426,7 +426,7 @@ cp styx.yaml.runners styx.yaml
 styxctl config validate
 ```
 
-`styxctl` auto-detects each node's `public_ipv4` (curl on the local host; SSH to peers) and `lan_ip` for co-located nodes. Mesh overlay IPs are assigned from node order. No DuckDNS block, no `/etc/styx` setup, no manual WAN/LAN fields.
+`styxctl` auto-detects each node's `public_ipv4` and `public_ipv6` (`curl -4` / `curl -6` locally; same over SSH to peers) and `lan_ip` for co-located nodes. Mesh overlay IPs are assigned from node order. No DuckDNS block, no `/etc/styx` setup, no manual WAN/LAN fields.
 
 ```yaml
 cluster:

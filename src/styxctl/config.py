@@ -316,10 +316,11 @@ def format_config_summary(config: dict[str, Any], config_path: Path | None) -> s
         for node in nodes:
             host = node_hostname(config, node) or "-"
             pub = node.public_ipv4 or "-"
+            pub6 = node.public_ipv6 or "-"
             lan = node.lan_ip or "-"
             ips = ", ".join(filter(None, (node.ipv4, node.ipv6)))
             entry = " entrypoint" if node.site_entrypoint else ""
             lines.append(
-                f"  - {node.name} ({node.role}) public {pub} lan {lan} dns {host} mesh {ips}{entry}"
+                f"  - {node.name} ({node.role}) public {pub} public6 {pub6} lan {lan} dns {host} mesh {ips}{entry}"
             )
     return "\n".join(lines).rstrip() + "\n"

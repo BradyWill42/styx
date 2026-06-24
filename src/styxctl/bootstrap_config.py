@@ -8,13 +8,18 @@ from typing import Any
 
 from .bootstrap_mode import bootstrap_mode, dns_publish_enabled
 from .inventory import SystemInventory, collect_inventory
-from .network_detect import detect_lan_ipv4, detect_public_ipv4
+from .network_detect import (
+    REMOTE_PUBLIC_IPV4_SHELL,
+    REMOTE_PUBLIC_IPV6_SHELL,
+    detect_lan_ipv4,
+    detect_public_ipv4,
+    detect_public_ipv6,
+)
 from .network_plan import assign_node_mesh_ips
 from .nodes import identify_local_node, parse_nodes, sites_by_public_ip
 
 BOOTSTRAP_SSH_PORT = 22
 DEFAULT_GATEWAY_SSH_PORT = 47810
-_PUBLIC_IP_COMMAND = "curl -4 -fsS https://ifconfig.me 2>/dev/null || curl -4 -fsS https://api.ipify.org 2>/dev/null || true"
 _LAN_IP_COMMAND = (
     "ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | head -1 | cut -d/ -f1"
 )
@@ -67,7 +72,17 @@ def _discover_remote_value(node_name: str, ssh_user: str, remote_command: str) -
 
 
 def discover_remote_public_ipv4(node_name: str, ssh_user: str) -> str | None:
-    return _discover_remote_value(node_name, ssh_user, _PUBLIC_IP_COMMAND)
+    value = _discover_remote_value(node_name, ssh_user, REMOTE_PUBLIC_IPV4_SHELL)
+    if value and "." in value:
+        return value
+    return None
+
+
+def discover_remote_public_ipv6(node_name: str, ssh_user: str) -> str | None:
+    value = _discover_remote_value(node_name, ssh_user, REMOTE_PUBLIC_IPV6_SHELL)
+    if value and ":" in value:
+        return value.split("%", 1)[0]
+    return None
 
 
 def discover_remote_lan_ipv4(node_name: str, ssh_user: str) -> str | None:
@@ -101,6 +116,10 @@ def enrich_operational_config(
                 detected = detect_public_ipv4()
                 if detected:
                     item["public_ipv4"] = detected
+            if not item.get("public_ipv6"):
+                detected_v6 = detect_public_ipv6()
+                if detected_v6:
+                    item["public_ipv6"] = detected_v6
             if not item.get("lan_ip"):
                 lan = detect_lan_ipv4(inventory)
                 if lan:
@@ -119,6 +138,10 @@ def enrich_operational_config(
                 discovered = discover_remote_public_ipv4(name, ssh_user)
                 if discovered:
                     item["public_ipv4"] = discovered
+            if not item.get("public_ipv6"):
+                discovered_v6 = discover_remote_public_ipv6(name, ssh_user)
+                if discovered_v6:
+                    item["public_ipv6"] = discovered_v6
 
         parsed = parse_nodes(enriched)
         local_node = identify_local_node(parsed, inventory, enriched)
