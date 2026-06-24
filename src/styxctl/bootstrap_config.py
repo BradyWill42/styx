@@ -18,18 +18,11 @@ from .network_detect import (
 from .network_plan import assign_node_mesh_ips
 from .nodes import identify_local_node, parse_nodes, sites_by_public_ip
 
-BOOTSTRAP_SSH_PORT = 22
+BOOTSTRAP_SSH_PORT = 22  # admin / runner SSH; Styx cluster uses gateway.ssh_port (47810)
 DEFAULT_GATEWAY_SSH_PORT = 47810
 _LAN_IP_COMMAND = (
     "ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | head -1 | cut -d/ -f1"
 )
-
-
-def effective_ssh_port(config: dict[str, Any], gateway_ssh_port: int = DEFAULT_GATEWAY_SSH_PORT) -> int:
-    """SSH port for cluster operations: 22 before Styx gateway install, else gateway port."""
-    if bootstrap_mode(config):
-        return BOOTSTRAP_SSH_PORT
-    return gateway_ssh_port
 
 
 def load_operational_config(

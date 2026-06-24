@@ -8,7 +8,6 @@ from styxctl.bootstrap_config import (
     BOOTSTRAP_SSH_PORT,
     bootstrap_mode,
     dns_publish_enabled,
-    effective_ssh_port,
     enrich_operational_config,
     minimal_runners_config,
 )
@@ -33,20 +32,8 @@ def test_bootstrap_mode_false_when_duckdns_configured():
     assert dns_publish_enabled(config) is True
 
 
-def test_effective_ssh_port_uses_22_in_bootstrap():
-    config = minimal_runners_config()
-    assert effective_ssh_port(config, 47810) == BOOTSTRAP_SSH_PORT
-
-
-def test_effective_ssh_port_uses_gateway_after_dns():
-    config = resolve_config(
-        {
-            "cluster": {"name": "styx"},
-            "dns": {"provider": "duckdns"},
-            "nodes": [{"name": "a", "role": "init-server", "public_ipv4": "203.0.113.1"}],
-        }
-    )
-    assert effective_ssh_port(config, 47810) == 47810
+def test_bootstrap_ssh_port_is_admin_port():
+    assert BOOTSTRAP_SSH_PORT == 22
 
 
 def test_minimal_runners_config_has_three_nodes():

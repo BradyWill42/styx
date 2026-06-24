@@ -94,7 +94,7 @@ flowchart TB
 | `server` | Additional k3s control-plane / server node |
 | `agent` | k3s worker node |
 
-Each node uses `public_ipv4` (router WAN IP with port forwards) for bootstrap SSH and k3s joins when it is the site's entrypoint or a remote node, `lan_ip` for co-located LAN routing, `hostname` (DuckDNS) for stable naming after the cluster is connected, and mesh `ipv4` / `ipv6` for k3s `--node-ip`. Install and cluster join start on gateway ports `47810` (SSH) and `47811` (k3s API); co-located nodes without their own port-forward join over the LAN or outbound NAT. DuckDNS is published only after networking, LAN leader election, and node joins succeed. After cutover, cluster status and doctor checks use DuckDNS hostnames and can refresh stale records.
+Each node uses `public_ipv4` (router WAN IP with port forwards) for bootstrap SSH and k3s joins when it is the site's entrypoint or a remote node, `lan_ip` for co-located LAN routing, `hostname` (DuckDNS) for stable naming after the cluster is connected, and mesh `ipv4` / `ipv6` for k3s `--node-ip`. **SSH runs on port 22 (admin/runner) and on `gateway.ssh_port` (47810, Styx cluster)** — both listen together after `install apply local`. Install and cluster join use gateway ports `47810` (SSH) and `47811` (k3s API); co-located nodes without their own port-forward join over the LAN or outbound NAT. DuckDNS is published only after networking, LAN leader election, and node joins succeed.
 
 ---
 
@@ -144,13 +144,13 @@ styxctl sysprep check local          # re-check until READY
 
 ```bash
 cp styx.yaml.runners styx.yaml   # or styx.yaml.example for full explicit config
-styxctl config validate          # auto-detects public_ipv4/public_ipv6 (curl -4/-6) + lan_ip via SSH:22
+styxctl config validate          # auto-detects public_ipv4/public_ipv6 (curl -4/-6) + lan_ip
 
 styxctl install plan local
-styxctl install apply local      # on every node
+styxctl install apply local      # adds gateway SSH on 47810 alongside port 22
 
 styxctl install plan cluster
-styxctl install apply cluster    # SSH on port 22 until gateway ports are configured
+styxctl install apply cluster    # cluster SSH on gateway.ssh_port (47810)
 ```
 
 **Full config** (explicit IPs + DuckDNS hostnames):
@@ -366,7 +366,7 @@ Forward the Styx reserved range on each gateway node's router to that node:
 | `47810/tcp` | `47810/tcp` | SSH (sshd listens on Pi) |
 | `47811/tcp` | `47811/tcp` | k3s API (k3s listens on Pi) |
 
-`install apply local` configures sshd and k3s to listen on `gateway.ssh_port` and `gateway.k3s_api_port` on the Pi itself. Router forwards are 1:1 — same port outside and inside. styxctl connects to `public_ipv4:47810` for SSH and `https://public_ipv4:47811` for k3s join during bootstrap. After the cluster is healthy, `install apply cluster` publishes each node's current public IP to DuckDNS (`hostname`).
+`install apply local` adds a drop-in so sshd also listens on `gateway.ssh_port` and `gateway.k3s_api_port` — **port 22 stays up** for admin and GitHub runner access. Router forwards are 1:1 — same port outside and inside. styxctl connects to `public_ipv4:47810` for cluster SSH and `https://public_ipv4:47811` for k3s join.
 
 ### What MVP2 installs
 
@@ -804,25 +804,19 @@ Every pull request and push to `main` runs two layers:
 
 ### Styx runner integration (primary)
 
-Runs on every **online** self-hosted runner:
+Two stages on every **online** self-hosted runner:
 
-| Check | pegasus / atlas | thor |
-|-------|-----------------|------|
-| Runner identity matches `styx.yaml` | ✓ | ✓ |
-| Passwordless sudo, ssh, curl | ✓ | ✓ |
-| `sysprep check local` (real host) | ✓ | ✓ |
-| `config validate` | ✓ | ✓ |
-| Install/uninstall **plans** (real inventory) | ✓ | ✓ |
-| **Live UDP LAN election** | ✓ | — |
-| **Ping peer on LAN** | ✓ | — |
-| **SSH to hub** (port 22 bootstrap / ProxyJump) | — | ✓ |
+| Stage | What it checks |
+|-------|----------------|
+| **1 — prerequisites** | Runner identity, sudo, tools, `sysprep check local` (ports), `config validate` |
+| **2 — connectivity** | Real SSH to every other runner on **gateway port 47810** |
 
-Additional jobs:
+Uses `styx.yaml.runners` copied to `styx.yaml` on each runner.
 
-- **Hub LAN election consensus** — pegasus and atlas must discover each other and elect the **same** leader
-- **Cross-site SSH** — thor reaches the hub entrypoint and follower via WAN/ProxyJump
-
-Uses `styx.yaml.runners` copied to `styx.yaml` on each runner (no `/etc/styx` override).
+```bash
+python3 .github/scripts/stage1-prerequisites.py   # on any runner
+python3 .github/scripts/stage2-connectivity.py
+```
 
 ### CI (secondary)
 
@@ -830,11 +824,11 @@ Python 3.12 on `ubuntu-latest`: `pytest` + wheel build. Can pass while hardware 
 
 ### Self-hosted runners
 
-| Runner | Role in tests |
-|--------|----------------|
-| `pegasus` | Hub LAN election + integration |
-| `atlas` | Hub LAN election + integration |
-| `thor` | Cross-site SSH to hub |
+| Runner | Role |
+|--------|------|
+| `pegasus` | Hub site (co-located with atlas) |
+| `atlas` | Hub site (co-located with pegasus) |
+| `thor` | Remote site |
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
@@ -842,7 +836,7 @@ Python 3.12 on `ubuntu-latest`: `pytest` + wheel build. Can pass while hardware 
 | **Runner smoke** | Manual | Quick online-runner ping |
 | **Styx cluster E2E** | Manual | Destructive install → join → uninstall |
 
-The `tests/` unit suite (168 tests) is for local development. Run `python3 .github/scripts/runner-integration-test.py` on any runner to reproduce the live gate locally.
+The `tests/` unit suite is for local development. Runner stages above are the homelab gate (pre-MVP3).
 
 View results in **Actions**. Artifacts: `styx-runner-integration-<runner>`.
 

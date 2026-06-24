@@ -572,9 +572,9 @@ def build_install_plan(
             category="gateway",
             action="configure",
             status="pending",
-            reason=f"Configure sshd to listen on Styx gateway port {gateway.ssh}/tcp",
+            reason=f"Add sshd listen on Styx gateway port {gateway.ssh}/tcp (keeps port 22)",
             command_display=(
-                f"write {STYX_SSHD_DROPIN} with Port {gateway.ssh}; "
+                f"write {STYX_SSHD_DROPIN} with Port {gateway.ssh} alongside port 22; "
                 "sudo sshd -t && sudo systemctl reload ssh"
             ),
             requires_sudo=True,
@@ -899,7 +899,7 @@ def _write_styx_wireguard_config(
 
 def _configure_gateway_ssh(gateway_ssh_port: int, inventory: SystemInventory) -> RunResult:
     content = (
-        "# Managed by styxctl - Styx gateway SSH listen port\n"
+        "# Managed by styxctl - Styx gateway SSH (alongside default port 22)\n"
         f"Port {gateway_ssh_port}\n"
     )
     temp_path = Path("/tmp") / "styx-sshd-gateway.conf"

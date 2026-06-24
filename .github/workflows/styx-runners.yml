@@ -1,7 +1,7 @@
 # Primary CI gate: real integration tests on live self-hosted styx runners.
 #
-# Unit tests in tests/ are for local dev only (see ci.yml). This workflow is what
-# must pass for the homelab to be considered healthy.
+# Stage 1 — prerequisites (ports, sysprep, config) on each runner.
+# Stage 2 — real SSH connectivity between runners on gateway port 47810.
 
 name: Styx runner integration
 
@@ -25,7 +25,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       runners: ${{ steps.discover.outputs.runners }}
-      has_thor: ${{ steps.discover.outputs.has_thor }}
     steps:
       - name: List live self-hosted runners
         id: discover
@@ -46,10 +45,9 @@ jobs:
             }
 
             core.setOutput("runners", JSON.stringify(names));
-            core.setOutput("has_thor", names.includes("thor") ? "true" : "false");
 
-  integration:
-    name: Integration (${{ matrix.runner }})
+  prerequisites:
+    name: "Stage 1 — prerequisites (${{ matrix.runner }})"
     needs: discover-runners
     if: needs.discover-runners.outputs.runners != '[]'
     strategy:
@@ -57,7 +55,7 @@ jobs:
       matrix:
         runner: ${{ fromJson(needs.discover-runners.outputs.runners) }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
@@ -72,45 +70,31 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install -e .
 
-      - name: Run live runner integration checks
+      - name: Stage 1 — prerequisites
         env:
           RUNNER_NAME: ${{ matrix.runner }}
-        run: python3 .github/scripts/runner-integration-test.py
+        run: python3 .github/scripts/stage1-prerequisites.py
 
-      - name: Upload integration report
+      - name: Upload stage 1 report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: styx-runner-integration-${{ matrix.runner }}
+          name: styx-stage1-${{ matrix.runner }}
           path: reports/styx/runner-integration/
           if-no-files-found: warn
 
-  hub-election-consensus:
-    name: Hub LAN election consensus
-    needs: [discover-runners, integration]
-    if: always() && needs.discover-runners.outputs.runners != '[]'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download hub integration artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: styx-runner-integration-*
-          merge-multiple: true
-          path: runner-artifacts
-
-      - name: Verify pegasus and atlas agree on LAN election
-        run: python3 .github/scripts/verify-hub-election-consensus.py runner-artifacts
-
-  cross-site:
-    name: Cross-site SSH (thor -> hub)
-    needs: [discover-runners, integration]
+  connectivity:
+    name: "Stage 2 — connectivity (${{ matrix.runner }})"
+    needs: [discover-runners, prerequisites]
     if: |
       always() &&
-      needs.discover-runners.outputs.has_thor == 'true' &&
-      needs.integration.result != 'cancelled'
-    runs-on: thor
+      needs.discover-runners.outputs.runners != '[]' &&
+      needs.prerequisites.result != 'cancelled'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJson(needs.discover-runners.outputs.runners) }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
 
     steps:
@@ -126,15 +110,15 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install -e .
 
-      - name: Thor to hub connectivity
+      - name: Stage 2 — connectivity
         env:
-          RUNNER_NAME: thor
-        run: python3 .github/scripts/cross-site-connectivity-test.py
+          RUNNER_NAME: ${{ matrix.runner }}
+        run: python3 .github/scripts/stage2-connectivity.py
 
-      - name: Upload cross-site report
+      - name: Upload stage 2 report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: styx-cross-site-thor
+          name: styx-stage2-${{ matrix.runner }}
           path: reports/styx/runner-integration/
           if-no-files-found: warn

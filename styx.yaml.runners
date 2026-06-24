@@ -1,6 +1,7 @@
 # Minimal styx config for pegasus, atlas, and thor self-hosted runners.
 # No DuckDNS hostnames — DNS publish comes after the cluster is up.
 # public_ipv4 and public_ipv6 are auto-detected (local curl -4/-6 + SSH to peers on port 22).
+# Styx cluster SSH uses gateway.ssh_port (47810); port 22 stays for admin/runner access.
 #
 # Requirements on each runner: hostname matches node name, SSH keys between nodes.
 
