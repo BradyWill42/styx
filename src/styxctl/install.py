@@ -251,35 +251,27 @@ def _wireguard_addresses(config: dict[str, Any], inventory: SystemInventory) -> 
     network = config.get("network", {})
     addresses: list[str] = []
 
-    mesh_ipv4 = network.get("mesh_ipv4")
-    if isinstance(mesh_ipv4, str):
-        net4 = ipaddress.ip_network(mesh_ipv4, strict=False)
-        if inventory.bootstrap_ipv4:
+    def _resolve(cidr_key: str, bootstrap_ip: str | None) -> str | None:
+        cidr = network.get(cidr_key)
+        if not isinstance(cidr, str):
+            return None
+        net = ipaddress.ip_network(cidr, strict=False)
+        first = str(next(net.hosts()))
+        if bootstrap_ip:
             try:
-                host = ipaddress.ip_address(inventory.bootstrap_ipv4)
-                if host in net4:
-                    addresses.append(f"{host}/{net4.prefixlen}")
-                else:
-                    addresses.append(f"{next(net4.hosts())}/{net4.prefixlen}")
+                host = ipaddress.ip_address(bootstrap_ip)
+                return f"{host if host in net else first}/{net.prefixlen}"
             except ValueError:
-                addresses.append(f"{next(net4.hosts())}/{net4.prefixlen}")
-        else:
-            addresses.append(f"{next(net4.hosts())}/{net4.prefixlen}")
+                pass
+        return f"{first}/{net.prefixlen}"
 
-    mesh_ipv6 = network.get("mesh_ipv6")
-    if isinstance(mesh_ipv6, str):
-        net6 = ipaddress.ip_network(mesh_ipv6, strict=False)
-        if inventory.bootstrap_ipv6:
-            try:
-                host = ipaddress.ip_address(inventory.bootstrap_ipv6)
-                if host in net6:
-                    addresses.append(f"{host}/{net6.prefixlen}")
-                else:
-                    addresses.append(f"{next(net6.hosts())}/{net6.prefixlen}")
-            except ValueError:
-                addresses.append(f"{next(net6.hosts())}/{net6.prefixlen}")
-        else:
-            addresses.append(f"{next(net6.hosts())}/{net6.prefixlen}")
+    for cidr_key, bootstrap_ip in (
+        ("mesh_ipv4", inventory.bootstrap_ipv4),
+        ("mesh_ipv6", inventory.bootstrap_ipv6),
+    ):
+        addr = _resolve(cidr_key, bootstrap_ip)
+        if addr:
+            addresses.append(addr)
 
     return addresses
 
@@ -970,108 +962,25 @@ def _configure_gateway_ssh(gateway_ssh_port: int, inventory: SystemInventory) ->
     return False, detail or "could not reload ssh/sshd"
 
 
-def _allow_firewall_port(port: int, protocol: str, inventory: SystemInventory) -> RunResult:
+def _firewall_port(action: str, port: int, protocol: str, inventory: SystemInventory) -> RunResult:
+    """Allow or revoke a single port/protocol on whatever firewall backend is active.
+
+    action: "allow" or "revoke"
+    """
     binaries = inventory.firewall_backend.get("binaries", {})
     services = inventory.firewall_backend.get("services", {})
     label = f"{port}/{protocol}"
 
     ufw_active = (services.get("ufw", {}).get("active") or "").lower() == "active"
     if binaries.get("ufw") and ufw_active:
-        return _run_mutating(
-            ["ufw", "allow", label],
-            use_sudo=True,
-            sudo_available=inventory.sudo_available,
-        )
+        cmd = ["ufw", "allow", label] if action == "allow" else ["ufw", "delete", "allow", label]
+        return _run_mutating(cmd, use_sudo=True, sudo_available=inventory.sudo_available)
 
     firewalld_active = (services.get("firewalld", {}).get("active") or "").lower() == "active"
     if binaries.get("firewall-cmd") and firewalld_active:
+        subcmd = "--add-port" if action == "allow" else "--remove-port"
         ok, detail = _run_mutating(
-            ["firewall-cmd", "--permanent", "--add-port", label],
-            use_sudo=True,
-            sudo_available=inventory.sudo_available,
-        )
-        if not ok:
-            return ok, detail
-        return _run_mutating(
-            ["firewall-cmd", "--reload"],
-            use_sudo=True,
-            sudo_available=inventory.sudo_available,
-        )
-
-    if binaries.get("nft") and protocol == "udp":
-        return _run_mutating(
-            [
-                "nft",
-                "add",
-                "rule",
-                "inet",
-                "filter",
-                "input",
-                "udp",
-                "dport",
-                str(port),
-                "accept",
-            ],
-            use_sudo=True,
-            sudo_available=inventory.sudo_available,
-        )
-    if binaries.get("nft") and protocol == "tcp":
-        return _run_mutating(
-            [
-                "nft",
-                "add",
-                "rule",
-                "inet",
-                "filter",
-                "input",
-                "tcp",
-                "dport",
-                str(port),
-                "accept",
-            ],
-            use_sudo=True,
-            sudo_available=inventory.sudo_available,
-        )
-
-    return True, f"no active firewall backend detected; skipped {label}"
-
-
-def _apply_gateway_firewall(
-    wireguard_port: int,
-    gateway_ssh_port: int,
-    gateway_k3s_port: int,
-    inventory: SystemInventory,
-) -> RunResult:
-    results: list[str] = []
-    for port, protocol in (
-        (wireguard_port, "udp"),
-        (gateway_ssh_port, "tcp"),
-        (gateway_k3s_port, "tcp"),
-    ):
-        ok, detail = _allow_firewall_port(port, protocol, inventory)
-        results.append(f"{port}/{protocol}: {detail}")
-        if not ok:
-            return False, "; ".join(results)
-    return True, "; ".join(results)
-
-
-def _revoke_firewall_port(port: int, protocol: str, inventory: SystemInventory) -> RunResult:
-    binaries = inventory.firewall_backend.get("binaries", {})
-    services = inventory.firewall_backend.get("services", {})
-    label = f"{port}/{protocol}"
-
-    ufw_active = (services.get("ufw", {}).get("active") or "").lower() == "active"
-    if binaries.get("ufw") and ufw_active:
-        return _run_mutating(
-            ["ufw", "delete", "allow", label],
-            use_sudo=True,
-            sudo_available=inventory.sudo_available,
-        )
-
-    firewalld_active = (services.get("firewalld", {}).get("active") or "").lower() == "active"
-    if binaries.get("firewall-cmd") and firewalld_active:
-        ok, detail = _run_mutating(
-            ["firewall-cmd", "--permanent", "--remove-port", label],
+            ["firewall-cmd", "--permanent", subcmd, label],
             use_sudo=True,
             sudo_available=inventory.sudo_available,
         )
@@ -1084,9 +993,61 @@ def _revoke_firewall_port(port: int, protocol: str, inventory: SystemInventory) 
         )
 
     if binaries.get("nft"):
-        return True, f"nftables rule for {label} was not tracked; remove manually if needed"
+        if action == "revoke":
+            return True, f"nftables rule for {label} was not tracked; remove manually if needed"
+        return _run_mutating(
+            ["nft", "add", "rule", "inet", "filter", "input", protocol, "dport", str(port), "accept"],
+            use_sudo=True,
+            sudo_available=inventory.sudo_available,
+        )
 
     return True, f"no active firewall backend detected; skipped {label}"
+
+
+def _allow_firewall_port(port: int, protocol: str, inventory: SystemInventory) -> RunResult:
+    return _firewall_port("allow", port, protocol, inventory)
+
+
+def _revoke_firewall_port(port: int, protocol: str, inventory: SystemInventory) -> RunResult:
+    return _firewall_port("revoke", port, protocol, inventory)
+
+
+def _configure_gateway_ports(
+    action: str,
+    wireguard_port: int,
+    gateway_ssh_port: int,
+    gateway_k3s_port: int,
+    inventory: SystemInventory,
+) -> RunResult:
+    results: list[str] = []
+    for port, protocol in (
+        (wireguard_port, "udp"),
+        (gateway_ssh_port, "tcp"),
+        (gateway_k3s_port, "tcp"),
+    ):
+        ok, detail = _firewall_port(action, port, protocol, inventory)
+        results.append(f"{port}/{protocol}: {detail}")
+        if not ok:
+            return False, "; ".join(results)
+    return True, "; ".join(results)
+
+
+def _apply_gateway_firewall(
+    wireguard_port: int,
+    gateway_ssh_port: int,
+    gateway_k3s_port: int,
+    inventory: SystemInventory,
+) -> RunResult:
+    return _configure_gateway_ports("allow", wireguard_port, gateway_ssh_port, gateway_k3s_port, inventory)
+
+
+def _revoke_gateway_firewall(
+    wireguard_port: int,
+    gateway_ssh_port: int,
+    gateway_k3s_port: int,
+    inventory: SystemInventory,
+) -> RunResult:
+    return _configure_gateway_ports("revoke", wireguard_port, gateway_ssh_port, gateway_k3s_port, inventory)
 
 
 def build_firewall_revoke_shell(
@@ -1115,32 +1076,6 @@ def build_firewall_revoke_shell(
         "firewall-cmd --reload 2>/dev/null || true; fi"
     )
     return " && ".join(commands)
-
-
-def _revoke_gateway_firewall(
-    wireguard_port: int,
-    gateway_ssh_port: int,
-    gateway_k3s_port: int,
-    inventory: SystemInventory,
-) -> RunResult:
-    results: list[str] = []
-    for port, protocol in (
-        (wireguard_port, "udp"),
-        (gateway_ssh_port, "tcp"),
-        (gateway_k3s_port, "tcp"),
-    ):
-        ok, detail = _revoke_firewall_port(port, protocol, inventory)
-        results.append(f"{port}/{protocol}: {detail}")
-        if not ok:
-            return False, "; ".join(results)
-    return True, "; ".join(results)
-
-
-def _apply_firewall_allowance(
-    port: int,
-    inventory: SystemInventory,
-) -> RunResult:
-    return _allow_firewall_port(port, "udp", inventory)
 
 
 def _execute_step(
