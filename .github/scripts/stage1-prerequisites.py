@@ -11,10 +11,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from runner_lib import (
     REPO_ROOT,
+    configure_styx_gateway,
     fail_check,
     pass_check,
     exit_from_checks,
     prepare_styx_yaml,
+    port_listening,
     run,
     run_styxctl,
     runner_name,
@@ -24,16 +26,17 @@ from runner_lib import (
 def main() -> int:
     name = runner_name()
     print(f"=== Stage 1 — prerequisites: {name} ===")
-    prepare_styx_yaml(REPO_ROOT)
+    config_path = prepare_styx_yaml(REPO_ROOT)
 
     checks: list[dict[str, object]] = []
 
-    from styxctl.config import load_config
+    from styxctl.bootstrap_config import load_operational_config
+    from styxctl.gateway import parse_gateway_ports
     from styxctl.inventory import collect_inventory
     from styxctl.nodes import identify_local_node, parse_nodes
 
-    config = load_config(REPO_ROOT / "styx.yaml")
     inventory = collect_inventory()
+    config = load_operational_config(config_path, inventory=inventory)
     local_node = identify_local_node(parse_nodes(config), inventory, config)
 
     if local_node is None:
@@ -74,18 +77,31 @@ def main() -> int:
             status = report.get("status")
         except (StopIteration, OSError, json.JSONDecodeError) as exc:
             fail_check(checks, "sysprep_check", f"could not read sysprep report: {exc}")
-        elif status in {"READY", "READY_WITH_WARNINGS"}:
-            pass_check(checks, "sysprep_check", f"status={status}")
-        elif status == "BLOCKED":
-            fail_check(checks, "sysprep_check", f"host BLOCKED: {output[-500:]}")
         else:
-            fail_check(checks, "sysprep_check", f"unexpected status {status!r}")
+            if status in {"READY", "READY_WITH_WARNINGS"}:
+                pass_check(checks, "sysprep_check", f"status={status}")
+            elif status == "BLOCKED":
+                fail_check(checks, "sysprep_check", f"host BLOCKED: {output[-500:]}")
+            else:
+                fail_check(checks, "sysprep_check", f"unexpected status {status!r}")
 
     code, output = run_styxctl("config", "validate")
     if code == 0:
         pass_check(checks, "config_validate")
     else:
         fail_check(checks, "config_validate", output or f"exit {code}")
+
+    gateway = parse_gateway_ports(config)
+    ok, detail = configure_styx_gateway(config_path)
+    if ok:
+        pass_check(checks, "gateway_configure", detail)
+    else:
+        fail_check(checks, "gateway_configure", detail)
+
+    if port_listening(gateway.ssh):
+        pass_check(checks, "gateway_listen_local", f"port {gateway.ssh}")
+    else:
+        fail_check(checks, "gateway_listen_local", f"port {gateway.ssh} not accepting connections")
 
     return exit_from_checks(name, "prerequisites", checks)
 

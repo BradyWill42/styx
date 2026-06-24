@@ -18,6 +18,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   discover-runners:
@@ -71,6 +72,7 @@ jobs:
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install -e .
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Stage 1 — prerequisites
         env:
@@ -89,9 +91,8 @@ jobs:
     name: "Stage 2 — connectivity (${{ matrix.runner }})"
     needs: [discover-runners, prerequisites]
     if: |
-      always() &&
       needs.discover-runners.outputs.runners != '[]' &&
-      needs.prerequisites.result != 'cancelled'
+      needs.prerequisites.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -111,6 +112,7 @@ jobs:
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install -e .
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Stage 2 — connectivity
         env:
