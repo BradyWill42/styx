@@ -20,7 +20,6 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "build>=1.2",
-  "pytest>=8.0",
 ]
 
 [project.scripts]
@@ -28,7 +27,3 @@ styxctl = "styxctl.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/styxctl"]
-
-[tool.pytest.ini_options]
-pythonpath = ["src"]
-testpaths = ["tests"]

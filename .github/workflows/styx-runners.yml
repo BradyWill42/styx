@@ -1,7 +1,7 @@
-# Primary CI gate: real integration tests on live self-hosted styx runners.
+# Primary CI gate: live integration on pegasus, atlas, and thor.
 #
 # Stage 1 — prerequisites (ports, sysprep, config) on each runner.
-# Stage 2 — real SSH connectivity between runners on gateway port 47810.
+# Stage 2 — real SSH connectivity between all runners on gateway port 47810.
 
 name: Styx runner integration
 
@@ -36,15 +36,17 @@ jobs:
               repo: context.repo.repo,
             });
 
+            const required = ["pegasus", "atlas", "thor"];
             const online = data.runners.filter((runner) => runner.status === "online");
             const names = online.map((runner) => runner.name).sort();
+            const missing = required.filter((name) => !names.includes(name));
 
             core.info(`Online runners: ${names.join(", ") || "none"}`);
-            if (names.length === 0) {
-              core.setFailed("No online self-hosted runners available");
+            if (missing.length > 0) {
+              core.setFailed(`Required runners offline or missing: ${missing.join(", ")}`);
             }
 
-            core.setOutput("runners", JSON.stringify(names));
+            core.setOutput("runners", JSON.stringify(required));
 
   prerequisites:
     name: "Stage 1 — prerequisites (${{ matrix.runner }})"

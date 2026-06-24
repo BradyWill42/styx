@@ -759,20 +759,11 @@ Investigate any changes to `/etc/wireguard/wg0.conf` before retrying. MVP2 snaps
 python -m pip install -e ".[dev]"
 ```
 
-### Run tests
+### Run locally on a runner
 
 ```bash
-python -m pytest -v
-```
-
-### Manual smoke checks
-
-```bash
-styxctl sysprep check local
-styxctl sysprep safe plan local
-styxctl config validate
-styxctl install plan local
-styxctl report show
+python3 .github/scripts/stage1-prerequisites.py
+python3 .github/scripts/stage2-connectivity.py
 ```
 
 ### Project layout
@@ -789,7 +780,7 @@ src/styxctl/
   install.py          # Local + cluster install (MVP2)
   k3s_cluster.py      # k3s cluster planning and SSH orchestration
   install_report.py   # Install report generation
-tests/                # pytest suite
+styx.yaml.runners     # Minimal pegasus / atlas / thor config
 styx.yaml.example     # Reference cluster configuration
 ```
 
@@ -797,19 +788,19 @@ styx.yaml.example     # Reference cluster configuration
 
 ## Continuous integration
 
-Every pull request and push to `main` runs two layers:
+Every pull request and push to `main` runs:
 
-1. **CI** (GitHub-hosted) — unit tests for dev feedback; **not** the homelab gate
-2. **Styx runner integration** (self-hosted) — **primary gate** on live pegasus, atlas, and thor
+1. **CI** (GitHub-hosted) — install package, `styxctl --help`, wheel build
+2. **Styx runner integration** (self-hosted) — **primary gate** on **pegasus, atlas, and thor**
 
 ### Styx runner integration (primary)
 
-Two stages on every **online** self-hosted runner:
+All three runners must be **online**. Each runs both stages:
 
 | Stage | What it checks |
 |-------|----------------|
-| **1 — prerequisites** | Runner identity, sudo, tools, `sysprep check local` (ports), `config validate` |
-| **2 — connectivity** | Real SSH to every other runner on **gateway port 47810** |
+| **1 — prerequisites** | Identity, sudo, tools, `sysprep check local` (ports), `config validate` |
+| **2 — connectivity** | Real SSH to **pegasus, atlas, and thor** peers on gateway port **47810** |
 
 Uses `styx.yaml.runners` copied to `styx.yaml` on each runner.
 
@@ -818,27 +809,25 @@ python3 .github/scripts/stage1-prerequisites.py   # on any runner
 python3 .github/scripts/stage2-connectivity.py
 ```
 
-### CI (secondary)
+### CI (GitHub-hosted)
 
-Python 3.12 on `ubuntu-latest`: `pytest` + wheel build. Can pass while hardware is broken.
+Package install + wheel build only.
 
-### Self-hosted runners
+### Self-hosted runners (required)
 
-| Runner | Role |
+| Runner | Site |
 |--------|------|
-| `pegasus` | Hub site (co-located with atlas) |
-| `atlas` | Hub site (co-located with pegasus) |
+| `pegasus` | Hub (co-located with atlas) |
+| `atlas` | Hub (co-located with pegasus) |
 | `thor` | Remote site |
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| **Styx runner integration** | Push / PR | **Primary gate** — live checks on all online runners |
+| **Styx runner integration** | Push / PR | **Primary gate** — stages 1 and 2 on all three runners |
 | **Runner smoke** | Manual | Quick online-runner ping |
 | **Styx cluster E2E** | Manual | Destructive install → join → uninstall |
 
-The `tests/` unit suite is for local development. Runner stages above are the homelab gate (pre-MVP3).
-
-View results in **Actions**. Artifacts: `styx-runner-integration-<runner>`.
+View results in **Actions**. Artifacts: `styx-stage1-<runner>`, `styx-stage2-<runner>`.
 
 ---
 
