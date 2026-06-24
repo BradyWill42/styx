@@ -43,42 +43,23 @@ def detect_lan_ipv6(inventory: SystemInventory) -> str | None:
 
 def detect_public_ipv4() -> str | None:
     """Detect the router WAN / public IPv4 address."""
-    for command in (
-        ["curl", "-4", "-fsS", "https://ifconfig.me"],
-        ["curl", "-4", "-fsS", "https://api.ipify.org"],
-        ["curl", "-4", "-fsS", "https://icanhazip.com"],
-    ):
-        result = safe_run("detect_public_ipv4", command, timeout=8.0)
-        if result.returncode == 0 and result.stdout.strip():
-            candidate = result.stdout.strip().split()[0]
-            if "." in candidate:
-                return candidate
+    result = safe_run("detect_public_ipv4", ["curl", "-4", "-fsS", "https://ifconfig.me"], timeout=8.0)
+    if result.returncode == 0 and result.stdout.strip():
+        candidate = result.stdout.strip().split()[0]
+        if "." in candidate:
+            return candidate
     return None
 
 
 def detect_public_ipv6() -> str | None:
     """Detect the router WAN / public IPv6 address when available."""
-    for command in (
-        ["curl", "-6", "-fsS", "https://ifconfig.me"],
-        ["curl", "-6", "-fsS", "https://api64.ipify.org"],
-        ["curl", "-6", "-fsS", "https://icanhazip.com"],
-    ):
-        result = safe_run("detect_public_ipv6", command, timeout=8.0)
-        if result.returncode == 0 and result.stdout.strip():
-            candidate = result.stdout.strip().split()[0]
-            if ":" in candidate:
-                return candidate.split("%", 1)[0]
+    result = safe_run("detect_public_ipv6", ["curl", "-6", "-fsS", "https://ifconfig.me"], timeout=8.0)
+    if result.returncode == 0 and result.stdout.strip():
+        candidate = result.stdout.strip().split()[0]
+        if ":" in candidate:
+            return candidate.split("%", 1)[0]
     return None
 
 
-# Shell one-liners for remote discovery over SSH (bootstrap port 22).
-REMOTE_PUBLIC_IPV4_SHELL = (
-    "curl -4 -fsS https://ifconfig.me 2>/dev/null || "
-    "curl -4 -fsS https://api.ipify.org 2>/dev/null || "
-    "curl -4 -fsS https://icanhazip.com 2>/dev/null || true"
-)
-REMOTE_PUBLIC_IPV6_SHELL = (
-    "curl -6 -fsS https://ifconfig.me 2>/dev/null || "
-    "curl -6 -fsS https://api64.ipify.org 2>/dev/null || "
-    "curl -6 -fsS https://icanhazip.com 2>/dev/null || true"
-)
+REMOTE_PUBLIC_IPV4_SHELL = "curl -4 -fsS https://ifconfig.me 2>/dev/null || true"
+REMOTE_PUBLIC_IPV6_SHELL = "curl -6 -fsS https://ifconfig.me 2>/dev/null || true"
