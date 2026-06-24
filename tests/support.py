@@ -80,6 +80,41 @@ def homelab_config_with_roles(
     }
 
 
+def homelab_three_node_config(
+    *,
+    pegasus_role: str = "init-server",
+    atlas_role: str = "agent",
+    thor_role: str = "server",
+    leader: str = "lan-elected",
+    thor_public_ipv4: str = "203.0.113.20",
+) -> dict[str, Any]:
+    """Three-site topology: pegasus + atlas share one WAN; thor is on a separate WAN."""
+    config = homelab_config_with_roles(
+        pegasus_role=pegasus_role,
+        atlas_role=atlas_role,
+        leader=leader,
+    )
+    config["nodes"].append(
+        {
+            "name": "thor",
+            "public_ipv4": thor_public_ipv4,
+            "ipv4": "10.0.0.3",
+            "ipv6": "fd00:cafe::3",
+            "role": thor_role,
+            "hostname": "thor.duckdns.org",
+        }
+    )
+    dns = config.setdefault("dns", {})
+    fixed = dns.setdefault("fixed_endpoints", {})
+    if isinstance(fixed, dict):
+        fixed["thor"] = "thor"
+    return config
+
+
+HUB_PUBLIC_IPV4 = "71.104.114.70"
+THOR_PUBLIC_IPV4 = "203.0.113.20"
+
+
 def empty_artifacts() -> dict[str, list[str]]:
     return {key: [] for key in ARTIFACT_KEYS}
 
