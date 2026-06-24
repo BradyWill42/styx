@@ -1029,9 +1029,9 @@ def run_uninstall_cluster(
     inventory = collect_inventory()
     resolved_path = Path(config_path) if config_path is not None else find_config()
     plan = build_cluster_uninstall_plan(config_path=resolved_path, inventory=inventory)
-    pending = [node for node in plan.nodes if not node.local_execution or any(
-        step.status == "pending" for step in build_uninstall_plan(config_path=resolved_path, inventory=inventory).steps
-    )]
+    local_plan = build_uninstall_plan(config_path=resolved_path, inventory=inventory)
+    local_has_pending = any(step.status == "pending" for step in local_plan.steps)
+    pending = [node for node in plan.nodes if not node.local_execution or local_has_pending]
 
     if dry_run:
         return _build_cluster_uninstall_report(plan, dry_run=True), 0
