@@ -761,32 +761,54 @@ styx.yaml.example     # Reference cluster configuration
 
 ## Continuous integration
 
-Every pull request and push to `main` runs CI:
+Every pull request and push to `main` runs two layers:
 
-1. **Test matrix** (GitHub-hosted) — Python 3.10, 3.11, 3.12: pytest, CLI smoke, wheel build
-2. **Styx gateway checks** (self-hosted) — pytest, LAN election, and read-only checks on **pegasus** and **atlas** (init-server + agent hub)
-3. **Sysprep smoke** (GitHub-hosted fallback) — same read-only checks on `ubuntu-latest` when self-hosted runners are offline
+1. **CI** (GitHub-hosted) — unit tests for dev feedback; **not** the homelab gate
+2. **Styx runner integration** (self-hosted) — **primary gate** on live pegasus, atlas, and thor
+
+### Styx runner integration (primary)
+
+Runs on every **online** self-hosted runner:
+
+| Check | pegasus / atlas | thor |
+|-------|-----------------|------|
+| Runner identity matches `styx.yaml` | ✓ | ✓ |
+| Passwordless sudo, ssh, curl | ✓ | ✓ |
+| `sysprep check local` (real host) | ✓ | ✓ |
+| `config validate` | ✓ | ✓ |
+| Install/uninstall **plans** (real inventory) | ✓ | ✓ |
+| **Live UDP LAN election** | ✓ | — |
+| **Ping peer on LAN** | ✓ | — |
+| **SSH to hub** (gateway port + ProxyJump) | — | ✓ |
+
+Additional jobs:
+
+- **Hub LAN election consensus** — pegasus and atlas must discover each other and elect the **same** leader
+- **Cross-site SSH** — thor reaches the hub entrypoint and follower via WAN/ProxyJump
+
+Uses `/etc/styx/styx.yaml` on each runner when present, else `styx.yaml.homelab`.
+
+### CI (secondary)
+
+Python 3.12 on `ubuntu-latest`: `pytest` + wheel build. Can pass while hardware is broken.
 
 ### Self-hosted runners
 
-Account runners used for hub testing:
-
-| Runner | Typical role labels | Notes |
-|--------|---------------------|-------|
-| `pegasus` | `init-server`, `server` | Configured init-server in homelab styx.yaml |
-| `atlas` | `init-server`, `server`, `agent` | Configured agent in homelab styx.yaml |
-
-The gateway workflow targets **pegasus** and **atlas** only. Both share one WAN IP; LAN election (`cluster.leader: lan-elected`) elects the hub init-server between them.
+| Runner | Role in tests |
+|--------|----------------|
+| `pegasus` | Hub LAN election + integration |
+| `atlas` | Hub LAN election + integration |
+| `thor` | Cross-site SSH to hub (needs thor in `styx.yaml`) |
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| **Runner smoke** | Manual | Confirm each **online** runner picks up jobs |
-| **Styx gateway checks** | Push / PR | Pytest, LAN election, and read-only checks on pegasus + atlas |
-| **Styx cluster E2E** | Manual | Preflight uninstall → install → cluster join → teardown uninstall (live nodes only) |
+| **Styx runner integration** | Push / PR | **Primary gate** — live checks on all online runners |
+| **Runner smoke** | Manual | Quick online-runner ping |
+| **Styx cluster E2E** | Manual | Destructive install → join → uninstall |
 
-Start with **Runner smoke** (`workflow_dispatch`), then push to `main` to exercise **Styx gateway checks**.
+The `tests/` unit suite (168 tests) is for local development. Run `python3 .github/scripts/runner-integration-test.py` on any runner to reproduce the live gate locally.
 
-View results in the repository **Actions** tab. Gateway workflows upload per-runner report artifacts (`styx-gateway-report-pegasus`, `styx-lan-election-atlas`, etc.).
+View results in **Actions**. Artifacts: `styx-runner-integration-<runner>`.
 
 ---
 

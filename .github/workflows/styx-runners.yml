@@ -1,0 +1,140 @@
+# Primary CI gate: real integration tests on live self-hosted styx runners.
+#
+# Unit tests in tests/ are for local dev only (see ci.yml). This workflow is what
+# must pass for the homelab to be considered healthy.
+
+name: Styx runner integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: styx-runner-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  discover-runners:
+    name: Discover online runners
+    runs-on: ubuntu-latest
+    outputs:
+      runners: ${{ steps.discover.outputs.runners }}
+      has_thor: ${{ steps.discover.outputs.has_thor }}
+    steps:
+      - name: List live self-hosted runners
+        id: discover
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.actions.listSelfHostedRunnersForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+
+            const online = data.runners.filter((runner) => runner.status === "online");
+            const names = online.map((runner) => runner.name).sort();
+
+            core.info(`Online runners: ${names.join(", ") || "none"}`);
+            if (names.length === 0) {
+              core.setFailed("No online self-hosted runners available");
+            }
+
+            core.setOutput("runners", JSON.stringify(names));
+            core.setOutput("has_thor", names.includes("thor") ? "true" : "false");
+
+  integration:
+    name: Integration (${{ matrix.runner }})
+    needs: discover-runners
+    if: needs.discover-runners.outputs.runners != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJson(needs.discover-runners.outputs.runners) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install styxctl
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -e .
+
+      - name: Run live runner integration checks
+        env:
+          RUNNER_NAME: ${{ matrix.runner }}
+        run: python3 .github/scripts/runner-integration-test.py
+
+      - name: Upload integration report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: styx-runner-integration-${{ matrix.runner }}
+          path: reports/styx/runner-integration/
+          if-no-files-found: warn
+
+  hub-election-consensus:
+    name: Hub LAN election consensus
+    needs: [discover-runners, integration]
+    if: always() && needs.discover-runners.outputs.runners != '[]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download hub integration artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: styx-runner-integration-*
+          merge-multiple: true
+          path: runner-artifacts
+
+      - name: Verify pegasus and atlas agree on LAN election
+        run: python3 .github/scripts/verify-hub-election-consensus.py runner-artifacts
+
+  cross-site:
+    name: Cross-site SSH (thor -> hub)
+    needs: [discover-runners, integration]
+    if: |
+      always() &&
+      needs.discover-runners.outputs.has_thor == 'true' &&
+      needs.integration.result != 'cancelled'
+    runs-on: thor
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install styxctl
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -e .
+
+      - name: Thor to hub connectivity
+        env:
+          RUNNER_NAME: thor
+        run: python3 .github/scripts/cross-site-connectivity-test.py
+
+      - name: Upload cross-site report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: styx-cross-site-thor
+          path: reports/styx/runner-integration/
+          if-no-files-found: warn
