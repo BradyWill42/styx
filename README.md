@@ -414,7 +414,7 @@ The shipped example is a minimal three-node layout (pegasus, atlas, thor) with `
 - `name` — must match the host's hostname
 - `role` — `init-server`, `server`, or `agent`
 
-SSH login user defaults to the node `name` (override with `user:` if needed). Passwordless SSH between nodes on port **22** is required.
+SSH login user defaults to the node `name` (override with `user:` if needed). Passwordless SSH between nodes on **gateway port 47810** is required for cluster operations and CI.
 
 `styxctl` auto-detects `public_ipv4` / `public_ipv6` (`curl -4` / `curl -6` on ifconfig.me) and `lan_ip` for co-located peers. Mesh overlay IPs assign from node order.
 
@@ -742,8 +742,8 @@ All three runners must be **online**. Each runs both stages:
 
 | Stage | What it checks |
 |-------|----------------|
-| **1 — prerequisites** | Identity, sudo, tools, sysprep, bootstrap SSH (port 22) to peers, enriched config + `public_ipv4`, gateway SSH on **47810** |
-| **2 — connectivity** | SSH from this runner to **every other node** on gateway port **47810** (styx routing: public IP or LAN/ProxyJump) |
+| **1 — prerequisites** | Identity, sudo, tools, sysprep, local `public_ipv4` (curl), gateway SSH on **47810** (Styx range only — never port 22) |
+| **2 — connectivity** | Discover peer IPs via gateway SSH, validate config, SSH from this runner to **every other node** on **47810** |
 
 Uses `styx.yaml.example` copied to `styx.yaml`. JSON reports are written to `reports/styx/runner-integration/` and summarized in the workflow **Integration summary** job.
 

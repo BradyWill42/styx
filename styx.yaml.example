@@ -1,7 +1,7 @@
 # Copy to styx.yaml. SSH username defaults to each node name (hostname).
 # Mesh overlay IPs assign automatically. With bootstrap: true, public_ipv4/public_ipv6
-# and lan_ip are auto-detected (curl -4/-6 on ifconfig.me; SSH to peers on port 22).
-# Styx cluster SSH uses gateway.ssh_port (47810); port 22 stays for admin/runner access.
+# and lan_ip are auto-detected locally (curl -4/-6 on ifconfig.me) and on peers via
+# gateway SSH (47810). Port 22 is admin/user SSH only — styxctl never uses it.
 
 cluster:
   name: styx

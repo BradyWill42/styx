@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 2: real SSH connectivity between self-hosted runners (gateway port 47810)."""
+"""Stage 2: SSH interconnectivity between runners on Styx gateway port 47810."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from runner_lib import (
     fail_check,
     pass_check,
     exit_from_checks,
+    load_operational_config_with_retries,
     port_listening,
     prepare_styx_yaml,
     run_ssh_probe,
@@ -26,14 +27,14 @@ def main() -> int:
     config_path = prepare_styx_yaml(REPO_ROOT)
     checks: list[dict[str, object]] = []
 
-    from styxctl.bootstrap_config import load_operational_config
+    from styxctl.config import config_status, validate_config
     from styxctl.gateway import parse_gateway_ports
     from styxctl.inventory import collect_inventory
     from styxctl.k3s_cluster import _node_ssh_connection
     from styxctl.nodes import identify_local_node, parse_nodes
 
     inventory = collect_inventory()
-    config = load_operational_config(config_path, inventory=inventory)
+    config = load_operational_config_with_retries(config_path, inventory=inventory)
     nodes = parse_nodes(config)
     local_node = identify_local_node(nodes, inventory, config)
     if local_node is None:
@@ -41,15 +42,30 @@ def main() -> int:
     gateway = parse_gateway_ports(config)
 
     if local_node is None:
-        fail_check(checks, "local_node", f"host {inventory.hostname!r} not in styx.yaml")
+        fail_check(checks, "local_node", f"runner {name!r} not in styx.yaml")
         return exit_from_checks(name, "connectivity", checks)
 
     pass_check(checks, "local_node", local_node.name)
 
-    if not local_node.public_ipv4:
-        fail_check(checks, "local_public_ipv4", "missing after bootstrap enrichment")
+    for node in nodes:
+        label = node.public_ipv4 or "missing"
+        lan = f" lan={node.lan_ip}" if node.lan_ip else ""
+        if node.public_ipv4:
+            pass_check(checks, f"node_{node.name}_public_ipv4", f"{label}{lan}")
+        else:
+            fail_check(
+                checks,
+                f"node_{node.name}_public_ipv4",
+                f"not discovered via gateway SSH port {gateway.ssh}",
+            )
+
+    issues = validate_config(config, inventory=inventory)
+    status = config_status(issues)
+    if status == "INVALID":
+        errors = [f"{issue.path}: {issue.message}" for issue in issues if issue.level == "error"]
+        fail_check(checks, "config_validate", "; ".join(errors[:5]) or status)
     else:
-        pass_check(checks, "local_public_ipv4", local_node.public_ipv4)
+        pass_check(checks, "config_validate", status)
 
     if port_listening(gateway.ssh):
         pass_check(checks, "gateway_listen_local", f"port {gateway.ssh}")
@@ -57,7 +73,7 @@ def main() -> int:
         fail_check(
             checks,
             "gateway_listen_local",
-            f"port {gateway.ssh} not listening — run stage 1 gateway configure first",
+            f"port {gateway.ssh} not listening — run stage 1 first",
         )
 
     for peer in nodes:
@@ -65,9 +81,7 @@ def main() -> int:
             continue
 
         if not peer.public_ipv4:
-            fail_check(checks, f"peer_{peer.name}_public_ipv4", "missing in operational config")
             continue
-        pass_check(checks, f"peer_{peer.name}_public_ipv4", peer.public_ipv4)
 
         connection = _node_ssh_connection(
             peer,

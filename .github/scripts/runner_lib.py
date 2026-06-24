@@ -8,11 +8,13 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REPORT_DIR = Path("reports/styx/runner-integration")
-BOOTSTRAP_SSH_PORT = 22
+PERSISTENT_CONFIG = Path("/etc/styx/styx.yaml")
 
 
 def runner_name() -> str:
@@ -24,9 +26,13 @@ def runner_name() -> str:
 
 
 def prepare_styx_yaml(repo_root: Path | None = None) -> Path:
-    """Copy styx.yaml.example into styx.yaml for runner integration."""
+    """Prepare styx.yaml for runner integration (prefer persistent runner config)."""
     root = repo_root or REPO_ROOT
     target = root / "styx.yaml"
+    if PERSISTENT_CONFIG.is_file():
+        target.write_text(PERSISTENT_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
+        print(f"Using {PERSISTENT_CONFIG}")
+        return target
     example = root / "styx.yaml.example"
     if not example.is_file():
         raise FileNotFoundError(f"Missing config example: {example}")
@@ -84,7 +90,7 @@ def run_ssh_probe(
     jump: str | None = None,
     timeout: float = 30.0,
 ) -> tuple[bool, str]:
-    """SSH for runner integration tests (accept-new host keys on first peer contact)."""
+    """SSH over Styx gateway ports (47800-47850); never uses admin port 22."""
     if shutil.which("ssh") is None:
         return False, "ssh command not found"
     command = [
@@ -118,6 +124,34 @@ def run_ssh_probe(
     if completed.returncode == 0:
         return True, detail or "ok"
     return False, detail or f"ssh exit code {completed.returncode}"
+
+
+def load_operational_config_with_retries(
+    config_path: Path,
+    *,
+    inventory: Any | None = None,
+    attempts: int = 6,
+    delay_sec: float = 10.0,
+) -> dict[str, Any]:
+    """Reload operational config until peer IPs are discovered via gateway SSH."""
+    from styxctl.bootstrap_config import load_operational_config
+    from styxctl.inventory import collect_inventory
+    from styxctl.nodes import parse_nodes
+
+    inventory = inventory or collect_inventory()
+    config: dict[str, Any] = {}
+    for attempt in range(1, attempts + 1):
+        config = load_operational_config(config_path, inventory=inventory)
+        missing = [node.name for node in parse_nodes(config) if not node.public_ipv4]
+        if not missing:
+            return config
+        if attempt < attempts:
+            print(
+                f"Waiting for peer public_ipv4 via gateway SSH "
+                f"(missing: {', '.join(missing)}; retry {attempt}/{attempts - 1})"
+            )
+            time.sleep(delay_sec)
+    return config
 
 
 def configure_styx_gateway(config_path: Path) -> tuple[bool, str]:

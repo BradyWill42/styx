@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .bootstrap_mode import bootstrap_mode
+from .gateway import parse_gateway_ports
 from .inventory import SystemInventory, collect_inventory
 from .network_detect import (
     REMOTE_PUBLIC_IPV4_SHELL,
@@ -18,8 +19,6 @@ from .network_detect import (
 from .network_plan import assign_node_mesh_ips
 from .nodes import identify_local_node, parse_nodes, sites_by_public_ip
 
-BOOTSTRAP_SSH_PORT = 22  # admin / runner SSH; Styx cluster uses gateway.ssh_port (47810)
-DEFAULT_GATEWAY_SSH_PORT = 47810
 _LAN_IP_COMMAND = (
     "ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | head -1 | cut -d/ -f1"
 )
@@ -39,14 +38,19 @@ def load_operational_config(
     return enrich_operational_config(resolve_config(raw), inventory)
 
 
-def _discover_remote_value(node_name: str, remote_command: str) -> str | None:
+def _discover_remote_value(
+    node_name: str,
+    remote_command: str,
+    *,
+    gateway_ssh_port: int,
+) -> str | None:
     from .k3s_cluster import _run_ssh_command
 
     target = f"{node_name}@{node_name}"
     ok, detail = _run_ssh_command(
         target,
         remote_command,
-        port=BOOTSTRAP_SSH_PORT,
+        port=gateway_ssh_port,
         timeout=20.0,
     )
     if not ok:
@@ -55,22 +59,34 @@ def _discover_remote_value(node_name: str, remote_command: str) -> str | None:
     return candidate or None
 
 
-def discover_remote_public_ipv4(node_name: str) -> str | None:
-    value = _discover_remote_value(node_name, REMOTE_PUBLIC_IPV4_SHELL)
+def discover_remote_public_ipv4(node_name: str, *, gateway_ssh_port: int) -> str | None:
+    value = _discover_remote_value(
+        node_name,
+        REMOTE_PUBLIC_IPV4_SHELL,
+        gateway_ssh_port=gateway_ssh_port,
+    )
     if value and "." in value:
         return value
     return None
 
 
-def discover_remote_public_ipv6(node_name: str) -> str | None:
-    value = _discover_remote_value(node_name, REMOTE_PUBLIC_IPV6_SHELL)
+def discover_remote_public_ipv6(node_name: str, *, gateway_ssh_port: int) -> str | None:
+    value = _discover_remote_value(
+        node_name,
+        REMOTE_PUBLIC_IPV6_SHELL,
+        gateway_ssh_port=gateway_ssh_port,
+    )
     if value and ":" in value:
         return value.split("%", 1)[0]
     return None
 
 
-def discover_remote_lan_ipv4(node_name: str) -> str | None:
-    value = _discover_remote_value(node_name, _LAN_IP_COMMAND)
+def discover_remote_lan_ipv4(node_name: str, *, gateway_ssh_port: int) -> str | None:
+    value = _discover_remote_value(
+        node_name,
+        _LAN_IP_COMMAND,
+        gateway_ssh_port=gateway_ssh_port,
+    )
     if value and not value.startswith("127."):
         return value
     return None
@@ -83,6 +99,7 @@ def enrich_operational_config(
     """Fill missing bootstrap fields from the local host and SSH to peer nodes."""
     enriched = copy.deepcopy(config)
     assign_node_mesh_ips(enriched)
+    gateway = parse_gateway_ports(enriched)
 
     nodes_raw = enriched.get("nodes")
     if not isinstance(nodes_raw, list):
@@ -118,11 +135,11 @@ def enrich_operational_config(
             if local_node is not None and name == local_node.name:
                 continue
             if not item.get("public_ipv4"):
-                discovered = discover_remote_public_ipv4(name)
+                discovered = discover_remote_public_ipv4(name, gateway_ssh_port=gateway.ssh)
                 if discovered:
                     item["public_ipv4"] = discovered
             if not item.get("public_ipv6"):
-                discovered_v6 = discover_remote_public_ipv6(name)
+                discovered_v6 = discover_remote_public_ipv6(name, gateway_ssh_port=gateway.ssh)
                 if discovered_v6:
                     item["public_ipv6"] = discovered_v6
 
@@ -130,7 +147,6 @@ def enrich_operational_config(
         local_node = identify_local_node(parsed, inventory, enriched)
         if local_node is not None and local_node.public_ipv4:
             site_nodes = sites_by_public_ip(parsed).get(local_node.public_ipv4, [])
-            local_lan = detect_lan_ipv4(inventory)
             for node in site_nodes:
                 if node.name == local_node.name:
                     continue
@@ -138,7 +154,7 @@ def enrich_operational_config(
                     if not isinstance(item, dict) or item.get("name") != node.name:
                         continue
                     if not item.get("lan_ip"):
-                        lan = discover_remote_lan_ipv4(node.name)
+                        lan = discover_remote_lan_ipv4(node.name, gateway_ssh_port=gateway.ssh)
                         if lan:
                             item["lan_ip"] = lan
                     break

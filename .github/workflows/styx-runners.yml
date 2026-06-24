@@ -1,7 +1,7 @@
 # Primary CI gate: live integration on pegasus, atlas, and thor.
 #
-# Stage 1 — prerequisites (ports, sysprep, bootstrap SSH, config, gateway SSH).
-# Stage 2 — real SSH connectivity between all runners on gateway port 47810.
+# Stage 1 — local prerequisites and gateway SSH (47810 only; port 22 untouched).
+# Stage 2 — interconnectivity between runners via Styx gateway port 47810.
 
 name: Styx runner integration
 
