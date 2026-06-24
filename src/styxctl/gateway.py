@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .ports import RESERVED_PORT_END, RESERVED_PORT_START
+from .ports import ADMIN_SSH_PORT, RESERVED_PORT_END, RESERVED_PORT_START
 
 DEFAULT_SSH_PORT = 47810
 DEFAULT_K3S_API_PORT = 47811
@@ -24,6 +24,11 @@ class GatewayPorts:
                     f"{label}: port {port} must be within Styx reserved range "
                     f"{RESERVED_PORT_START}-{RESERVED_PORT_END}"
                 )
+        if self.ssh == ADMIN_SSH_PORT:
+            errors.append(
+                f"gateway.ssh_port: port {ADMIN_SSH_PORT} is reserved for admin/runner SSH; "
+                f"use a port in {RESERVED_PORT_START}-{RESERVED_PORT_END}"
+            )
         if self.ssh == self.k3s_api:
             errors.append("gateway: ssh_port and k3s_api_port must be different")
         return errors

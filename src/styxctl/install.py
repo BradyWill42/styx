@@ -46,6 +46,7 @@ from .nodes import (
     validate_nodes_warnings,
 )
 from .remediation import _run_mutating
+from .ports import ADMIN_SSH_PORT, RESERVED_PORT_END, RESERVED_PORT_START
 from .reports import CRITICAL_PORTS, evaluate_readiness
 
 PRESERVED_INTERFACES = frozenset({"wg0"})
@@ -572,9 +573,13 @@ def build_install_plan(
             category="gateway",
             action="configure",
             status="pending",
-            reason=f"Add sshd listen on Styx gateway port {gateway.ssh}/tcp (keeps port 22)",
+            reason=(
+                f"Add sshd listen on Styx gateway port {gateway.ssh}/tcp "
+                f"({RESERVED_PORT_START}-{RESERVED_PORT_END}); port {ADMIN_SSH_PORT} unchanged"
+            ),
             command_display=(
-                f"write {STYX_SSHD_DROPIN} with Port {gateway.ssh} alongside port 22; "
+                f"write {STYX_SSHD_DROPIN} with Port {gateway.ssh} only; "
+                f"port {ADMIN_SSH_PORT} stays on default sshd config; "
                 "sudo sshd -t && sudo systemctl reload ssh"
             ),
             requires_sudo=True,
@@ -898,8 +903,16 @@ def _write_styx_wireguard_config(
 
 
 def _configure_gateway_ssh(gateway_ssh_port: int, inventory: SystemInventory) -> RunResult:
+    if gateway_ssh_port == ADMIN_SSH_PORT:
+        return False, f"refusing to configure gateway SSH on admin port {ADMIN_SSH_PORT}"
+    if not (RESERVED_PORT_START <= gateway_ssh_port <= RESERVED_PORT_END):
+        return False, (
+            f"gateway SSH port {gateway_ssh_port} must be within "
+            f"{RESERVED_PORT_START}-{RESERVED_PORT_END}"
+        )
+
     content = (
-        "# Managed by styxctl - Styx gateway SSH (alongside default port 22)\n"
+        "# Managed by styxctl - Styx gateway SSH (adds reserved-range port alongside sshd port 22)\n"
         f"Port {gateway_ssh_port}\n"
     )
     temp_path = Path("/tmp") / "styx-sshd-gateway.conf"

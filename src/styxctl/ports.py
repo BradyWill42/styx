@@ -13,6 +13,7 @@ from typing import Iterable
 RESERVED_PORT_START = 47800
 RESERVED_PORT_END = 47850
 RESERVED_PORT_RANGE = range(RESERVED_PORT_START, RESERVED_PORT_END + 1)
+ADMIN_SSH_PORT = 22
 
 PORT_PLAN: dict[int, dict[str, str]] = {
     47800: {"protocol": "udp", "purpose": "Styx production WireGuard gateway"},

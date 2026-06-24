@@ -319,6 +319,20 @@ def test_build_uninstall_plan_includes_preserved_items(tmp_path, monkeypatch):
 
     preserved_paths = {item.path for item in plan.preserved}
     assert str(styx_yaml) in preserved_paths
+    assert any("port 22" in item.path for item in plan.preserved)
+
+
+def test_build_uninstall_plan_gateway_ssh_removes_dropin_only(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    dropin = tmp_path / "styx-gateway.conf"
+    dropin.write_text("Port 47810\n", encoding="utf-8")
+    monkeypatch.setattr("styxctl.uninstall.STYX_SSHD_DROPIN", dropin)
+    monkeypatch.setattr("styxctl.uninstall._detect_k3s_uninstall_script", lambda: None)
+    plan = build_uninstall_plan(inventory=_base_inventory())
+    step = next(s for s in plan.steps if s.name == "remove-gateway-ssh")
+    assert step.status == "pending"
+    assert "port 22" in (step.reason or "").lower()
+    assert "47800" in (step.command_display or "")
 
 
 def test_build_uninstall_plan_skips_protected_artifact_paths(tmp_path, monkeypatch):

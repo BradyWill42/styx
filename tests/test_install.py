@@ -312,3 +312,11 @@ def test_run_cluster_doctor_uses_colocated_ssh_targets(tmp_path, monkeypatch):
     assert health["healthy"] is False
     assert "ubuntu@192.168.1.11" in seen_targets
     assert any("via" in issue or "192.168.1.11" in issue for issue in health["issues"])
+
+
+def test_configure_gateway_ssh_refuses_admin_port():
+    from styxctl.install import _configure_gateway_ssh
+
+    ok, detail = _configure_gateway_ssh(22, _base_inventory())
+    assert ok is False
+    assert "22" in detail

@@ -45,6 +45,12 @@ def test_validate_gateway_ports_in_reserved_range(tmp_path):
     assert not any(issue.path == "gateway" and issue.level == "error" for issue in issues)
 
 
+def test_validate_gateway_rejects_admin_ssh_port():
+    ports = parse_gateway_ports({"gateway": {"ssh_port": 22, "k3s_api_port": 47811}})
+    errors = ports.validate()
+    assert any("port 22" in error for error in errors)
+
+
 def test_k3s_join_url_helper():
     ports = parse_gateway_ports({"gateway": {"ssh_port": 47810, "k3s_api_port": 47811}})
     assert k3s_join_url("styx-lab-init.duckdns.org", ports) == "https://styx-lab-init.duckdns.org:47811"

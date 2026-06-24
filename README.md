@@ -628,7 +628,7 @@ Removes only what Styx installed: k3s, the `Styx` WireGuard interface (including
 | `uninstall cluster` | Cluster uninstall with confirm |
 | `uninstall apply cluster` | Cluster uninstall without confirm |
 
-On self-hosted runners, `/etc/styx/styx.yaml` is preserved so the next workflow run can reuse site-specific settings. Always run `uninstall plan` first to review **Will remove** vs **Will preserve** sections.
+On self-hosted runners, `/etc/styx/styx.yaml` is preserved so the next workflow run can reuse site-specific settings. **Uninstall removes only Styx artifacts in the reserved port range (47800–47850)** — including the `styx-gateway.conf` sshd drop-in — and leaves **port 22** listening for admin and GitHub runner access. Always run `uninstall plan` first to review **Will remove** vs **Will preserve** sections.
 
 ```bash
 styxctl uninstall plan local      # dry-run: shows preserved /etc/styx/styx.yaml, wg0, runner

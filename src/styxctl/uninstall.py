@@ -25,6 +25,7 @@ from .install import (
 from .inventory import SystemInventory, collect_inventory
 from .k3s_cluster import _node_ssh_connection, _run_ssh_command
 from .nodes import identify_local_node, parse_nodes
+from .ports import ADMIN_SSH_PORT, RESERVED_PORT_END, RESERVED_PORT_START
 from .remediation import _remove_path, _run_mutating
 
 K3S_UNINSTALL_SCRIPTS = (
@@ -235,6 +236,16 @@ def collect_preserved_items(
             category="packages",
             path="system packages (wireguard, curl, iproute2, ...)",
             reason="installed by Styx but not removed on uninstall",
+        )
+    )
+    items.append(
+        PreservedItem(
+            category="gateway",
+            path=f"sshd port {ADMIN_SSH_PORT} (default/admin)",
+            reason=(
+                "Styx never removes or reconfigures port 22; uninstall drops only "
+                f"the Styx gateway SSH drop-in ({RESERVED_PORT_START}-{RESERVED_PORT_END})"
+            ),
         )
     )
     return items
@@ -489,10 +500,14 @@ def _append_gateway_steps(steps: list[UninstallStep]) -> None:
                 category="gateway",
                 action="remove",
                 status="pending",
-                reason=f"{STYX_SSHD_DROPIN} exists",
+                reason=(
+                    f"Remove Styx gateway SSH drop-in {STYX_SSHD_DROPIN}; "
+                    f"port {ADMIN_SSH_PORT} and main sshd config unchanged"
+                ),
                 command_display=(
-                    f"sudo rm -f {STYX_SSHD_DROPIN}; "
-                    "sudo systemctl reload ssh || sudo systemctl reload sshd"
+                    f"sudo rm -f {STYX_SSHD_DROPIN} "
+                    f"(Styx {RESERVED_PORT_START}-{RESERVED_PORT_END} only); "
+                    f"reload ssh/sshd; port {ADMIN_SSH_PORT} keeps listening"
                 ),
             )
         )
@@ -522,12 +537,14 @@ def _append_firewall_step(
             action="revoke",
             status="pending",
             reason=(
-                "Remove Styx gateway firewall allowances added during install: "
-                f"{wireguard_port}/udp, {gateway_ssh_port}/tcp, {gateway_k3s_port}/tcp"
+                "Remove Styx reserved-range firewall rules from install "
+                f"({RESERVED_PORT_START}-{RESERVED_PORT_END}): "
+                f"{wireguard_port}/udp, {gateway_ssh_port}/tcp, {gateway_k3s_port}/tcp; "
+                f"not port {ADMIN_SSH_PORT}"
             ),
             command_display=(
                 f"revoke {wireguard_port}/udp, {gateway_ssh_port}/tcp, {gateway_k3s_port}/tcp "
-                "(ufw/firewalld if backend detected)"
+                f"(Styx range only; port {ADMIN_SSH_PORT} untouched)"
             ),
         )
     )
@@ -899,6 +916,7 @@ def render_cluster_uninstall_text(plan: ClusterUninstallPlan, *, dry_run: bool =
         f"Mode: {mode}",
         "",
         "Preserved on every node (never removed by styxctl uninstall):",
+        f"  - sshd port {ADMIN_SSH_PORT} (admin/runner SSH; main sshd config untouched)",
         f"  - {WG0_CONFIG_PATH} and any non-Styx WireGuard configs",
         f"  - {STYX_SYSTEM_CONFIG_PATH} (self-hosted runner persistent config)",
         "  - GitHub Actions runner registration (if present)",
