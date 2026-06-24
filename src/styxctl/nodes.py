@@ -7,23 +7,11 @@ import ipaddress
 import socket
 from typing import Any
 
-from .bootstrap_mode import bootstrap_mode, dns_publish_enabled
 from .inventory import SystemInventory
 
 VALID_ROLES = frozenset({"init-server", "server", "agent"})
 LEADER_LAN_ELECTED = "lan-elected"
-DEFAULT_DUCKDNS_DOMAIN = "duckdns.org"
 CONNECTIVITY_BOOTSTRAP = "bootstrap"
-CONNECTIVITY_DUCKDNS = "duckdns"
-
-
-def duckdns_domain(config: dict[str, Any]) -> str:
-    dns = config.get("dns")
-    if isinstance(dns, dict):
-        domain = dns.get("domain")
-        if isinstance(domain, str) and domain.strip():
-            return domain.strip()
-    return DEFAULT_DUCKDNS_DOMAIN
 
 
 def resolve_hostname(hostname: str) -> str | None:
@@ -37,33 +25,10 @@ def resolve_hostname(hostname: str) -> str | None:
 
 
 def node_hostname(config: dict[str, Any], node: ClusterNode) -> str | None:
+    """Optional explicit hostname on the node; external DNS publish is MVP3."""
     if node.hostname:
         return node.hostname
-
-    dns = config.get("dns")
-    if not isinstance(dns, dict):
-        return None
-
-    domain = duckdns_domain(config)
-    fixed = dns.get("fixed_endpoints")
-    if isinstance(fixed, dict):
-        subdomain = fixed.get(node.name)
-        if isinstance(subdomain, str) and subdomain.strip():
-            return f"{subdomain.strip()}.{domain}"
-
-    auto_endpoint = dns.get("auto_endpoint")
-    if isinstance(auto_endpoint, str) and auto_endpoint.strip() and node.name == auto_endpoint.strip():
-        return f"{auto_endpoint.strip()}.{domain}"
-
     return None
-
-
-def node_subdomain(hostname: str, config: dict[str, Any]) -> str:
-    domain = duckdns_domain(config)
-    suffix = f".{domain}"
-    if hostname.endswith(suffix):
-        return hostname[: -len(suffix)]
-    return hostname.split(".", 1)[0]
 
 
 @dataclass(slots=True)
@@ -106,8 +71,6 @@ class ClusterNode:
         host = node_connectivity_host(config, self, mode=mode)
         if not host:
             return None
-        if mode == CONNECTIVITY_DUCKDNS and node_hostname(config, self):
-            return resolve_hostname(host)
         try:
             return str(ipaddress.ip_address(host.split("%", 1)[0]))
         except ValueError:
@@ -129,7 +92,7 @@ def node_bootstrap_host(
     inventory: SystemInventory | None = None,
     local_node: ClusterNode | None = None,
 ) -> str | None:
-    """Router WAN / port-forward target used before DuckDNS is published."""
+    """Router WAN / port-forward target for cluster bootstrap connectivity."""
     if node.public_ipv4:
         return node.public_ipv4
     if inventory is not None and local_node is not None and node.name == local_node.name:
@@ -147,10 +110,6 @@ def node_connectivity_host(
     inventory: SystemInventory | None = None,
     local_node: ClusterNode | None = None,
 ) -> str | None:
-    if mode == CONNECTIVITY_DUCKDNS:
-        return node_hostname(config, node) or node_bootstrap_host(
-            config, node, inventory=inventory, local_node=local_node
-        )
     return node_bootstrap_host(config, node, inventory=inventory, local_node=local_node)
 
 
@@ -380,11 +339,6 @@ def validate_nodes(
                 )
 
     for node in nodes:
-        if config and dns_publish_enabled(config) and not node_hostname(config, node):
-            errors.append(
-                f"nodes.{node.name}: set hostname (DuckDNS) for post-cluster DNS publish"
-            )
-
         if not node.ipv4 and not node.ipv6:
             errors.append(
                 f"nodes.{node.name}: mesh ipv4 or ipv6 is required for k3s --node-ip"
@@ -410,12 +364,6 @@ def validate_nodes_warnings(
     local_node: ClusterNode | None = None,
 ) -> list[str]:
     warnings: list[str] = []
-    if config and not dns_publish_enabled(config):
-        for node in nodes:
-            if not node_hostname(config, node):
-                warnings.append(
-                    f"nodes.{node.name}: hostname unset; DuckDNS publish comes after cluster join"
-                )
     if not nodes or not lan_election_enabled(config):
         return warnings
 

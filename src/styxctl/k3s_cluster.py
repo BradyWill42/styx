@@ -9,7 +9,6 @@ import shutil
 import subprocess
 from typing import Any, Callable
 
-from .dns_update import refresh_node_duckdns
 from .inventory import SystemInventory
 from .gateway import k3s_join_url, k3s_gateway_listen_args, parse_gateway_ports
 from .lan_election import local_lan_subnet
@@ -525,19 +524,6 @@ def apply_cluster_node_plan(
     plan.status = "installed" if ok else "failed"
     plan.detail = detail
     return plan
-
-
-def refresh_cluster_duckdns(config: dict[str, Any], nodes: list[ClusterNode]) -> list[str]:
-    """Publish each node's current public IPv4 to DuckDNS after cluster connectivity is up."""
-    messages: list[str] = []
-    for node in nodes:
-        ok, detail = refresh_node_duckdns(config, node)
-        host = node_hostname(config, node) or node.public_ipv4 or node.name
-        if ok:
-            messages.append(f"{host}: DuckDNS published ({detail})")
-        else:
-            messages.append(f"{host}: DuckDNS publish skipped ({detail})")
-    return messages
 
 
 def assess_cluster_nodes(

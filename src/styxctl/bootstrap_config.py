@@ -1,4 +1,4 @@
-"""Bootstrap-time config enrichment: auto-detect IPs before DuckDNS."""
+"""Bootstrap-time config enrichment: auto-detect IPs (external DNS deferred to MVP3)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import copy
 from pathlib import Path
 from typing import Any
 
-from .bootstrap_mode import bootstrap_mode, dns_publish_enabled
+from .bootstrap_mode import bootstrap_mode
 from .inventory import SystemInventory, collect_inventory
 from .network_detect import (
     REMOTE_PUBLIC_IPV4_SHELL,

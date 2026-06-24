@@ -1,4 +1,4 @@
-"""Bootstrap vs operational-mode detection (no heavy imports)."""
+"""Bootstrap-mode detection for auto IP discovery (external DNS is MVP3)."""
 
 from __future__ import annotations
 
@@ -6,19 +6,8 @@ from typing import Any
 
 
 def bootstrap_mode(config: dict[str, Any]) -> bool:
-    """True when DNS publish is deferred (pre-DuckDNS bootstrap)."""
+    """True when styxctl should auto-detect IPs (default until explicit IPs are set)."""
     cluster = config.get("cluster")
-    if isinstance(cluster, dict) and cluster.get("bootstrap") is True:
-        return True
-    dns = config.get("dns")
-    if dns is None:
-        return True
-    if isinstance(dns, dict):
-        provider = dns.get("provider")
-        if provider in (None, "", "none", "disabled"):
-            return True
-    return False
-
-
-def dns_publish_enabled(config: dict[str, Any]) -> bool:
-    return not bootstrap_mode(config)
+    if isinstance(cluster, dict) and cluster.get("bootstrap") is False:
+        return False
+    return True

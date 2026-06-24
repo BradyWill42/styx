@@ -29,7 +29,6 @@ from .k3s_cluster import (
     build_cluster_plan,
     fetch_join_token_from_init,
     k3s_install_spec,
-    refresh_cluster_duckdns,
     _init_join_host,
     _init_ssh_host,
     _run_ssh_command,
@@ -1504,8 +1503,6 @@ def run_install_local(
         report["pending_count"] = len(pending)
         return report, 0
 
-    dns_update: dict[str, object] | None = None
-
     applied_plan = apply_install_plan(
         plan,
         config=effective_config,
@@ -1528,9 +1525,6 @@ def run_install_local(
         pre_inventory=pre_inventory,
         post_inventory=post_inventory,
     )
-    if dns_update is not None:
-        report["dns_update"] = dns_update
-
     if dry_run:
         return report, 0
     if any(step.status == "failed" for step in applied_plan.steps):
@@ -1821,10 +1815,6 @@ def run_install_cluster(
         election_lan_ips=election_lan_ips,
         election_leader=election_leader,
     )
-    dns_messages: list[str] = []
-    cluster_installed = not any(item.status == "failed" for item in cluster_plan.nodes)
-    if cluster_installed and cluster_health.get("healthy"):
-        dns_messages = refresh_cluster_duckdns(effective_config, nodes)
     report = build_install_report(
         command="styxctl install cluster",
         plan=base_plan,
@@ -1835,7 +1825,6 @@ def run_install_cluster(
     )
     report["cluster"] = cluster_plan.to_dict()
     report["cluster_health"] = cluster_health
-    report["dns_updates"] = dns_messages
     report["status"] = "INSTALLED" if cluster_health.get("healthy") else "INSTALLED_WITH_ISSUES"
 
     if any(item.status == "failed" for item in cluster_plan.nodes):

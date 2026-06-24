@@ -231,12 +231,6 @@ def validate_config(
     for message in gateway.validate():
         issues.append(ValidationIssue("error", "gateway", message))
 
-    dns = config.get("dns")
-    if dns is not None:
-        dns_map = _require_mapping(dns, "dns", issues)
-        if dns_map and dns_map.get("provider") is not None:
-            _require_str(dns_map.get("provider"), "dns.provider", issues)
-
     siem = config.get("siem")
     if siem is not None:
         siem_map = _require_mapping(siem, "siem", issues)
@@ -297,9 +291,6 @@ def format_config_summary(config: dict[str, Any], config_path: Path | None) -> s
         f"{wireguard.get('interface', 'unknown')} on port {wireguard.get('port', 'unknown')}"
     )
     lines.append(f"Gateway ports: SSH {gateway.ssh}, k3s API {gateway.k3s_api}")
-    dns = config.get("dns", {})
-    if dns:
-        lines.append(f"DNS provider: {dns.get('provider', 'unknown')}")
     siem = config.get("siem", {})
     if siem:
         provider = siem.get("provider")
@@ -315,7 +306,8 @@ def format_config_summary(config: dict[str, Any], config_path: Path | None) -> s
             lan = node.lan_ip or "-"
             ips = ", ".join(filter(None, (node.ipv4, node.ipv6)))
             entry = " entrypoint" if node.site_entrypoint else ""
+            host_suffix = f" hostname {host}" if host != "-" else ""
             lines.append(
-                f"  - {node.name} ({node.role}) public {pub} public6 {pub6} lan {lan} dns {host} mesh {ips}{entry}"
+                f"  - {node.name} ({node.role}) public {pub} public6 {pub6} lan {lan}{host_suffix} mesh {ips}{entry}"
             )
     return "\n".join(lines).rstrip() + "\n"

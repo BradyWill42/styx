@@ -94,16 +94,16 @@ flowchart TB
 | `server` | Additional k3s control-plane / server node |
 | `agent` | k3s worker node |
 
-Each node uses `public_ipv4` (router WAN IP with port forwards) for bootstrap SSH and k3s joins when it is the site's entrypoint or a remote node, `lan_ip` for co-located LAN routing, `hostname` (DuckDNS) for stable naming after the cluster is connected, and mesh `ipv4` / `ipv6` for k3s `--node-ip`. **SSH runs on port 22 (admin/runner) and on `gateway.ssh_port` (47810, Styx cluster)** — both listen together after `install apply local`. Install and cluster join use gateway ports `47810` (SSH) and `47811` (k3s API); co-located nodes without their own port-forward join over the LAN or outbound NAT. DuckDNS is published only after networking, LAN leader election, and node joins succeed.
+Each node uses `public_ipv4` (router WAN IP with port forwards) for bootstrap SSH and k3s joins when it is the site's entrypoint or a remote node, `lan_ip` for co-located LAN routing, optional `hostname` for stable naming, and mesh `ipv4` / `ipv6` for k3s `--node-ip`. **SSH runs on port 22 (admin/runner) and on `gateway.ssh_port` (47810, Styx cluster)** — both listen together after `install apply local`. Install and cluster join use gateway ports `47810` (SSH) and `47811` (k3s API); co-located nodes without their own port-forward join over the LAN or outbound NAT. External DNS (for example DuckDNS) is deployed as a cluster pod in MVP3, after the cluster is up.
 
 ---
 
 ## Repository
 
-All development happens on [`main`](https://github.com/BradyWill42/styx/tree/main). It contains the full MVP1 (sysprep) and MVP2 (install) platform, including `public_ipv4` bootstrap, DuckDNS post-cluster publish, gateway ports, and LAN leader election.
+All development happens on [`main`](https://github.com/BradyWill42/styx/tree/main). It contains the full MVP1 (sysprep) and MVP2 (install) platform, including `public_ipv4` bootstrap, gateway ports, and LAN leader election.
 
 - Bootstrap connectivity uses each node's `public_ipv4` and router 1:1 port forwards (`47810` SSH, `47811` k3s API).
-- DuckDNS (`hostname`) is published only after local networking, LAN leader election, and cluster join succeed.
+- External DNS publish (DuckDNS and similar) is deferred to MVP3 as a cluster pod after install succeeds.
 - `cluster.leader: lan-elected` elects the strongest configured peer on the local LAN (UDP `47802`), ignoring peers not listed in `styx.yaml`. Co-located nodes may share one `public_ipv4` when election is enabled; the elected leader becomes that site's entrypoint for port-forwards and ProxyJump routing.
 
 ---
@@ -170,7 +170,7 @@ styxctl install apply cluster    # cluster SSH on gateway.ssh_port (47810)
 |-----------|--------|-------|
 | **MVP1** | Shipped | Read-only inventory, port scan, safe remediation |
 | **MVP2** | Shipped | k3s install, `Styx` WireGuard interface, multi-node cluster join |
-| **MVP3** | Planned | `sysprep reset` / `nuke`, `deploy`, `gateway`, `status`, `doctor` |
+| **MVP3** | Planned | `sysprep reset` / `nuke`, `deploy`, DuckDNS/external DNS pod, `gateway`, `status`, `doctor` |
 | **MVP4** | Planned | Remote sysprep (`check all` / `check node`), `client`, `siem` |
 
 Placeholder commands exist today and print a clear "not implemented" message — they never mutate the host.
@@ -250,9 +250,7 @@ After MVP1 reports `READY` or `READY_WITH_WARNINGS`, MVP2 installs the local fou
 
 ```bash
 cp styx.yaml.example styx.yaml
-# Set each node's public_ipv4 (router WAN), DuckDNS hostname, and lan_ip when co-located
-# Export DUCKDNS_TOKEN for post-cluster DNS publish
-export DUCKDNS_TOKEN=your-token
+# Set each node's public_ipv4 (router WAN) and lan_ip when co-located
 styxctl config validate
 
 # Per-node local install (run on every gateway)
@@ -275,10 +273,10 @@ Each node uses:
 - `public_ipv4` — router WAN IP with 1:1 port forwards to this Pi (`47810` SSH, `47811` k3s API) for bootstrap connectivity when this node is the site entrypoint or a remote node
 - `lan_ip` — optional LAN address for co-located nodes sharing one `public_ipv4`; used for ProxyJump SSH and same-site k3s joins
 - `site_entrypoint` — optional override marking the single host per shared-WAN site that owns port-forwards (election sets this automatically)
-- `hostname` — DuckDNS name published **after** the cluster is connected
+- `hostname` — optional stable name (used in TLS SANs when set; external DNS publish is MVP3)
 - `ipv4` / `ipv6` — mesh addresses passed to k3s as `--node-ip` (internal overlay, not your LAN or public IP)
 
-Bootstrap order: local networking install -> LAN leader election (if enabled) -> cluster join over `public_ipv4` -> DuckDNS publish -> steady-state checks over DuckDNS hostnames.
+Bootstrap order: local networking install -> LAN leader election (if enabled) -> cluster join over `public_ipv4` -> steady-state checks over public IPs and mesh addresses.
 
 ### LAN leader election
 
@@ -489,7 +487,7 @@ Only ports `47800–47850` are managed by `styxctl`. Critical production ports `
 Planned WireGuard endpoint for production clients:
 
 ```ini
-Endpoint = styx-lab-init.duckdns.org:47800
+Endpoint = styx-lab-init.example.com:47800
 ```
 
 ---
@@ -590,13 +588,6 @@ styxctl uninstall plan cluster    # preview all nodes before CI teardown
 styxctl uninstall apply cluster   # used by Styx cluster E2E workflow
 ```
 
-### DNS
-
-| Command | Description |
-|---------|-------------|
-| `dns refresh local` | Publish this node's current public IPv4 to its DuckDNS hostname |
-| `dns refresh cluster` | Refresh DuckDNS for every configured node using SSH-detected public IPv4s |
-
 ### Config, sysprep reports, and shell
 
 | Command | Description |
@@ -668,7 +659,7 @@ If a non-Styx process holds a critical port, stop it manually — MVP1 will not 
 styxctl config validate
 ```
 
-Common fixes: set node `hostname` to the correct DuckDNS name, mesh IPs for k3s `--node-ip`, ensure exactly one `init-server`, port-forward `47810`/`47811`, and keep `wireguard.interface` as `Styx` (not `wg0`).
+Common fixes: set mesh IPs for k3s `--node-ip`, ensure exactly one `init-server`, port-forward `47810`/`47811`, and keep `wireguard.interface` as `Styx` (not `wg0`).
 
 ### Install blocked: sudo unavailable
 

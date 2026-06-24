@@ -130,7 +130,7 @@ jobs:
             - styx.yaml in the workflow working directory
             - GitHub Actions runner registration (actions-runner directory)
             - OS packages installed by Styx (wireguard, curl, iproute2, ca-certificates)
-            - DuckDNS records
+            - External DNS records (managed outside styxctl until MVP3)
             - LAN networking, unrelated SSH config, or non-Styx services
 
           Cluster orchestration:
