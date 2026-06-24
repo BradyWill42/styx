@@ -1,6 +1,6 @@
 # Primary CI gate: live integration on pegasus, atlas, and thor.
 #
-# Stage 1 — prerequisites (ports, sysprep, config) on each runner.
+# Stage 1 — prerequisites (ports, sysprep, config, gateway SSH) on each runner.
 # Stage 2 — real SSH connectivity between all runners on gateway port 47810.
 
 name: Styx runner integration
@@ -18,45 +18,14 @@ concurrency:
 
 permissions:
   contents: read
-  actions: read
 
 jobs:
-  discover-runners:
-    name: Discover online runners
-    runs-on: ubuntu-latest
-    outputs:
-      runners: ${{ steps.discover.outputs.runners }}
-    steps:
-      - name: List live self-hosted runners
-        id: discover
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { data } = await github.rest.actions.listSelfHostedRunnersForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-            });
-
-            const required = ["pegasus", "atlas", "thor"];
-            const online = data.runners.filter((runner) => runner.status === "online");
-            const names = online.map((runner) => runner.name).sort();
-            const missing = required.filter((name) => !names.includes(name));
-
-            core.info(`Online runners: ${names.join(", ") || "none"}`);
-            if (missing.length > 0) {
-              core.setFailed(`Required runners offline or missing: ${missing.join(", ")}`);
-            }
-
-            core.setOutput("runners", JSON.stringify(required));
-
   prerequisites:
     name: "Stage 1 — prerequisites (${{ matrix.runner }})"
-    needs: discover-runners
-    if: needs.discover-runners.outputs.runners != '[]'
     strategy:
       fail-fast: false
       matrix:
-        runner: ${{ fromJson(needs.discover-runners.outputs.runners) }}
+        runner: [pegasus, atlas, thor]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
 
@@ -89,14 +58,12 @@ jobs:
 
   connectivity:
     name: "Stage 2 — connectivity (${{ matrix.runner }})"
-    needs: [discover-runners, prerequisites]
-    if: |
-      needs.discover-runners.outputs.runners != '[]' &&
-      needs.prerequisites.result == 'success'
+    needs: prerequisites
+    if: needs.prerequisites.result == 'success'
     strategy:
       fail-fast: false
       matrix:
-        runner: ${{ fromJson(needs.discover-runners.outputs.runners) }}
+        runner: [pegasus, atlas, thor]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
 
