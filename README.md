@@ -782,7 +782,7 @@ The gateway workflow targets **pegasus** and **atlas** only. Both share one WAN 
 |----------|---------|---------|
 | **Runner smoke** | Manual | Confirm each **online** runner picks up jobs |
 | **Styx gateway checks** | Push / PR | Pytest, LAN election, and read-only checks on pegasus + atlas |
-| **Styx cluster E2E** | Manual | Full install, cluster join, uninstall (live nodes only) |
+| **Styx cluster E2E** | Manual | Preflight uninstall → install → cluster join → teardown uninstall (live nodes only) |
 
 Start with **Runner smoke** (`workflow_dispatch`), then push to `main` to exercise **Styx gateway checks**.
 
