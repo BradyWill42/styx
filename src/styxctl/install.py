@@ -385,8 +385,8 @@ def check_install_gate(
         return InstallGateResult(
             ok=False,
             message=(
-                "styx.yaml not found. Copy styx.yaml.runners (minimal) or styx.yaml.example to "
-                "styx.yaml and run `styxctl config validate` before installing."
+                "styx.yaml not found. Copy styx.yaml.example to styx.yaml and run "
+                "`styxctl config validate` before installing."
             ),
             config={},
             config_path=None,

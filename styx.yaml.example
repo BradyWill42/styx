@@ -1,24 +1,35 @@
+# Copy to styx.yaml. Hostnames must match node names; SSH keys between nodes on port 22.
+# Mesh overlay IPs assign automatically. With bootstrap: true, public_ipv4/public_ipv6 and
+# lan_ip are auto-detected (curl -4/-6 locally; SSH to peers). Styx cluster SSH uses
+# gateway.ssh_port (47810); port 22 stays for admin/runner access.
+#
+# Add dns: and hostname per node after the cluster joins.
+
 cluster:
   name: styx
+  leader: lan-elected
   ssh_user: ubuntu
+  bootstrap: true
 
 nodes:
-  # Replace hostnames and public_ipv4 with your DuckDNS subdomains and router WAN IPs.
-  # Mesh overlay IPs (10.0.0.x / fd00:cafe::x) are assigned automatically from node order.
-  # Co-located nodes behind one WAN IP may share public_ipv4; lan_ip is auto-detected
-  # on each node when styxctl runs locally, or set it explicitly when needed.
-  - name: node-init
-    hostname: styx-lab-init.duckdns.org
-    public_ipv4: 203.0.113.10
+  - name: pegasus
     role: init-server
-  - name: node-server
-    hostname: styx-lab-server.duckdns.org
-    public_ipv4: 203.0.113.11
-    role: server
-  - name: node-agent
-    hostname: styx-lab-agent.duckdns.org
-    public_ipv4: 203.0.113.12
+  - name: atlas
     role: agent
+  - name: thor
+    role: server
 
-dns:
-  token_env: DUCKDNS_TOKEN
+# Optional — explicit IPs and DuckDNS (comment out bootstrap above when using):
+#
+# cluster:
+#   bootstrap: false
+# dns:
+#   provider: duckdns
+#   domain: duckdns.org
+#   token_env: DUCKDNS_TOKEN
+# nodes:
+#   - name: pegasus
+#     hostname: pegasus.duckdns.org
+#     public_ipv4: 203.0.113.10
+#     lan_ip: 192.168.1.10
+#     role: init-server

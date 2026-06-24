@@ -140,11 +140,9 @@ styxctl sysprep check local          # re-check until READY
 
 ### 3. Install the foundation (MVP2)
 
-**Minimal bootstrap** (only SSH keys between nodes; DuckDNS comes after the cluster is up):
-
 ```bash
-cp styx.yaml.runners styx.yaml   # or styx.yaml.example for full explicit config
-styxctl config validate          # auto-detects public_ipv4/public_ipv6 (curl -4/-6) + lan_ip
+cp styx.yaml.example styx.yaml
+styxctl config validate          # auto-detects IPs when bootstrap: true
 
 styxctl install plan local
 styxctl install apply local      # adds gateway SSH on 47810 alongside port 22
@@ -153,14 +151,7 @@ styxctl install plan cluster
 styxctl install apply cluster    # cluster SSH on gateway.ssh_port (47810)
 ```
 
-**Full config** (explicit IPs + DuckDNS hostnames):
-
-```bash
-cp styx.yaml.example styx.yaml
-# Set each node's public_ipv4 (router WAN), DuckDNS hostname, and lan_ip when co-located
-export DUCKDNS_TOKEN=your-token
-styxctl config validate
-```
+Add `dns:` and per-node `hostname` in `styx.yaml` after the cluster is up (see commented block in `styx.yaml.example`).
 
 ### Requirements
 
@@ -414,40 +405,6 @@ Remote steps use each node's `ssh_user` when set, otherwise `cluster.ssh_user` (
 
 ## Configuration (`styx.yaml`)
 
-### Minimal out-of-the-box (`styx.yaml.runners`)
-
-For a three-node lab (pegasus, atlas, thor) you only need:
-
-1. **Hostnames** match node names (`pegasus`, `atlas`, `thor`)
-2. **Passwordless SSH** between nodes on port **22**
-
-```bash
-cp styx.yaml.runners styx.yaml
-styxctl config validate
-```
-
-`styxctl` auto-detects each node's `public_ipv4` and `public_ipv6` (`curl -4` / `curl -6` locally; same over SSH to peers) and `lan_ip` for co-located nodes. Mesh overlay IPs are assigned from node order. No DuckDNS block, no `/etc/styx` setup, no manual WAN/LAN fields.
-
-```yaml
-cluster:
-  name: styx
-  leader: lan-elected
-  ssh_user: ubuntu
-  bootstrap: true
-
-nodes:
-  - name: pegasus
-    role: init-server
-  - name: atlas
-    role: agent
-  - name: thor
-    role: server
-```
-
-Add `dns:` and `hostname` per node **after** the cluster joins; `install apply cluster` publishes DuckDNS then.
-
-### Full explicit config
-
 Copy the example and edit for your lab:
 
 ```bash
@@ -456,7 +413,14 @@ styxctl config show
 styxctl config validate
 ```
 
-Styx ships with a fixed backbone IP plan (mesh, pod, service, and infra CIDRs). You do not configure those in `styx.yaml` — `styxctl` applies them automatically. Per-node mesh addresses (`10.0.0.1`, `10.0.0.2`, … and matching IPv6) are assigned from node list order.
+The shipped example is a minimal three-node layout (pegasus, atlas, thor) with `bootstrap: true`. You only need:
+
+1. **Hostnames** match node names
+2. **Passwordless SSH** between nodes on port **22**
+
+`styxctl` auto-detects `public_ipv4` / `public_ipv6` (`curl -4` / `curl -6` on ifconfig.me) and `lan_ip` for co-located peers. Mesh overlay IPs assign from node order. Uncomment the optional block in `styx.yaml.example` for explicit IPs and DuckDNS.
+
+Styx ships with a fixed backbone IP plan (mesh, pod, service, and infra CIDRs). You do not configure those in `styx.yaml` — `styxctl` applies them automatically.
 
 ### What you configure
 
@@ -780,8 +744,7 @@ src/styxctl/
   install.py          # Local + cluster install (MVP2)
   k3s_cluster.py      # k3s cluster planning and SSH orchestration
   install_report.py   # Install report generation
-styx.yaml.runners     # Minimal pegasus / atlas / thor config
-styx.yaml.example     # Reference cluster configuration
+styx.yaml.example     # Copy to styx.yaml (gitignored)
 ```
 
 ---
@@ -802,7 +765,7 @@ All three runners must be **online**. Each runs both stages:
 | **1 — prerequisites** | Identity, sudo, tools, `sysprep check local` (ports), `config validate` |
 | **2 — connectivity** | Real SSH to **pegasus, atlas, and thor** peers on gateway port **47810** |
 
-Uses `styx.yaml.runners` copied to `styx.yaml` on each runner.
+Uses `styx.yaml.example` copied to `styx.yaml` on each runner.
 
 ```bash
 python3 .github/scripts/stage1-prerequisites.py   # on any runner
