@@ -51,6 +51,9 @@ jobs:
           python3 -m pip install -e . --break-system-packages
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Uninstall previous state
+        run: python3 -m styxctl.cli uninstall apply local || true
+
       - name: Stage 1 — prerequisites
         env:
           STYX_RUNNER_NAME: ${{ matrix.role }}
