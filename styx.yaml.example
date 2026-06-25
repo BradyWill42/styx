@@ -13,5 +13,3 @@ nodes:
     role: init-server
   - name: atlas
     role: agent
-  - name: thor
-    role: server
