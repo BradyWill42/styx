@@ -237,6 +237,36 @@ def validate_config(
         if siem_map and siem_map.get("enabled") is True:
             _require_str(siem_map.get("provider"), "siem.provider", issues)
 
+    dns = config.get("dns")
+    if dns is not None:
+        dns_map = _require_mapping(dns, "dns", issues)
+        if dns_map:
+            provider = _require_str(dns_map.get("provider"), "dns.provider", issues)
+            if provider and provider.lower() != "duckdns":
+                issues.append(
+                    ValidationIssue("error", "dns.provider", "only 'duckdns' is supported in MVP3")
+                )
+            raw_domains = dns_map.get("domains")
+            if isinstance(raw_domains, str):
+                domain_list = [part for part in raw_domains.split(",") if part.strip()]
+            elif isinstance(raw_domains, list):
+                domain_list = [d for d in raw_domains if isinstance(d, str) and d.strip()]
+            else:
+                domain_list = []
+            if not domain_list:
+                issues.append(
+                    ValidationIssue(
+                        "error",
+                        "dns.domains",
+                        "list at least one DuckDNS subdomain to publish, e.g. [pistyx]",
+                    )
+                )
+            interval = dns_map.get("interval_seconds")
+            if interval is not None and (not isinstance(interval, int) or interval <= 0):
+                issues.append(
+                    ValidationIssue("error", "dns.interval_seconds", "expected a positive integer")
+                )
+
     nodes = parse_nodes(config)
     if nodes:
         for message in validate_nodes(

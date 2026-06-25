@@ -27,6 +27,7 @@ from .install import (
     run_lan_election_status,
 )
 from .install_report import render_install_text, save_install_report
+from .dns_publish import deploy_dns, render_dns_report_text
 from .uninstall import (
     apply_cluster_uninstall_plan,
     apply_uninstall_plan,
@@ -82,6 +83,8 @@ completion_app = typer.Typer(help="Shell completion helpers.", no_args_is_help=T
 uninstall_app = typer.Typer(help="Remove Styx config and k3s from local nodes.", no_args_is_help=True)
 uninstall_plan_app = typer.Typer(help="Preview uninstall plan without changing the host.", no_args_is_help=True)
 uninstall_apply_app = typer.Typer(help="Apply uninstall plan without confirmation.", no_args_is_help=True)
+deploy_app = typer.Typer(help="Deploy Styx cluster workloads (MVP3).", no_args_is_help=True)
+deploy_dns_app = typer.Typer(help="Publish cluster DNS to DuckDNS from inside k3s.", no_args_is_help=True)
 
 
 @app.callback()
@@ -727,6 +730,22 @@ def uninstall_cluster() -> None:
         raise typer.Exit(code=1)
 
 
+@deploy_dns_app.command("plan")
+def deploy_dns_plan() -> None:
+    """Render the DuckDNS publisher manifest without applying it (no cluster access needed)."""
+    report, exit_code = deploy_dns(dry_run=True, config_path=None)
+    console.print(render_dns_report_text(report), markup=False, soft_wrap=True)
+    raise typer.Exit(code=exit_code)
+
+
+@deploy_dns_app.command("apply")
+def deploy_dns_apply() -> None:
+    """Deploy the DuckDNS publisher to the cluster. Run on the init-server; reads $DUCKDNS_TOKEN."""
+    report, exit_code = deploy_dns(dry_run=False, config_path=None)
+    console.print(render_dns_report_text(report), markup=False, soft_wrap=True)
+    raise typer.Exit(code=exit_code)
+
+
 def _future_app(label: str, milestone: str) -> typer.Typer:
     future = typer.Typer(help=f"Future {label} commands ({milestone}).", no_args_is_help=True)
 
@@ -761,7 +780,8 @@ app.add_typer(sysprep_app, name="sysprep")
 app.add_typer(ports_app, name="ports")
 app.add_typer(install_app, name="install")
 app.add_typer(uninstall_app, name="uninstall")
-app.add_typer(_future_app("deploy", "MVP3"), name="deploy")
+deploy_app.add_typer(deploy_dns_app, name="dns")
+app.add_typer(deploy_app, name="deploy")
 app.add_typer(_future_app("status", "MVP3"), name="status")
 app.add_typer(_future_app("doctor", "MVP3"), name="doctor")
 app.add_typer(_future_app("client", "MVP4"), name="client")

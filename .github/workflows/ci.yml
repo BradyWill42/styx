@@ -24,6 +24,17 @@ jobs:
           python -m pip install -e .
           styxctl version
           styxctl --help
+          styxctl deploy dns --help
+
+      - name: Verify DuckDNS manifest renders (no cluster)
+        run: |
+          cp styx.yaml.example styx.yaml
+          printf '\ndns:\n  provider: duckdns\n  domains: [pistyx]\n  interval_seconds: 300\n' >> styx.yaml
+          styxctl deploy dns plan | tee /tmp/dns-plan.txt
+          grep -q "kind: Deployment" /tmp/dns-plan.txt
+          grep -q 'value: "pistyx"' /tmp/dns-plan.txt
+          grep -q "kubernetes.io/hostname" /tmp/dns-plan.txt
+          rm -f styx.yaml
 
       - name: Build wheel
         run: python -m pip install build && python -m build

@@ -33,3 +33,13 @@ nodes:
 
 # pistyx.duckdns.org is a floating cluster name (not a node) — reserved for pointing at
 # the current leader/entrypoint so agents always have one stable endpoint to bootstrap to.
+
+# MVP3 — publish the floating name from inside the cluster. `styxctl deploy dns apply`
+# (run on the init-server) renders a tiny updater Deployment pinned to the init-server
+# node, so its egress IP is the cluster WAN. The DuckDNS token is read from $DUCKDNS_TOKEN
+# at apply time and stored only as a k8s Secret — never written here. Preview with
+# `styxctl deploy dns plan`.
+# dns:
+#   provider: duckdns
+#   domains: [pistyx]        # floating cluster name(s) to keep current
+#   interval_seconds: 300
