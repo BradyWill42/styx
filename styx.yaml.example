@@ -22,8 +22,9 @@ nodes:
     hostname: pipegasus.duckdns.org   # unique DuckDNS name → current WAN IP
   - name: atlas
     role: agent
-    # Colocated with pegasus (shared WAN); discovered via LAN scan, reached over lan_ip.
-    # No DuckDNS name today — add one (e.g. piatlas.duckdns.org) before moving it offsite.
+    hostname: pihydra.duckdns.org     # atlas's DuckDNS name is pihydra (there is no piatlas)
+    # Colocated with pegasus today (shared WAN → same A record); reached over its lan_ip
+    # via the LAN scan. pihydra tracks atlas's own WAN if it ever moves offsite.
 
   # Third Pi — offline today. Uncomment when it's back; it's the remote-site case that
   # actually needs DuckDNS, since it won't share the others' WAN/LAN.
