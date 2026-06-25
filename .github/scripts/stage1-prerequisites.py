@@ -48,14 +48,8 @@ def main() -> int:
             "runner_identity",
             f"host {inventory.hostname!r} is not listed in styx.yaml nodes",
         )
-    elif local_node.name != name:
-        fail_check(
-            checks,
-            "runner_identity",
-            f"GitHub runner {name!r} != styx node {local_node.name!r}",
-        )
     else:
-        pass_check(checks, "runner_identity", f"node {local_node.name}")
+        pass_check(checks, "runner_identity", f"node {local_node.name} (role: {name})")
 
     code, output = run(["sudo", "-n", "true"])
     if code != 0:

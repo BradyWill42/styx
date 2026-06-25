@@ -57,18 +57,20 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Stage 1 — prerequisites
+        env:
+          RUNNER_NAME: ${{ matrix.role }}
         run: python3 .github/scripts/stage1-prerequisites.py
 
       - name: Print stage 1 report
         if: always()
-        run: python3 .github/scripts/print_report.py "$RUNNER_NAME" prerequisites
+        run: python3 .github/scripts/print_report.py "${{ matrix.role }}" prerequisites
 
       - name: Upload stage 1 report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: styx-stage1-${{ runner.name }}
-          path: reports/styx/runner-integration/${{ runner.name }}-prerequisites.json
+          name: styx-stage1-${{ matrix.role }}
+          path: reports/styx/runner-integration/${{ matrix.role }}-prerequisites.json
           if-no-files-found: warn
 
   connectivity:
@@ -104,18 +106,20 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Stage 2 — connectivity
+        env:
+          RUNNER_NAME: ${{ matrix.role }}
         run: python3 .github/scripts/stage2-connectivity.py
 
       - name: Print stage 2 report
         if: always()
-        run: python3 .github/scripts/print_report.py "$RUNNER_NAME" connectivity
+        run: python3 .github/scripts/print_report.py "${{ matrix.role }}" connectivity
 
       - name: Upload stage 2 report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: styx-stage2-${{ runner.name }}
-          path: reports/styx/runner-integration/${{ runner.name }}-connectivity.json
+          name: styx-stage2-${{ matrix.role }}
+          path: reports/styx/runner-integration/${{ matrix.role }}-connectivity.json
           if-no-files-found: warn
 
   summary:
