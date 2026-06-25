@@ -1,21 +1,35 @@
-# Copy to styx.yaml. SSH username defaults to each node name (hostname).
-# Mesh overlay IPs assign automatically. With bootstrap: true, the local node's
-# public_ipv4/public_ipv6 are auto-detected (curl -4/-6 ifconfig.me) and peers are
-# discovered by resolving {name}.{dns_suffix} (dynamic DNS) — no SSH or port-forward
-# needed just to find a peer. Colocated peers resolve to the same WAN IP and get their
-# lan_ip from a LAN scan. Port 22 is admin/user SSH only — styxctl never uses it.
+# Copy to styx.yaml. `name` is the node's identity AND its SSH login (the PIPASS
+# account). Mesh overlay IPs assign automatically. With bootstrap: true, the local
+# node's public_ipv4/public_ipv6 are auto-detected (curl -4/-6 ifconfig.me); remote
+# peers are found by resolving each node's `hostname` (its DuckDNS name) — no SSH or
+# port-forward needed just to discover one. Colocated peers (same WAN) are found by a
+# LAN scan and reached over their lan_ip. Port 22 is admin SSH only — styxctl uses 47810.
 #
-# PREREQUISITE: each node runs a DuckDNS updater keeping {name}.duckdns.org current.
+# PREREQUISITE: each remote node runs a DuckDNS updater keeping its `hostname` current.
 # styxctl only RESOLVES these names, so it needs no DuckDNS token.
+# NOTE: do NOT set cluster.dns_suffix here — node names (atlas, pegasus) are NOT unique
+# DuckDNS subdomains, so deriving {name}.duckdns.org would resolve to strangers' boxes.
+# Always map the real, unique subdomain explicitly via `hostname:`.
 
 cluster:
   name: styx
   leader: lan-elected
   bootstrap: true
-  dns_suffix: duckdns.org   # peers resolve as {name}.duckdns.org; set per-node `hostname:` to override
 
 nodes:
   - name: pegasus
     role: init-server
+    hostname: pipegasus.duckdns.org   # unique DuckDNS name → current WAN IP
   - name: atlas
     role: agent
+    # Colocated with pegasus (shared WAN); discovered via LAN scan, reached over lan_ip.
+    # No DuckDNS name today — add one (e.g. piatlas.duckdns.org) before moving it offsite.
+
+  # Third Pi — offline today. Uncomment when it's back; it's the remote-site case that
+  # actually needs DuckDNS, since it won't share the others' WAN/LAN.
+  # - name: thor
+  #   role: agent
+  #   hostname: pithor.duckdns.org
+
+# pistyx.duckdns.org is a floating cluster name (not a node) — reserved for pointing at
+# the current leader/entrypoint so agents always have one stable endpoint to bootstrap to.
