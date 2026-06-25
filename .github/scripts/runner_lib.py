@@ -103,6 +103,8 @@ def run_ssh_probe(
         "ConnectTimeout=10",
         "-o",
         "StrictHostKeyChecking=accept-new",
+        "-o",
+        "LogLevel=ERROR",  # suppress the benign "Permanently added ... known hosts" warning
     ]
     if use_sshpass:
         ssh_opts.extend(["-o", "PreferredAuthentications=password", "-o", "BatchMode=no"])
@@ -125,10 +127,12 @@ def run_ssh_probe(
         return False, f"ssh timed out after {timeout} seconds"
     except OSError as exc:
         return False, str(exc)
-    detail = (completed.stderr or completed.stdout or "").strip()
+    stdout = (completed.stdout or "").strip()
+    stderr = (completed.stderr or "").strip()
     if completed.returncode == 0:
-        return True, detail or "ok"
-    return False, detail or f"ssh exit code {completed.returncode}"
+        # The remote command's output is on stdout; the connectivity marker lives there.
+        return True, stdout or stderr or "ok"
+    return False, stderr or stdout or f"ssh exit code {completed.returncode}"
 
 
 def load_operational_config_with_retries(
