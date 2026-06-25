@@ -165,6 +165,15 @@ def enrich_operational_config(
         local_node = identify_local_node(parsed, inventory, enriched)
         if local_node is not None and local_node.public_ipv4:
             site_nodes = sites_by_public_ip(parsed).get(local_node.public_ipv4, [])
+            # Exclude the local node's own LAN IP from candidates so we don't assign it to a peer.
+            local_lan = None
+            for item in nodes_raw:
+                if isinstance(item, dict) and item.get("name") == local_node.name:
+                    local_lan = item.get("lan_ip")
+                    break
+            # Prefer IPs from the LAN scan (no SSH needed). Sort for determinism.
+            peer_candidates = sorted(ip for ip in lan_peers if ip != local_lan)
+            candidate_idx = 0
             for node in site_nodes:
                 if node.name == local_node.name:
                     continue
@@ -172,9 +181,13 @@ def enrich_operational_config(
                     if not isinstance(item, dict) or item.get("name") != node.name:
                         continue
                     if not item.get("lan_ip"):
-                        lan = discover_remote_lan_ipv4(node.name, gateway_ssh_port=gateway.ssh)
-                        if lan:
-                            item["lan_ip"] = lan
+                        if candidate_idx < len(peer_candidates):
+                            item["lan_ip"] = peer_candidates[candidate_idx]
+                            candidate_idx += 1
+                        else:
+                            lan = discover_remote_lan_ipv4(node.name, gateway_ssh_port=gateway.ssh)
+                            if lan:
+                                item["lan_ip"] = lan
                     break
 
     return enriched
