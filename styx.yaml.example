@@ -7,7 +7,7 @@
 #
 # PREREQUISITE: each remote node runs a DuckDNS updater keeping its `hostname` current.
 # styxctl only RESOLVES these names, so it needs no DuckDNS token.
-# NOTE: do NOT set cluster.dns_suffix here — node names (atlas, pegasus) are NOT unique
+# NOTE: do NOT set cluster.dns_suffix here — node names (kraken, pegasus) are NOT unique
 # DuckDNS subdomains, so deriving {name}.duckdns.org would resolve to strangers' boxes.
 # Always map the real, unique subdomain explicitly via `hostname:`.
 
@@ -20,11 +20,11 @@ nodes:
   - name: pegasus
     role: init-server
     hostname: pipegasus.duckdns.org   # unique DuckDNS name → current WAN IP
-  - name: atlas
+  - name: kraken
     role: agent
-    hostname: pihydra.duckdns.org     # atlas's DuckDNS name is pihydra (there is no piatlas)
+    hostname: pikraken.duckdns.org    # kraken's DuckDNS name
     # Colocated with pegasus today (shared WAN → same A record); reached over its lan_ip
-    # via the LAN scan. pihydra tracks atlas's own WAN if it ever moves offsite.
+    # via the LAN scan. pikraken tracks kraken's own WAN if it ever moves offsite.
 
   # Third Pi — offline today. Uncomment when it's back; it's the remote-site case that
   # actually needs DuckDNS, since it won't share the others' WAN/LAN.

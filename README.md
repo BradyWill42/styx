@@ -314,7 +314,7 @@ nodes:
     lan_ip: 192.168.1.10
     role: init-server
     # ...
-  - name: atlas
+  - name: kraken
     public_ipv4: 71.104.114.70   # same WAN IP — allowed with lan-elected
     lan_ip: 192.168.1.11
     role: server
@@ -409,7 +409,7 @@ styxctl config show
 styxctl config validate
 ```
 
-The shipped example is a minimal three-node layout (pegasus, atlas, thor) with `bootstrap: true`. Per node you only set:
+The shipped example is a minimal three-node layout (pegasus, kraken, thor) with `bootstrap: true`. Per node you only set:
 
 - `name` — must match the host's hostname
 - `role` — `init-server`, `server`, or `agent`
@@ -431,7 +431,7 @@ cluster:
 nodes:
   - name: pegasus
     role: init-server
-  - name: atlas
+  - name: kraken
     role: agent
   - name: thor
     role: server
@@ -734,7 +734,7 @@ styx.yaml.example     # Copy to styx.yaml (gitignored)
 Every pull request and push to `main` runs:
 
 1. **CI** (GitHub-hosted) — install package, `styxctl --help`, wheel build
-2. **Styx runner integration** (self-hosted) — **primary gate** on **pegasus, atlas, and thor**
+2. **Styx runner integration** (self-hosted) — **primary gate** on **pegasus, kraken, and thor**
 
 ### Styx runner integration (primary)
 
@@ -761,8 +761,8 @@ Package install + wheel build only.
 
 | Runner | Site |
 |--------|------|
-| `pegasus` | Hub (co-located with atlas) |
-| `atlas` | Hub (co-located with pegasus) |
+| `pegasus` | Hub (co-located with kraken) |
+| `kraken` | Hub (co-located with pegasus) |
 | `thor` | Remote site |
 
 | Workflow | Trigger | Purpose |

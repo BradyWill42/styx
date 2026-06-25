@@ -74,7 +74,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [pegasus, atlas, thor]
+        runner: [pegasus, kraken, thor]
     runs-on: ${{ matrix.runner }}
 
     steps:
