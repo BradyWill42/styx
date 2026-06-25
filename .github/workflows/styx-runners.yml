@@ -5,8 +5,9 @@
 # Mandatory test: 1 init-server + 1 agent (minimum viable cluster).
 # Full test:      1 init-server + 1 server + 1 agent (optional — passes even if server is offline).
 #
-# Stage 1 — local prerequisites and gateway SSH (47810 only; port 22 untouched).
-# Stage 2 — interconnectivity between runners via Styx gateway port 47810.
+# Uninstall — tear down any previous Styx state.
+# Stage 1   — local prerequisites and gateway SSH (47810 only; port 22 untouched).
+# Stage 2   — interconnectivity between runners via Styx gateway port 47810.
 
 name: Styx runner integration
 
@@ -26,8 +27,8 @@ permissions:
   actions: read
 
 jobs:
-  prerequisites:
-    name: "Stage 1 — ${{ matrix.role }} (${{ matrix.required && 'mandatory' || 'optional' }})"
+  uninstall:
+    name: "Uninstall — ${{ matrix.role }} (${{ matrix.required && 'mandatory' || 'optional' }})"
     continue-on-error: ${{ !matrix.required }}
     strategy:
       fail-fast: false
@@ -53,6 +54,33 @@ jobs:
 
       - name: Uninstall previous state
         run: python3 -m styxctl.cli uninstall apply local || true
+
+  prerequisites:
+    name: "Stage 1 — ${{ matrix.role }} (${{ matrix.required && 'mandatory' || 'optional' }})"
+    needs: uninstall
+    if: needs.uninstall.result != 'cancelled'
+    continue-on-error: ${{ !matrix.required }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - role: init-server
+            required: true
+          - role: agent
+            required: true
+          - role: server
+            required: false
+    runs-on: [self-hosted, "${{ matrix.role }}"]
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install styxctl
+        run: |
+          python3 -m pip install --upgrade pip --break-system-packages
+          python3 -m pip install -e . --break-system-packages
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Stage 1 — prerequisites
         env:
