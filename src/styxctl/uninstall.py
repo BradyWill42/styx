@@ -28,6 +28,28 @@ from .nodes import identify_local_node, parse_nodes
 from .ports import ADMIN_SSH_PORT, RESERVED_PORT_END, RESERVED_PORT_START
 from .remediation import _remove_path, _run_mutating
 
+
+def _path_exists(path: Path) -> bool:
+    """Return True if path exists, including when we lack read permission (sudo will handle it)."""
+    try:
+        return path.exists()
+    except PermissionError:
+        return True
+
+
+def _is_file(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except PermissionError:
+        return True
+
+
+def _is_dir(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except PermissionError:
+        return True
+
 K3S_UNINSTALL_SCRIPTS = (
     "/usr/local/bin/k3s-uninstall.sh",
     "/usr/local/bin/k3s-agent-uninstall.sh",
@@ -174,7 +196,7 @@ def collect_preserved_items(
     """Inventory host configs and services that uninstall intentionally leaves alone."""
     items: list[PreservedItem] = []
 
-    if WG0_CONFIG_PATH.is_file():
+    if _is_file(WG0_CONFIG_PATH):
         items.append(
             PreservedItem(
                 category="wireguard",
@@ -191,7 +213,7 @@ def collect_preserved_items(
             )
         )
 
-    if STYX_SYSTEM_CONFIG_PATH.is_file():
+    if _is_file(STYX_SYSTEM_CONFIG_PATH):
         items.append(
             PreservedItem(
                 category="config",
@@ -200,7 +222,7 @@ def collect_preserved_items(
             )
         )
 
-    if STYX_WG_DIR.is_dir():
+    if _is_dir(STYX_WG_DIR):
         for conf in sorted(STYX_WG_DIR.glob("*.conf")):
             if conf.name in {f"{interface}.conf", "wg0.conf"}:
                 continue
@@ -469,7 +491,7 @@ def _append_wireguard_steps(
         )
 
     styx_conf = STYX_WG_DIR / f"{interface}.conf"
-    if styx_conf.is_file():
+    if _is_file(styx_conf):
         steps.append(
             UninstallStep(
                 name="remove-wg-config",
@@ -493,7 +515,7 @@ def _append_wireguard_steps(
 
 
 def _append_gateway_steps(steps: list[UninstallStep]) -> None:
-    if STYX_SSHD_DROPIN.is_file():
+    if _is_file(STYX_SSHD_DROPIN):
         steps.append(
             UninstallStep(
                 name="remove-gateway-ssh",
