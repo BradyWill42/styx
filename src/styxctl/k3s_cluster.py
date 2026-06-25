@@ -102,6 +102,7 @@ def _node_ssh_connection(
     election_lan_ips: dict[str, str] | None = None,
     election_leader: str | None = None,
     gateway_ssh_port: int = 47810,
+    scanned_lan_ips: list[str] | None = None,
 ) -> SshConnection:
     user = node_ssh_user(node)
     entrypoint = site_entrypoint_for(
@@ -115,6 +116,7 @@ def _node_ssh_connection(
         election_lan_ips=election_lan_ips,
         inventory=inventory,
         local_node=local_node,
+        scanned_lan_ips=scanned_lan_ips,
     )
 
     if not is_colocated(node, nodes) or (entrypoint is not None and node.name == entrypoint.name):

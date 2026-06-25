@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import ipaddress
+import shutil
+import socket
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .inventory import SystemInventory, safe_run
-from .lan_election import parse_interface_ipv4
+from .lan_election import local_lan_subnet, parse_interface_ipv4
 
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
@@ -63,3 +66,60 @@ def detect_public_ipv6() -> str | None:
 
 REMOTE_PUBLIC_IPV4_SHELL = "curl -4 -fsS https://ifconfig.me 2>/dev/null || true"
 REMOTE_PUBLIC_IPV6_SHELL = "curl -6 -fsS https://ifconfig.me 2>/dev/null || true"
+
+
+def _tcp_port_open(host: str, port: int, timeout: float = 0.5) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _nmap_scan(subnet: str, port: int) -> list[str]:
+    """Return IPs with port open using nmap (fast path)."""
+    result = safe_run(
+        "nmap_scan",
+        ["nmap", "-p", str(port), "--open", "-oG", "-", subnet],
+        timeout=30.0,
+    )
+    hits: list[str] = []
+    for line in result.stdout.splitlines():
+        if "Ports:" not in line or "open" not in line:
+            continue
+        parts = line.split()
+        if len(parts) >= 2:
+            hits.append(parts[1])
+    return hits
+
+
+def _socket_scan(subnet: ipaddress.IPv4Network, port: int, *, workers: int = 64) -> list[str]:
+    """Return IPs with port open using parallel TCP connects (nmap fallback)."""
+    hosts = [str(h) for h in subnet.hosts()]
+    hits: list[str] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_tcp_port_open, h, port): h for h in hosts}
+        for future in as_completed(futures):
+            if future.result():
+                hits.append(futures[future])
+    return hits
+
+
+def scan_lan_for_styx_peers(inventory: SystemInventory, port: int = 47810) -> list[str]:
+    """Return LAN IPs that have the Styx gateway port open.
+
+    Uses nmap when available for speed; falls back to parallel socket scan.
+    Excludes the local machine's own IP.
+    """
+    subnet = local_lan_subnet(inventory)
+    if subnet is None:
+        return []
+
+    own_ip = inventory.primary_lan_ip or inventory.bootstrap_ipv4
+
+    if shutil.which("nmap"):
+        candidates = _nmap_scan(str(subnet), port)
+    else:
+        candidates = _socket_scan(subnet, port)
+
+    return [ip for ip in candidates if ip != own_ip]

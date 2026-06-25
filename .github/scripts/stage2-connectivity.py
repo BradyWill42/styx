@@ -21,6 +21,7 @@ from runner_lib import (
 )
 
 
+
 def main() -> int:
     name = runner_name()
     print(f"=== Stage 2 — connectivity: {name} ===")
@@ -31,7 +32,8 @@ def main() -> int:
     from styxctl.gateway import parse_gateway_ports
     from styxctl.inventory import collect_inventory
     from styxctl.k3s_cluster import _node_ssh_connection
-    from styxctl.nodes import identify_local_node, parse_nodes
+    from styxctl.network_detect import scan_lan_for_styx_peers
+    from styxctl.nodes import identify_local_node, is_colocated, parse_nodes
 
     inventory = collect_inventory()
     config = load_operational_config_with_retries(config_path, inventory=inventory)
@@ -40,6 +42,16 @@ def main() -> int:
     if local_node is None:
         local_node = next((node for node in nodes if node.name == name), None)
     gateway = parse_gateway_ports(config)
+
+    # Scan the LAN for peers with the gateway port open when nodes share a public IP.
+    scanned_lan_ips: list[str] = []
+    if any(is_colocated(node, nodes) for node in nodes):
+        print(f"Scanning LAN for peers on port {gateway.ssh}...")
+        scanned_lan_ips = scan_lan_for_styx_peers(inventory, port=gateway.ssh)
+        if scanned_lan_ips:
+            print(f"Found LAN peers: {', '.join(scanned_lan_ips)}")
+        else:
+            print("No LAN peers found via scan.")
 
     if local_node is None:
         fail_check(checks, "local_node", f"runner {name!r} not in styx.yaml")
@@ -91,6 +103,7 @@ def main() -> int:
             inventory=inventory,
             local_node=local_node,
             gateway_ssh_port=gateway.ssh,
+            scanned_lan_ips=scanned_lan_ips,
         )
         ok, detail = run_ssh_probe(
             connection.target,

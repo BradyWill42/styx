@@ -231,6 +231,7 @@ def node_effective_lan_ip(
     election_lan_ips: dict[str, str] | None = None,
     inventory: SystemInventory | None = None,
     local_node: ClusterNode | None = None,
+    scanned_lan_ips: list[str] | None = None,
 ) -> str | None:
     if node.lan_ip:
         return node.lan_ip
@@ -242,6 +243,10 @@ def node_effective_lan_ip(
         from .network_detect import detect_lan_ipv4
 
         return detect_lan_ipv4(inventory)
+    # For colocated peers: if caller already scanned the LAN and found exactly
+    # one peer IP with the gateway port open, use it.
+    if scanned_lan_ips and len(scanned_lan_ips) == 1:
+        return scanned_lan_ips[0]
     return None
 
 
