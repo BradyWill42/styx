@@ -132,13 +132,15 @@ def _node_ssh_connection(
         )
         return SshConnection(target=f"{user}@{host}" if user else host, port=gateway_ssh_port)
 
-    if lan_ip and _operator_on_lan(inventory, lan_ip):
+    # Colocated nodes share a public IP — always connect directly over LAN, never via public IP.
+    if lan_ip:
         return SshConnection(target=f"{user}@{lan_ip}" if user else lan_ip, port=gateway_ssh_port)
 
+    # LAN IP unknown — fall back to ProxyJump through the site entrypoint.
     jump_host = entrypoint.public_ipv4 if entrypoint else node.public_ipv4
     jump_user = node_ssh_user(entrypoint) if entrypoint else user
     jump = f"{jump_user}@{jump_host}" if jump_user else jump_host
-    final_host = lan_ip or node.name
+    final_host = node.name
     return SshConnection(
         target=f"{user}@{final_host}" if user else final_host,
         jump=jump,
