@@ -173,9 +173,13 @@ def configure_styx_gateway(config_path: Path) -> tuple[bool, str]:
     if not ok:
         return False, f"gateway-ssh: {detail}"
 
-    if not port_listening(gateway.ssh):
-        return False, f"gateway port {gateway.ssh} is not listening locally after configure"
-    return True, f"gateway ssh listening on {gateway.ssh}"
+    # sshd reload is async — retry for up to 10 seconds before giving up.
+    for _ in range(10):
+        if port_listening(gateway.ssh):
+            return True, f"gateway ssh listening on {gateway.ssh}"
+        time.sleep(1)
+
+    return False, f"gateway port {gateway.ssh} is not listening after 10s"
 
 
 def write_report(runner: str, stage: str, checks: list[dict[str, object]]) -> Path:
