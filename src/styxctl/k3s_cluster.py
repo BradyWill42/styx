@@ -119,6 +119,19 @@ def _node_ssh_connection(
         scanned_lan_ips=scanned_lan_ips,
     )
 
+    # If the local node shares a public IP with the target, they are on the same LAN:
+    # always reach it over the LAN IP, even when the target is the site entrypoint.
+    # Bouncing out to the shared public IP relies on NAT hairpin/loopback, which is
+    # usually closed and yields "connection refused".
+    local_on_target_lan = (
+        local_node is not None
+        and local_node.public_ipv4 is not None
+        and node.public_ipv4 is not None
+        and local_node.public_ipv4 == node.public_ipv4
+    )
+    if local_on_target_lan and lan_ip:
+        return SshConnection(target=f"{user}@{lan_ip}" if user else lan_ip, port=gateway_ssh_port)
+
     if not is_colocated(node, nodes) or (entrypoint is not None and node.name == entrypoint.name):
         host = (
             node_connectivity_host(
