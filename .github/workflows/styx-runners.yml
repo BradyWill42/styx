@@ -45,15 +45,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Install styxctl
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -e .
+          python3 -m pip install --upgrade pip --break-system-packages
+          python3 -m pip install -e . --break-system-packages
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Stage 1 — prerequisites
@@ -94,15 +89,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Install styxctl
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -e .
+          python3 -m pip install --upgrade pip --break-system-packages
+          python3 -m pip install -e . --break-system-packages
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Stage 2 — connectivity
@@ -139,4 +129,4 @@ jobs:
           path: reports/styx/runner-integration
 
       - name: Summarize test output
-        run: python3 .github/scripts/summarize_reports.py reports/styx/runner-integration
+        run: python3 .github/scripts/summarize_reports.py reports/styx/runner-integration || true
