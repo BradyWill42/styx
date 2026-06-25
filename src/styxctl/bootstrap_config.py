@@ -15,6 +15,7 @@ from .network_detect import (
     detect_lan_ipv4,
     detect_public_ipv4,
     detect_public_ipv6,
+    scan_lan_for_styx_peers,
 )
 from .network_plan import assign_node_mesh_ips
 from .nodes import identify_local_node, parse_nodes, sites_by_public_ip
@@ -126,6 +127,13 @@ def enrich_operational_config(
                     item["lan_ip"] = lan
 
     if bootstrap_mode(enriched):
+        # Peers reachable on the LAN share the same public IP as the local node —
+        # detect them by scanning for the gateway port rather than requiring SSH.
+        local_public_ipv4 = local_node.public_ipv4 if local_node else None
+        lan_peers: set[str] = set()
+        if local_public_ipv4:
+            lan_peers = set(scan_lan_for_styx_peers(inventory, port=gateway.ssh))
+
         for item in nodes_raw:
             if not isinstance(item, dict):
                 continue
@@ -135,9 +143,13 @@ def enrich_operational_config(
             if local_node is not None and name == local_node.name:
                 continue
             if not item.get("public_ipv4"):
-                discovered = discover_remote_public_ipv4(name, gateway_ssh_port=gateway.ssh)
-                if discovered:
-                    item["public_ipv4"] = discovered
+                if local_public_ipv4 and lan_peers:
+                    # Colocated peer — same public IP, no SSH needed.
+                    item["public_ipv4"] = local_public_ipv4
+                else:
+                    discovered = discover_remote_public_ipv4(name, gateway_ssh_port=gateway.ssh)
+                    if discovered:
+                        item["public_ipv4"] = discovered
             if not item.get("public_ipv6"):
                 discovered_v6 = discover_remote_public_ipv6(name, gateway_ssh_port=gateway.ssh)
                 if discovered_v6:
