@@ -25,6 +25,11 @@ nodes:
     hostname: pikraken.duckdns.org    # kraken's DuckDNS name
     # Colocated with pegasus today (shared WAN → same A record); reached over its lan_ip
     # via the LAN scan. pikraken tracks kraken's own WAN if it ever moves offsite.
+  - name: atlas
+    role: agent
+    hostname: pipegasus.duckdns.org   # atlas has no DuckDNS name of its own; it is
+    # colocated with pegasus, so it borrows pegasus's name (same shared WAN IP). The LAN
+    # scan still distinguishes atlas by its own lan_ip.
 
   # Third Pi — offline today. Uncomment when it's back; it's the remote-site case that
   # actually needs DuckDNS, since it won't share the others' WAN/LAN.
