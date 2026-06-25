@@ -1,4 +1,9 @@
-# Primary CI gate: live integration on pegasus, atlas, and thor.
+# Primary CI gate: live integration on self-hosted runners.
+#
+# Runners must carry role labels: init-server, server, agent.
+#
+# Mandatory test: 1 init-server + 1 agent (minimum viable cluster).
+# Full test:      1 init-server + 1 server + 1 agent (optional — passes even if server is offline).
 #
 # Stage 1 — local prerequisites and gateway SSH (47810 only; port 22 untouched).
 # Stage 2 — interconnectivity between runners via Styx gateway port 47810.
@@ -22,13 +27,19 @@ permissions:
 
 jobs:
   prerequisites:
-    name: "Stage 1 — prerequisites (${{ matrix.runner }})"
-    continue-on-error: true
+    name: "Stage 1 — ${{ matrix.role }} (${{ matrix.required && 'mandatory' || 'optional' }})"
+    continue-on-error: ${{ !matrix.required }}
     strategy:
       fail-fast: false
       matrix:
-        runner: [pegasus, atlas, thor]
-    runs-on: ${{ matrix.runner }}
+        include:
+          - role: init-server
+            required: true
+          - role: agent
+            required: true
+          - role: server
+            required: false
+    runs-on: [self-hosted, "${{ matrix.role }}"]
     timeout-minutes: 5
 
     steps:
@@ -46,32 +57,36 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Stage 1 — prerequisites
-        env:
-          RUNNER_NAME: ${{ matrix.runner }}
         run: python3 .github/scripts/stage1-prerequisites.py
 
       - name: Print stage 1 report
         if: always()
-        run: python3 .github/scripts/print_report.py ${{ matrix.runner }} prerequisites
+        run: python3 .github/scripts/print_report.py "$RUNNER_NAME" prerequisites
 
       - name: Upload stage 1 report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: styx-stage1-${{ matrix.runner }}
-          path: reports/styx/runner-integration/${{ matrix.runner }}-prerequisites.json
+          name: styx-stage1-${{ runner.name }}
+          path: reports/styx/runner-integration/${{ runner.name }}-prerequisites.json
           if-no-files-found: warn
 
   connectivity:
-    name: "Stage 2 — connectivity (${{ matrix.runner }})"
+    name: "Stage 2 — ${{ matrix.role }} (${{ matrix.required && 'mandatory' || 'optional' }})"
     needs: prerequisites
     if: needs.prerequisites.result != 'cancelled'
-    continue-on-error: true
+    continue-on-error: ${{ !matrix.required }}
     strategy:
       fail-fast: false
       matrix:
-        runner: [pegasus, atlas, thor]
-    runs-on: ${{ matrix.runner }}
+        include:
+          - role: init-server
+            required: true
+          - role: agent
+            required: true
+          - role: server
+            required: false
+    runs-on: [self-hosted, "${{ matrix.role }}"]
     timeout-minutes: 5
 
     steps:
@@ -89,20 +104,18 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Stage 2 — connectivity
-        env:
-          RUNNER_NAME: ${{ matrix.runner }}
         run: python3 .github/scripts/stage2-connectivity.py
 
       - name: Print stage 2 report
         if: always()
-        run: python3 .github/scripts/print_report.py ${{ matrix.runner }} connectivity
+        run: python3 .github/scripts/print_report.py "$RUNNER_NAME" connectivity
 
       - name: Upload stage 2 report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: styx-stage2-${{ matrix.runner }}
-          path: reports/styx/runner-integration/${{ matrix.runner }}-connectivity.json
+          name: styx-stage2-${{ runner.name }}
+          path: reports/styx/runner-integration/${{ runner.name }}-connectivity.json
           if-no-files-found: warn
 
   summary:
