@@ -1,4 +1,5 @@
-"""Bootstrap-time config enrichment: auto-detect IPs (external DNS deferred to MVP3)."""
+"""Bootstrap-time config enrichment: auto-detect local IPs and resolve peer public IPs
+via their DuckDNS hostnames (colocated peers get their lan_ip from a LAN scan)."""
 
 from __future__ import annotations
 
@@ -10,8 +11,6 @@ from .bootstrap_mode import bootstrap_mode
 from .gateway import parse_gateway_ports
 from .inventory import SystemInventory, collect_inventory
 from .network_detect import (
-    REMOTE_PUBLIC_IPV4_SHELL,
-    REMOTE_PUBLIC_IPV6_SHELL,
     detect_lan_ipv4,
     detect_public_ipv4,
     detect_public_ipv6,
@@ -27,10 +26,6 @@ from .nodes import (
     sites_by_public_ip,
 )
 
-_LAN_IP_COMMAND = (
-    "ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | head -1 | cut -d/ -f1"
-)
-
 
 def load_operational_config(
     path: str | Path | None = None,
@@ -44,60 +39,6 @@ def load_operational_config(
     candidate = Path(path) if path is not None else find_config()
     raw = load_config(candidate)
     return enrich_operational_config(resolve_config(raw), inventory)
-
-
-def _discover_remote_value(
-    node_name: str,
-    remote_command: str,
-    *,
-    gateway_ssh_port: int,
-) -> str | None:
-    from .k3s_cluster import _run_ssh_command
-
-    target = f"{node_name}@{node_name}"
-    ok, detail = _run_ssh_command(
-        target,
-        remote_command,
-        port=gateway_ssh_port,
-        timeout=20.0,
-    )
-    if not ok:
-        return None
-    candidate = detail.strip().splitlines()[-1].strip().split()[0]
-    return candidate or None
-
-
-def discover_remote_public_ipv4(node_name: str, *, gateway_ssh_port: int) -> str | None:
-    value = _discover_remote_value(
-        node_name,
-        REMOTE_PUBLIC_IPV4_SHELL,
-        gateway_ssh_port=gateway_ssh_port,
-    )
-    if value and "." in value:
-        return value
-    return None
-
-
-def discover_remote_public_ipv6(node_name: str, *, gateway_ssh_port: int) -> str | None:
-    value = _discover_remote_value(
-        node_name,
-        REMOTE_PUBLIC_IPV6_SHELL,
-        gateway_ssh_port=gateway_ssh_port,
-    )
-    if value and ":" in value:
-        return value.split("%", 1)[0]
-    return None
-
-
-def discover_remote_lan_ipv4(node_name: str, *, gateway_ssh_port: int) -> str | None:
-    value = _discover_remote_value(
-        node_name,
-        _LAN_IP_COMMAND,
-        gateway_ssh_port=gateway_ssh_port,
-    )
-    if value and not value.startswith("127."):
-        return value
-    return None
 
 
 def enrich_operational_config(
@@ -165,20 +106,12 @@ def enrich_operational_config(
                 if resolved:
                     item["public_ipv4"] = resolved
                 elif local_public_ipv4 and lan_peers:
-                    # No DNS configured — fall back to the colocated shortcut.
+                    # No DNS name configured — a colocated peer shares the local WAN IP.
                     item["public_ipv4"] = local_public_ipv4
-                else:
-                    discovered = discover_remote_public_ipv4(name, gateway_ssh_port=gateway.ssh)
-                    if discovered:
-                        item["public_ipv4"] = discovered
             if not item.get("public_ipv6"):
                 resolved_v6 = resolve_dns_ipv6(dns_name) if dns_name else None
                 if resolved_v6:
                     item["public_ipv6"] = resolved_v6
-                else:
-                    discovered_v6 = discover_remote_public_ipv6(name, gateway_ssh_port=gateway.ssh)
-                    if discovered_v6:
-                        item["public_ipv6"] = discovered_v6
 
         parsed = parse_nodes(enriched)
         local_node = identify_local_node(parsed, inventory, enriched)
@@ -199,14 +132,9 @@ def enrich_operational_config(
                 for item in nodes_raw:
                     if not isinstance(item, dict) or item.get("name") != node.name:
                         continue
-                    if not item.get("lan_ip"):
-                        if candidate_idx < len(peer_candidates):
-                            item["lan_ip"] = peer_candidates[candidate_idx]
-                            candidate_idx += 1
-                        else:
-                            lan = discover_remote_lan_ipv4(node.name, gateway_ssh_port=gateway.ssh)
-                            if lan:
-                                item["lan_ip"] = lan
+                    if not item.get("lan_ip") and candidate_idx < len(peer_candidates):
+                        item["lan_ip"] = peer_candidates[candidate_idx]
+                        candidate_idx += 1
                     break
 
     return enriched

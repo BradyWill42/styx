@@ -64,10 +64,6 @@ def detect_public_ipv6() -> str | None:
     return None
 
 
-REMOTE_PUBLIC_IPV4_SHELL = "curl -4 -fsS https://ifconfig.me 2>/dev/null || true"
-REMOTE_PUBLIC_IPV6_SHELL = "curl -6 -fsS https://ifconfig.me 2>/dev/null || true"
-
-
 def resolve_dns_ipv4(hostname: str) -> str | None:
     """Resolve a hostname (e.g. node.duckdns.org) to its public A record."""
     try:
