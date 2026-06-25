@@ -127,9 +127,15 @@ def enrich_operational_config(
                     item["lan_ip"] = lan
 
     if bootstrap_mode(enriched):
-        # Peers reachable on the LAN share the same public IP as the local node —
-        # detect them by scanning for the gateway port rather than requiring SSH.
-        local_public_ipv4 = local_node.public_ipv4 if local_node else None
+        # Peers reachable on the LAN share the same public IP as the local node.
+        # local_node is a stale parsed dataclass — read the freshly written public IP
+        # directly from nodes_raw, or fall back to detect_public_ipv4().
+        local_public_ipv4 = None
+        if local_node is not None:
+            for item in nodes_raw:
+                if isinstance(item, dict) and item.get("name") == local_node.name:
+                    local_public_ipv4 = item.get("public_ipv4") or detect_public_ipv4()
+                    break
         lan_peers: set[str] = set()
         if local_public_ipv4:
             lan_peers = set(scan_lan_for_styx_peers(inventory, port=gateway.ssh))
