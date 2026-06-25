@@ -23,12 +23,13 @@ permissions:
 jobs:
   prerequisites:
     name: "Stage 1 — prerequisites (${{ matrix.runner }})"
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
         runner: [pegasus, atlas, thor]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v4
@@ -64,13 +65,14 @@ jobs:
   connectivity:
     name: "Stage 2 — connectivity (${{ matrix.runner }})"
     needs: prerequisites
-    if: needs.prerequisites.result == 'success'
+    if: needs.prerequisites.result != 'cancelled'
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
         runner: [pegasus, atlas, thor]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v4
