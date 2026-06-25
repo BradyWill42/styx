@@ -156,27 +156,22 @@ def load_operational_config_with_retries(
 
 
 def configure_styx_gateway(config_path: Path) -> tuple[bool, str]:
-    """Ensure Styx gateway SSH and firewall are configured for connectivity tests."""
+    """Ensure Styx gateway SSH is configured for connectivity tests.
+
+    Firewall rules are assumed to be pre-configured on the runner machines.
+    """
     from styxctl.bootstrap_config import load_operational_config
     from styxctl.gateway import parse_gateway_ports
-    from styxctl.install import _apply_gateway_firewall, _configure_gateway_ssh
+    from styxctl.install import _configure_gateway_ssh
     from styxctl.inventory import collect_inventory
 
     inventory = collect_inventory()
     config = load_operational_config(config_path, inventory=inventory)
     gateway = parse_gateway_ports(config)
-    wireguard = config.get("wireguard")
-    wg_port = 47800
-    if isinstance(wireguard, dict) and isinstance(wireguard.get("port"), int):
-        wg_port = wireguard["port"]
 
     ok, detail = _configure_gateway_ssh(gateway.ssh, inventory)
     if not ok:
         return False, f"gateway-ssh: {detail}"
-
-    ok, detail = _apply_gateway_firewall(wg_port, gateway.ssh, gateway.k3s_api, inventory)
-    if not ok:
-        return False, f"gateway-firewall: {detail}"
 
     if not port_listening(gateway.ssh):
         return False, f"gateway port {gateway.ssh} is not listening locally after configure"
