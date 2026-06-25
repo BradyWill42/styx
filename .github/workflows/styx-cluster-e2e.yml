@@ -139,9 +139,47 @@ jobs:
       - name: Cluster doctor
         run: styxctl install doctor cluster
 
+  deploy-dns:
+    name: "4. Deploy DuckDNS publisher"
+    needs: cluster-join
+    if: needs.cluster-join.result == 'success'
+    runs-on: pegasus
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install styxctl
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -e .
+
+      - name: Use repo or existing styx.yaml
+        run: |
+          if [ -f /etc/styx/styx.yaml ]; then
+            cp /etc/styx/styx.yaml styx.yaml
+          else
+            cp styx.yaml.example styx.yaml
+          fi
+
+      - name: Plan DuckDNS publisher (no token needed)
+        run: styxctl deploy dns plan
+
+      - name: Apply DuckDNS publisher
+        env:
+          DUCKDNS_TOKEN: ${{ secrets.DUCKDNS_TOKEN }}
+        run: styxctl deploy dns apply
+
+      - name: Show DuckDNS publisher pod
+        run: sudo kubectl -n styx-system get pods -o wide
+
   teardown-uninstall:
-    name: "4. Teardown uninstall"
-    needs: [install-local, cluster-join]
+    name: "5. Teardown uninstall"
+    needs: [install-local, cluster-join, deploy-dns]
     if: always() && inputs.skip_teardown_uninstall != true
     runs-on: pegasus
 

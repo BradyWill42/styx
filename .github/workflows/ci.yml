@@ -29,7 +29,6 @@ jobs:
       - name: Verify DuckDNS manifest renders (no cluster)
         run: |
           cp styx.yaml.example styx.yaml
-          printf '\ndns:\n  provider: duckdns\n  domains: [pistyx]\n  interval_seconds: 300\n' >> styx.yaml
           styxctl deploy dns plan | tee /tmp/dns-plan.txt
           grep -q "kind: Deployment" /tmp/dns-plan.txt
           grep -q 'value: "pistyx"' /tmp/dns-plan.txt
