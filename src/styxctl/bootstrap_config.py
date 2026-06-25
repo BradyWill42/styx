@@ -15,10 +15,17 @@ from .network_detect import (
     detect_lan_ipv4,
     detect_public_ipv4,
     detect_public_ipv6,
+    resolve_dns_ipv4,
+    resolve_dns_ipv6,
     scan_lan_for_styx_peers,
 )
 from .network_plan import assign_node_mesh_ips
-from .nodes import identify_local_node, parse_nodes, sites_by_public_ip
+from .nodes import (
+    identify_local_node,
+    node_dns_name,
+    parse_nodes,
+    sites_by_public_ip,
+)
 
 _LAN_IP_COMMAND = (
     "ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | head -1 | cut -d/ -f1"
@@ -148,18 +155,30 @@ def enrich_operational_config(
                 continue
             if local_node is not None and name == local_node.name:
                 continue
+            # Dynamic DNS ({name}.duckdns.org) is the authoritative cross-site
+            # rendezvous: resolving it yields the peer's current WAN IP without SSH
+            # or a port-forward. Colocated peers resolve to the same IP as the local
+            # node, which the LAN scan then maps to a lan_ip.
+            dns_name = node_dns_name(enriched, name, item.get("hostname"))
             if not item.get("public_ipv4"):
-                if local_public_ipv4 and lan_peers:
-                    # Colocated peer — same public IP, no SSH needed.
+                resolved = resolve_dns_ipv4(dns_name) if dns_name else None
+                if resolved:
+                    item["public_ipv4"] = resolved
+                elif local_public_ipv4 and lan_peers:
+                    # No DNS configured — fall back to the colocated shortcut.
                     item["public_ipv4"] = local_public_ipv4
                 else:
                     discovered = discover_remote_public_ipv4(name, gateway_ssh_port=gateway.ssh)
                     if discovered:
                         item["public_ipv4"] = discovered
             if not item.get("public_ipv6"):
-                discovered_v6 = discover_remote_public_ipv6(name, gateway_ssh_port=gateway.ssh)
-                if discovered_v6:
-                    item["public_ipv6"] = discovered_v6
+                resolved_v6 = resolve_dns_ipv6(dns_name) if dns_name else None
+                if resolved_v6:
+                    item["public_ipv6"] = resolved_v6
+                else:
+                    discovered_v6 = discover_remote_public_ipv6(name, gateway_ssh_port=gateway.ssh)
+                    if discovered_v6:
+                        item["public_ipv6"] = discovered_v6
 
         parsed = parse_nodes(enriched)
         local_node = identify_local_node(parsed, inventory, enriched)

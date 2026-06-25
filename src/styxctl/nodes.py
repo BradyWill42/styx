@@ -24,11 +24,35 @@ def resolve_hostname(hostname: str) -> str | None:
     return results[0][4][0]
 
 
-def node_hostname(config: dict[str, Any], node: ClusterNode) -> str | None:
-    """Optional explicit hostname on the node; external DNS publish is MVP3."""
-    if node.hostname:
-        return node.hostname
+def cluster_dns_suffix(config: dict[str, Any] | None) -> str | None:
+    """Dynamic-DNS suffix (e.g. 'duckdns.org') used to derive {name}.{suffix} hostnames."""
+    if not config:
+        return None
+    cluster = config.get("cluster")
+    if isinstance(cluster, dict):
+        suffix = cluster.get("dns_suffix")
+        if isinstance(suffix, str) and suffix.strip():
+            return suffix.strip().lstrip(".")
     return None
+
+
+def node_dns_name(
+    config: dict[str, Any] | None,
+    node_name: str,
+    explicit_hostname: str | None = None,
+) -> str | None:
+    """Resolvable hostname for a node: explicit hostname, else {name}.{dns_suffix}."""
+    if isinstance(explicit_hostname, str) and explicit_hostname.strip():
+        return explicit_hostname.strip()
+    suffix = cluster_dns_suffix(config)
+    if suffix:
+        return f"{node_name}.{suffix}"
+    return None
+
+
+def node_hostname(config: dict[str, Any], node: ClusterNode) -> str | None:
+    """Resolvable hostname: explicit node.hostname, else derived {name}.{dns_suffix}."""
+    return node_dns_name(config, node.name, node.hostname)
 
 
 @dataclass(slots=True)

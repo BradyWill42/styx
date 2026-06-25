@@ -68,6 +68,32 @@ REMOTE_PUBLIC_IPV4_SHELL = "curl -4 -fsS https://ifconfig.me 2>/dev/null || true
 REMOTE_PUBLIC_IPV6_SHELL = "curl -6 -fsS https://ifconfig.me 2>/dev/null || true"
 
 
+def resolve_dns_ipv4(hostname: str) -> str | None:
+    """Resolve a hostname (e.g. node.duckdns.org) to its public A record."""
+    try:
+        infos = socket.getaddrinfo(hostname, None, family=socket.AF_INET, type=socket.SOCK_STREAM)
+    except OSError:
+        return None
+    for info in infos:
+        candidate = info[4][0]
+        if "." in candidate and not is_private_ipv4(candidate):
+            return candidate
+    return None
+
+
+def resolve_dns_ipv6(hostname: str) -> str | None:
+    """Resolve a hostname (e.g. node.duckdns.org) to its AAAA record."""
+    try:
+        infos = socket.getaddrinfo(hostname, None, family=socket.AF_INET6, type=socket.SOCK_STREAM)
+    except OSError:
+        return None
+    for info in infos:
+        candidate = info[4][0]
+        if ":" in candidate:
+            return candidate.split("%", 1)[0]
+    return None
+
+
 def _tcp_port_open(host: str, port: int, timeout: float = 0.5) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):

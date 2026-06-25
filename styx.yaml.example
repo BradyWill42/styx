@@ -1,12 +1,18 @@
 # Copy to styx.yaml. SSH username defaults to each node name (hostname).
-# Mesh overlay IPs assign automatically. With bootstrap: true, public_ipv4/public_ipv6
-# and lan_ip are auto-detected locally (curl -4/-6 on ifconfig.me) and on peers via
-# gateway SSH (47810). Port 22 is admin/user SSH only — styxctl never uses it.
+# Mesh overlay IPs assign automatically. With bootstrap: true, the local node's
+# public_ipv4/public_ipv6 are auto-detected (curl -4/-6 ifconfig.me) and peers are
+# discovered by resolving {name}.{dns_suffix} (dynamic DNS) — no SSH or port-forward
+# needed just to find a peer. Colocated peers resolve to the same WAN IP and get their
+# lan_ip from a LAN scan. Port 22 is admin/user SSH only — styxctl never uses it.
+#
+# PREREQUISITE: each node runs a DuckDNS updater keeping {name}.duckdns.org current.
+# styxctl only RESOLVES these names, so it needs no DuckDNS token.
 
 cluster:
   name: styx
   leader: lan-elected
   bootstrap: true
+  dns_suffix: duckdns.org   # peers resolve as {name}.duckdns.org; set per-node `hostname:` to override
 
 nodes:
   - name: pegasus
