@@ -995,6 +995,13 @@ def _firewall_port(action: str, port: int, protocol: str, inventory: SystemInven
     if binaries.get("nft"):
         if action == "revoke":
             return True, f"nftables rule for {label} was not tracked; remove manually if needed"
+        # Ensure table and base chain exist before adding a rule (idempotent; ignore errors).
+        _run_mutating(["nft", "add", "table", "inet", "filter"], use_sudo=True, sudo_available=inventory.sudo_available)
+        _run_mutating(
+            ["nft", "add", "chain", "inet", "filter", "input", "{ type filter hook input priority 0; }"],
+            use_sudo=True,
+            sudo_available=inventory.sudo_available,
+        )
         return _run_mutating(
             ["nft", "add", "rule", "inet", "filter", "input", protocol, "dport", str(port), "accept"],
             use_sudo=True,

@@ -18,9 +18,10 @@ PERSISTENT_CONFIG = Path("/etc/styx/styx.yaml")
 
 
 def runner_name() -> str:
+    # STYX_RUNNER_NAME takes priority — RUNNER_NAME is set by GitHub Actions and can't be overridden.
     return (
-        os.environ.get("RUNNER_NAME")
-        or os.environ.get("STYX_RUNNER_NAME")
+        os.environ.get("STYX_RUNNER_NAME")
+        or os.environ.get("RUNNER_NAME")
         or Path("/etc/hostname").read_text(encoding="utf-8").strip()
     )
 

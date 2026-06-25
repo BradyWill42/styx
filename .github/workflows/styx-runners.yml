@@ -53,7 +53,7 @@ jobs:
 
       - name: Stage 1 — prerequisites
         env:
-          RUNNER_NAME: ${{ matrix.role }}
+          STYX_RUNNER_NAME: ${{ matrix.role }}
         run: python3 .github/scripts/stage1-prerequisites.py
 
       - name: Print stage 1 report
@@ -97,7 +97,7 @@ jobs:
 
       - name: Stage 2 — connectivity
         env:
-          RUNNER_NAME: ${{ matrix.role }}
+          STYX_RUNNER_NAME: ${{ matrix.role }}
         run: python3 .github/scripts/stage2-connectivity.py
 
       - name: Print stage 2 report
