@@ -114,8 +114,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install styxctl
+      - name: Install prerequisites
         run: |
+          sudo apt-get install -y sshpass
           python3 -m pip install --upgrade pip --break-system-packages
           python3 -m pip install -e . --break-system-packages
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
