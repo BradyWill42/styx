@@ -94,20 +94,24 @@ def run_ssh_probe(
     """SSH over Styx gateway ports (47800-47850); never uses admin port 22."""
     if shutil.which("ssh") is None:
         return False, "ssh command not found"
-    command = [
+    use_sshpass = bool(os.environ.get("SSHPASS")) and shutil.which("sshpass") is not None
+    ssh_opts = [
         "ssh",
         "-p",
         str(port),
-        "-o",
-        "BatchMode=yes",
         "-o",
         "ConnectTimeout=10",
         "-o",
         "StrictHostKeyChecking=accept-new",
     ]
+    if use_sshpass:
+        ssh_opts.extend(["-o", "PreferredAuthentications=password", "-o", "BatchMode=no"])
+    else:
+        ssh_opts.extend(["-o", "BatchMode=yes"])
     if jump:
-        command.extend(["-J", f"{jump}:{port}"])
-    command.extend([target, remote_command])
+        ssh_opts.extend(["-J", f"{jump}:{port}"])
+    ssh_opts.extend([target, remote_command])
+    command = ["sshpass", "-e"] + ssh_opts if use_sshpass else ssh_opts
     try:
         completed = subprocess.run(
             command,

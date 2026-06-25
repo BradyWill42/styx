@@ -123,6 +123,7 @@ jobs:
       - name: Stage 2 — connectivity
         env:
           STYX_RUNNER_NAME: ${{ matrix.role }}
+          SSHPASS: ${{ secrets.PIPASS }}
         run: python3 .github/scripts/stage2-connectivity.py
 
       - name: Print stage 2 report
