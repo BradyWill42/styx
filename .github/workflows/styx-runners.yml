@@ -42,7 +42,7 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install styxctl
         run: |
@@ -70,7 +70,7 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install styxctl
         run: |
@@ -88,7 +88,7 @@ jobs:
         run: python3 .github/scripts/print_report.py "${{ matrix.role }}" prerequisites
 
       - name: Upload stage 1 report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: styx-stage1-${{ matrix.role }}
@@ -112,7 +112,7 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install prerequisites
         run: |
@@ -132,7 +132,7 @@ jobs:
         run: python3 .github/scripts/print_report.py "${{ matrix.role }}" connectivity
 
       - name: Upload stage 2 report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: styx-stage2-${{ matrix.role }}
@@ -146,10 +146,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download stage reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: styx-stage*
           merge-multiple: true
