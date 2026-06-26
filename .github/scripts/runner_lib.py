@@ -75,6 +75,12 @@ def fail_check(checks: list[dict[str, object]], name: str, detail: str) -> None:
     print(f"FAIL  {name}: {detail}", file=sys.stderr)
 
 
+def skip_check(checks: list[dict[str, object]], name: str, detail: str) -> None:
+    """Record a check that was intentionally not run (neither pass nor fail)."""
+    checks.append({"name": name, "status": "skipped", "detail": detail})
+    print(f"SKIP  {name}: {detail}")
+
+
 def port_listening(port: int, host: str = "127.0.0.1") -> bool:
     try:
         with socket.create_connection((host, port), timeout=2.0):
@@ -133,6 +139,34 @@ def run_ssh_probe(
         # The remote command's output is on stdout; the connectivity marker lives there.
         return True, stdout or stderr or "ok"
     return False, stderr or stdout or f"ssh exit code {completed.returncode}"
+
+
+def map_lan_ips_by_identity(nodes, local_node, scanned_ips, *, port):
+    """Map scanned LAN IPs to node names by reading each box's hostname over SSH.
+
+    The LAN scan finds IPs with the gateway port open but cannot say which IP belongs
+    to which node — assigning them positionally mismatches colocated peers. Instead, SSH
+    to each IP as each candidate node's login user and read `hostname`; the IP whose
+    hostname matches a node's name is that node's lan_ip. Returns {node_name: ip}.
+    """
+    from styxctl.nodes import node_ssh_user
+
+    mapping: dict[str, str] = {}
+    unclaimed = list(scanned_ips)
+    for node in nodes:
+        if local_node is not None and node.name == local_node.name:
+            continue
+        user = node_ssh_user(node)
+        for ip in list(unclaimed):
+            ok, detail = run_ssh_probe(f"{user}@{ip}", "hostname -s", port=port, timeout=15.0)
+            if not ok or not detail.strip():
+                continue
+            got = detail.strip().splitlines()[-1].strip().lower()
+            if got == node.name.lower():
+                mapping[node.name] = ip
+                unclaimed.remove(ip)
+                break
+    return mapping
 
 
 def load_operational_config_with_retries(
@@ -216,7 +250,12 @@ def format_report(path: Path) -> str:
         status = str(check.get("status", "?")).upper()
         name = check.get("name", "?")
         detail = str(check.get("detail", "")).strip()
-        prefix = "OK  " if status == "PASSED" else "FAIL"
+        if status == "PASSED":
+            prefix = "OK  "
+        elif status == "SKIPPED":
+            prefix = "SKIP"
+        else:
+            prefix = "FAIL"
         if detail and detail != "ok":
             lines.append(f"{prefix}  {name}: {detail}")
         else:

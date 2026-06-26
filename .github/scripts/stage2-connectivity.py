@@ -12,8 +12,10 @@ from runner_lib import (
     REPO_ROOT,
     fail_check,
     pass_check,
+    skip_check,
     exit_from_checks,
     load_operational_config_with_retries,
+    map_lan_ips_by_identity,
     port_listening,
     prepare_styx_yaml,
     run_ssh_probe,
@@ -59,6 +61,21 @@ def main() -> int:
 
     pass_check(checks, "local_node", local_node.name)
 
+    # The LAN scan returns IPs but not which IP is which node — positional assignment
+    # mismatches colocated peers. Map them by hostname over SSH; for colocated peers this
+    # map is authoritative (correct IP if found, else None = that node ran no stage-1 leg
+    # this round, so it's not on the LAN and its connectivity check is skipped).
+    lan_by_name: dict[str, str] = {}
+    if scanned_lan_ips:
+        lan_by_name = map_lan_ips_by_identity(nodes, local_node, scanned_lan_ips, port=gateway.ssh)
+        if lan_by_name:
+            print("LAN identity map: " + ", ".join(f"{k}={v}" for k, v in sorted(lan_by_name.items())))
+    for node in nodes:
+        if node.name == local_node.name:
+            continue
+        if local_node.public_ipv4 and node.public_ipv4 == local_node.public_ipv4:
+            node.lan_ip = lan_by_name.get(node.name)
+
     for node in nodes:
         label = node.public_ipv4 or "missing"
         lan = f" lan={node.lan_ip}" if node.lan_ip else ""
@@ -93,6 +110,15 @@ def main() -> int:
             continue
 
         if not peer.public_ipv4:
+            continue
+
+        colocated = bool(local_node.public_ipv4 and peer.public_ipv4 == local_node.public_ipv4)
+        if colocated and not peer.lan_ip:
+            skip_check(
+                checks,
+                f"ssh_{peer.name}",
+                "colocated peer not on the LAN this run (no stage-1 leg) — skipped",
+            )
             continue
 
         connection = _node_ssh_connection(
