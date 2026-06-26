@@ -1,9 +1,10 @@
 # Primary CI gate: live integration on self-hosted runners.
 #
-# Runners must carry role labels: init-server, server, agent.
-#
-# Mandatory test: 1 init-server + 1 agent (minimum viable cluster).
-# Full test:      1 init-server + 1 server + 1 agent (optional — passes even if server is offline).
+# Requires at least 2 online runners and tests EVERY online runner. A discovery job
+# lists online runners via the GitHub API (RUNNER_API_TOKEN) and builds a dynamic matrix
+# with one job pinned per online machine — so the suite scales with however many runners
+# are online (>=2), and offline runners are simply absent (no queue-hang). Each runner
+# must carry its own name as a label so runs-on can pin to it.
 #
 # Uninstall — tear down any previous Styx state.
 # Stage 1   — local prerequisites and gateway SSH (47810 only; port 22 untouched).
@@ -27,20 +28,36 @@ permissions:
   actions: read
 
 jobs:
+  discover:
+    name: "Discover online runners (need >=2)"
+    runs-on: ubuntu-latest
+    outputs:
+      runners: ${{ steps.list.outputs.runners }}
+    steps:
+      - name: List online runners (name-labeled, so they're targetable)
+        id: list
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_API_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          runners="$(gh api "repos/$REPO/actions/runners" --jq '[.runners[] | . as $r | select($r.status=="online") | select(([$r.labels[].name] | index($r.name)) != null) | $r.name] | sort' | jq -c .)"
+          count="$(printf '%s' "$runners" | jq 'length')"
+          echo "Online, targetable runners: $runners ($count)"
+          if [ "$count" -lt 2 ]; then
+            echo "::error::Need at least 2 online runners (each with its name as a label); found $count: $runners"
+            exit 1
+          fi
+          echo "runners=$runners" >> "$GITHUB_OUTPUT"
+
   uninstall:
-    name: "Uninstall — ${{ matrix.role }} (${{ matrix.required && 'mandatory' || 'optional' }})"
-    continue-on-error: ${{ !matrix.required }}
+    name: "Uninstall — ${{ matrix.runner }}"
+    needs: discover
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - role: init-server
-            required: true
-          - role: server
-            required: false
-          - role: agent
-            required: true
-    runs-on: [self-hosted, "${{ matrix.role }}"]
+        runner: ${{ fromJson(needs.discover.outputs.runners) }}
+    runs-on: [self-hosted, "${{ matrix.runner }}"]
     timeout-minutes: 5
 
     steps:
@@ -56,21 +73,14 @@ jobs:
         run: python3 -m styxctl.cli uninstall apply local || true
 
   prerequisites:
-    name: "Stage 1 — ${{ matrix.role }} (${{ matrix.required && 'mandatory' || 'optional' }})"
-    needs: uninstall
+    name: "Stage 1 — ${{ matrix.runner }}"
+    needs: [discover, uninstall]
     if: needs.uninstall.result != 'cancelled'
-    continue-on-error: ${{ !matrix.required }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - role: init-server
-            required: true
-          - role: server
-            required: false
-          - role: agent
-            required: true
-    runs-on: [self-hosted, "${{ matrix.role }}"]
+        runner: ${{ fromJson(needs.discover.outputs.runners) }}
+    runs-on: [self-hosted, "${{ matrix.runner }}"]
     timeout-minutes: 5
 
     steps:
@@ -84,37 +94,30 @@ jobs:
 
       - name: Stage 1 — prerequisites
         env:
-          STYX_RUNNER_NAME: ${{ matrix.role }}
+          STYX_RUNNER_NAME: ${{ matrix.runner }}
         run: python3 .github/scripts/stage1-prerequisites.py
 
       - name: Print stage 1 report
         if: always()
-        run: python3 .github/scripts/print_report.py "${{ matrix.role }}" prerequisites
+        run: python3 .github/scripts/print_report.py "${{ matrix.runner }}" prerequisites
 
       - name: Upload stage 1 report
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: styx-stage1-${{ matrix.role }}
-          path: reports/styx/runner-integration/${{ matrix.role }}-prerequisites.json
+          name: styx-stage1-${{ matrix.runner }}
+          path: reports/styx/runner-integration/${{ matrix.runner }}-prerequisites.json
           if-no-files-found: warn
 
   connectivity:
-    name: "Stage 2 — ${{ matrix.role }} (${{ matrix.required && 'mandatory' || 'optional' }})"
-    needs: prerequisites
+    name: "Stage 2 — ${{ matrix.runner }}"
+    needs: [discover, prerequisites]
     if: needs.prerequisites.result != 'cancelled'
-    continue-on-error: ${{ !matrix.required }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - role: init-server
-            required: true
-          - role: server
-            required: false
-          - role: agent
-            required: true
-    runs-on: [self-hosted, "${{ matrix.role }}"]
+        runner: ${{ fromJson(needs.discover.outputs.runners) }}
+    runs-on: [self-hosted, "${{ matrix.runner }}"]
     timeout-minutes: 5
 
     steps:
@@ -129,25 +132,25 @@ jobs:
 
       - name: Stage 2 — connectivity
         env:
-          STYX_RUNNER_NAME: ${{ matrix.role }}
+          STYX_RUNNER_NAME: ${{ matrix.runner }}
           SSHPASS: ${{ secrets.PIPASS }}
         run: python3 .github/scripts/stage2-connectivity.py
 
       - name: Print stage 2 report
         if: always()
-        run: python3 .github/scripts/print_report.py "${{ matrix.role }}" connectivity
+        run: python3 .github/scripts/print_report.py "${{ matrix.runner }}" connectivity
 
       - name: Upload stage 2 report
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: styx-stage2-${{ matrix.role }}
-          path: reports/styx/runner-integration/${{ matrix.role }}-connectivity.json
+          name: styx-stage2-${{ matrix.runner }}
+          path: reports/styx/runner-integration/${{ matrix.runner }}-connectivity.json
           if-no-files-found: warn
 
   summary:
     name: Integration summary
-    needs: [prerequisites, connectivity]
+    needs: [discover, prerequisites, connectivity]
     if: always()
     runs-on: ubuntu-latest
 
