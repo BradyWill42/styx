@@ -17,24 +17,31 @@ cluster:
   bootstrap: true
 
 nodes:
+  # Roles mirror each Pi's GitHub runner labels (its capabilities). styx.yaml allows
+  # exactly ONE init-server: pegasus is init-server-only so it takes that slot; hydra is
+  # server; kraken/atlas are agents. thor is init-server+server-capable but is offline —
+  # see the commented block below. Each node's hostname is its unique DuckDNS name
+  # (atlas is the exception — it has none and borrows pegasus's).
   - name: pegasus
     role: init-server
-    hostname: pipegasus.duckdns.org   # unique DuckDNS name → current WAN IP
+    hostname: pipegasus.duckdns.org
+  - name: hydra
+    role: server
+    hostname: pihydra.duckdns.org
   - name: kraken
     role: agent
-    hostname: pikraken.duckdns.org    # kraken's DuckDNS name
-    # Colocated with pegasus today (shared WAN → same A record); reached over its lan_ip
-    # via the LAN scan. pikraken tracks kraken's own WAN if it ever moves offsite.
+    hostname: pikraken.duckdns.org
   - name: atlas
     role: agent
-    hostname: pipegasus.duckdns.org   # atlas has no DuckDNS name of its own; it is
-    # colocated with pegasus, so it borrows pegasus's name (same shared WAN IP). The LAN
-    # scan still distinguishes atlas by its own lan_ip.
+    hostname: pipegasus.duckdns.org   # no piatlas; colocated with pegasus, borrows its
+    # name (shared WAN IP). The LAN scan distinguishes atlas by its own lan_ip.
 
-  # Third Pi — offline today. Uncomment when it's back; it's the remote-site case that
-  # actually needs DuckDNS, since it won't share the others' WAN/LAN.
+  # thor — OFFLINE right now. It's the remote-site node and is init-server+server capable,
+  # but pegasus already holds the single init-server slot, so thor joins as a server.
+  # Adding an unreachable node would fail stage-2 connectivity, so leave it commented
+  # until thor is back online, then uncomment:
   # - name: thor
-  #   role: agent
+  #   role: server
   #   hostname: pithor.duckdns.org
 
 # pistyx.duckdns.org is a floating cluster name (not a node) — reserved for pointing at

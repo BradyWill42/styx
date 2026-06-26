@@ -36,6 +36,8 @@ jobs:
         include:
           - role: init-server
             required: true
+          - role: server
+            required: false
           - role: agent
             required: true
     runs-on: [self-hosted, "${{ matrix.role }}"]
@@ -64,6 +66,8 @@ jobs:
         include:
           - role: init-server
             required: true
+          - role: server
+            required: false
           - role: agent
             required: true
     runs-on: [self-hosted, "${{ matrix.role }}"]
@@ -106,6 +110,8 @@ jobs:
         include:
           - role: init-server
             required: true
+          - role: server
+            required: false
           - role: agent
             required: true
     runs-on: [self-hosted, "${{ matrix.role }}"]
