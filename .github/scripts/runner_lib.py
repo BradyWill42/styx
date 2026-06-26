@@ -27,9 +27,17 @@ def runner_name() -> str:
 
 
 def prepare_styx_yaml(repo_root: Path | None = None) -> Path:
-    """Prepare styx.yaml for runner integration (prefer persistent runner config)."""
+    """Prepare styx.yaml for runner integration.
+
+    Priority: a config already at repo root (the CI-generated styx.yaml, derived from
+    runner labels and downloaded as an artifact) > persistent /etc/styx/styx.yaml >
+    bundled styx.yaml.example.
+    """
     root = repo_root or REPO_ROOT
     target = root / "styx.yaml"
+    if target.is_file() and target.read_text(encoding="utf-8").strip():
+        print(f"Using generated {target}")
+        return target
     if PERSISTENT_CONFIG.is_file():
         target.write_text(PERSISTENT_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
         print(f"Using {PERSISTENT_CONFIG}")

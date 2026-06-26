@@ -17,11 +17,12 @@ cluster:
   bootstrap: true
 
 nodes:
-  # Roles mirror each Pi's GitHub runner labels (its capabilities). styx.yaml allows
-  # exactly ONE init-server: pegasus is init-server-only so it takes that slot; hydra is
-  # server; kraken/atlas are agents. thor is init-server+server-capable but is offline —
-  # see the commented block below. Each node's hostname is its unique DuckDNS name
-  # (atlas is the exception — it has none and borrows pegasus's).
+  # IN CI this nodes list is AUTO-GENERATED from the live GitHub runner labels
+  # (.github/scripts/generate_styx_config.py) — the runner labels are the single source of
+  # truth, so you never hand-edit roles here for the test. The list below is only the
+  # reference for real (non-CI) deployments. Roles mirror each Pi's runner labels: exactly
+  # ONE init-server, then servers, then agents. Each node's hostname is its unique DuckDNS
+  # name (atlas borrows pegasus's — there is no piatlas).
   - name: pegasus
     role: init-server
     hostname: pipegasus.duckdns.org

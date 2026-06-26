@@ -1,10 +1,12 @@
 # Primary CI gate: live integration on self-hosted runners.
 #
 # Requires a minimum viable cluster online — at least one init-server AND one agent
-# (server optional) — and then tests EVERY online runner. A discovery job lists online
-# runners via the GitHub API (RUNNER_API_TOKEN), gates on that role coverage, and builds
-# a dynamic matrix with one job pinned per online machine — so the suite scales with
-# however many runners are online, and offline runners are simply absent (no queue-hang).
+# (server optional) — and then tests EVERY online runner. The discovery job lists online
+# runners via the GitHub API (RUNNER_API_TOKEN), gates on that role coverage, and from the
+# same data GENERATES styx.yaml (node name + role per online runner) so the cluster config
+# is never hand-maintained — the runner labels are the single source of truth. It also
+# emits a dynamic matrix with one job pinned per online machine, so the suite scales with
+# however many runners are online and offline ones are simply absent (no queue-hang).
 # Each runner must carry its own name as a label so runs-on can pin to it.
 #
 # Uninstall — tear down any previous Styx state.
@@ -35,6 +37,8 @@ jobs:
     outputs:
       runners: ${{ steps.list.outputs.runners }}
     steps:
+      - uses: actions/checkout@v7
+
       - name: List online runners and gate on role coverage
         id: list
         env:
@@ -42,21 +46,34 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          json="$(gh api "repos/$REPO/actions/runners")"
+          gh api "repos/$REPO/actions/runners" > runners.json
           # Online runners targetable by their own name label — these are what we actually run.
-          targetable="$(printf '%s' "$json" | jq -c '[.runners[] | . as $r | select($r.status=="online") | select(([$r.labels[].name] | index($r.name)) != null)]')"
+          targetable="$(jq -c '[.runners[] | . as $r | select($r.status=="online") | select(([$r.labels[].name] | index($r.name)) != null)]' runners.json)"
           runners="$(printf '%s' "$targetable" | jq -c '[.[].name] | sort')"
-          count="$(printf '%s' "$runners" | jq 'length')"
           # A minimum viable cluster needs >=1 online init-server AND >=1 online agent (server optional).
           roles="$(printf '%s' "$targetable" | jq -c '[.[].labels[].name] | unique')"
           has_init="$(printf '%s' "$roles" | jq 'index("init-server") != null')"
           has_agent="$(printf '%s' "$roles" | jq 'index("agent") != null')"
-          echo "Online targetable runners: $runners ($count); roles: $roles"
+          echo "Online targetable runners: $runners; roles: $roles"
           if [ "$has_init" != "true" ] || [ "$has_agent" != "true" ]; then
             echo "::error::Need at least one online init-server AND one online agent (server optional). Online: $runners; init-server=$has_init agent=$has_agent"
             exit 1
           fi
           echo "runners=$runners" >> "$GITHUB_OUTPUT"
+
+      - name: Generate styx.yaml from runner labels
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 .github/scripts/generate_styx_config.py runners.json styx.yaml.example styx.yaml
+          echo "---- generated styx.yaml ----"
+          cat styx.yaml
+
+      - name: Upload generated config
+        uses: actions/upload-artifact@v7
+        with:
+          name: styx-config
+          path: styx.yaml
+          if-no-files-found: error
 
   uninstall:
     name: "Uninstall — ${{ matrix.runner }}"
@@ -70,6 +87,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+
+      - name: Use config generated from runner labels
+        uses: actions/download-artifact@v8
+        with:
+          name: styx-config
+          path: .
 
       - name: Install styxctl
         run: |
@@ -93,6 +116,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+
+      - name: Use config generated from runner labels
+        uses: actions/download-artifact@v8
+        with:
+          name: styx-config
+          path: .
 
       - name: Install styxctl
         run: |
@@ -130,6 +159,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+
+      - name: Use config generated from runner labels
+        uses: actions/download-artifact@v8
+        with:
+          name: styx-config
+          path: .
 
       - name: Install prerequisites
         run: |
