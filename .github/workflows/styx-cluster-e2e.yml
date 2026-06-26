@@ -177,6 +177,12 @@ jobs:
       - name: Show DuckDNS publisher pod
         run: sudo kubectl -n styx-system get pods -o wide
 
+      - name: Cluster status (should show DuckDNS running)
+        run: styxctl status
+
+      - name: Cluster doctor
+        run: styxctl doctor
+
   teardown-uninstall:
     name: "5. Teardown uninstall"
     needs: [install-local, cluster-join, deploy-dns]

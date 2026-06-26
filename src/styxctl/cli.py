@@ -28,6 +28,7 @@ from .install import (
 )
 from .install_report import render_install_text, save_install_report
 from .dns_publish import deploy_dns, render_dns_report_text
+from .cluster_status import run_doctor, run_status
 from .uninstall import (
     apply_cluster_uninstall_plan,
     apply_uninstall_plan,
@@ -746,6 +747,53 @@ def deploy_dns_apply() -> None:
     raise typer.Exit(code=exit_code)
 
 
+def _render_cluster_health(health: dict[str, object]) -> None:
+    table = Table(title="Styx Cluster Status")
+    table.add_column("Node")
+    table.add_column("Role")
+    table.add_column("Reachable")
+    table.add_column("k3s Active")
+    for node in health.get("nodes", []):
+        table.add_row(
+            node.get("name", "?"),
+            node.get("role", "?"),
+            "yes" if node.get("reachable") else "no",
+            "yes" if node.get("k3s_active") else "no",
+        )
+    console.print(table)
+    kubectl_nodes = health.get("kubectl_nodes") or []
+    if kubectl_nodes:
+        console.print(f"kubectl nodes: {', '.join(kubectl_nodes)}")
+    duckdns = (health.get("workloads") or {}).get("duckdns", {})
+    state = "running" if duckdns.get("present") else "absent"
+    console.print(f"DuckDNS publisher: {state} ({duckdns.get('detail', '-')})")
+    if health.get("issues"):
+        console.print("[red]Issues:[/red]")
+        for issue in health["issues"]:
+            console.print(f"  - {issue}")
+
+
+@app.command("status")
+def status_cmd() -> None:
+    """Show cluster node health plus deployed Styx workloads."""
+    health = run_status(config_path=None)
+    _render_cluster_health(health)
+    raise typer.Exit(code=1 if health.get("issues") else 0)
+
+
+@app.command("doctor")
+def doctor_cmd() -> None:
+    """Diagnose cluster health and print remediation hints."""
+    report, exit_code = run_doctor(config_path=None)
+    _render_cluster_health(report)
+    hints = report.get("hints") or []
+    if hints:
+        console.print("[yellow]Hints:[/yellow]")
+        for hint in hints:
+            console.print(f"  - {hint}")
+    raise typer.Exit(code=exit_code)
+
+
 def _future_app(label: str, milestone: str) -> typer.Typer:
     future = typer.Typer(help=f"Future {label} commands ({milestone}).", no_args_is_help=True)
 
@@ -782,8 +830,7 @@ app.add_typer(install_app, name="install")
 app.add_typer(uninstall_app, name="uninstall")
 deploy_app.add_typer(deploy_dns_app, name="dns")
 app.add_typer(deploy_app, name="deploy")
-app.add_typer(_future_app("status", "MVP3"), name="status")
-app.add_typer(_future_app("doctor", "MVP3"), name="doctor")
+# status + doctor are real top-level commands (see status_cmd / doctor_cmd above).
 app.add_typer(_future_app("client", "MVP4"), name="client")
 app.add_typer(_future_app("gateway", "MVP3"), name="gateway")
 app.add_typer(_future_app("siem", "MVP4"), name="siem")

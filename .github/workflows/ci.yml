@@ -25,6 +25,8 @@ jobs:
           styxctl version
           styxctl --help
           styxctl deploy dns --help
+          styxctl status --help
+          styxctl doctor --help
 
       - name: Verify DuckDNS manifest renders (no cluster)
         run: |
