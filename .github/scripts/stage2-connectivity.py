@@ -129,7 +129,6 @@ def main() -> int:
             inventory=inventory,
             local_node=local_node,
             gateway_ssh_port=gateway.ssh,
-            scanned_lan_ips=scanned_lan_ips,
         )
         ok, detail = run_ssh_probe(
             connection.target,
