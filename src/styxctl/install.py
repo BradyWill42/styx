@@ -39,7 +39,6 @@ from .nodes import (
     ClusterNode,
     identify_local_node,
     init_server_node,
-    node_connectivity_host,
     parse_nodes,
     validate_nodes,
     validate_nodes_warnings,

@@ -100,7 +100,7 @@ def enrich_operational_config(
             # rendezvous: resolving it yields the peer's current WAN IP without SSH
             # or a port-forward. Colocated peers resolve to the same IP as the local
             # node, which the LAN scan then maps to a lan_ip.
-            dns_name = node_dns_name(enriched, name, item.get("hostname"))
+            dns_name = node_dns_name(item.get("hostname"))
             if not item.get("public_ipv4"):
                 resolved = resolve_dns_ipv4(dns_name) if dns_name else None
                 if resolved:

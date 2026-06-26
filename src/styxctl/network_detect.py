@@ -37,13 +37,6 @@ def detect_lan_ipv4(inventory: SystemInventory) -> str | None:
     return None
 
 
-def detect_lan_ipv6(inventory: SystemInventory) -> str | None:
-    """Return a local IPv6 address suitable for LAN routing when available."""
-    if inventory.bootstrap_ipv6:
-        return inventory.bootstrap_ipv6.split("%", 1)[0]
-    return None
-
-
 def detect_public_ipv4() -> str | None:
     """Detect the router WAN / public IPv4 address."""
     result = safe_run("detect_public_ipv4", ["curl", "-4", "-fsS", "https://ifconfig.me"], timeout=8.0)

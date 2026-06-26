@@ -669,13 +669,3 @@ def assess_cluster_nodes(
         "nodes": results,
         "issues": issues,
     }
-
-
-def local_node_plan_from_cluster(
-    cluster_plan: ClusterPlan,
-    local_node: ClusterNode,
-) -> ClusterNodePlan | None:
-    for item in cluster_plan.nodes:
-        if item.node.name == local_node.name:
-            return item
-    return None

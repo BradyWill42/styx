@@ -24,35 +24,16 @@ def resolve_hostname(hostname: str) -> str | None:
     return results[0][4][0]
 
 
-def cluster_dns_suffix(config: dict[str, Any] | None) -> str | None:
-    """Dynamic-DNS suffix (e.g. 'duckdns.org') used to derive {name}.{suffix} hostnames."""
-    if not config:
-        return None
-    cluster = config.get("cluster")
-    if isinstance(cluster, dict):
-        suffix = cluster.get("dns_suffix")
-        if isinstance(suffix, str) and suffix.strip():
-            return suffix.strip().lstrip(".")
-    return None
-
-
-def node_dns_name(
-    config: dict[str, Any] | None,
-    node_name: str,
-    explicit_hostname: str | None = None,
-) -> str | None:
-    """Resolvable hostname for a node: explicit hostname, else {name}.{dns_suffix}."""
+def node_dns_name(explicit_hostname: str | None) -> str | None:
+    """Resolvable hostname for a node: its explicit hostname (its DuckDNS name), if set."""
     if isinstance(explicit_hostname, str) and explicit_hostname.strip():
         return explicit_hostname.strip()
-    suffix = cluster_dns_suffix(config)
-    if suffix:
-        return f"{node_name}.{suffix}"
     return None
 
 
 def node_hostname(config: dict[str, Any], node: ClusterNode) -> str | None:
-    """Resolvable hostname: explicit node.hostname, else derived {name}.{dns_suffix}."""
-    return node_dns_name(config, node.name, node.hostname)
+    """Resolvable hostname: the node's explicit hostname (its DuckDNS name), if any."""
+    return node_dns_name(node.hostname)
 
 
 @dataclass(slots=True)
@@ -70,26 +51,6 @@ class ClusterNode:
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
-
-    @property
-    def primary_ip(self) -> str | None:
-        return self.ipv4 or self.ipv6
-
-    def connectivity_host(
-        self,
-        config: dict[str, Any],
-        *,
-        mode: str = CONNECTIVITY_BOOTSTRAP,
-        inventory: SystemInventory | None = None,
-        local_node: ClusterNode | None = None,
-    ) -> str | None:
-        return node_connectivity_host(
-            config,
-            self,
-            mode=mode,
-            inventory=inventory,
-            local_node=local_node,
-        )
 
     def resolved_ipv4(self, config: dict[str, Any], *, mode: str = CONNECTIVITY_BOOTSTRAP) -> str | None:
         host = node_connectivity_host(config, self, mode=mode)
