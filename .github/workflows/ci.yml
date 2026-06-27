@@ -40,6 +40,7 @@ jobs:
           grep -q "hub: pegasus" /tmp/mesh-plan.txt              # init-server is the hub
           grep -q "AllowedIPs = 10.0.0.0/14" /tmp/mesh-plan.txt  # spokes route the supernet
           grep -q "PersistentKeepalive = 25" /tmp/mesh-plan.txt  # spoke -> hub keepalive
+          grep -q "Endpoint = pipegasus.duckdns.org:" /tmp/mesh-plan.txt  # DuckDNS name, never a hardcoded IP
           rm -f styx.yaml
 
       - name: Build wheel

@@ -263,7 +263,7 @@ def apply_local(
 
 def mesh_plan(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]:
     from .config import find_config, load_config, resolve_config
-    from .nodes import node_bootstrap_host, parse_nodes, init_server_node
+    from .nodes import parse_nodes, init_server_node
 
     candidate = Path(config_path) if config_path is not None else find_config()
     if candidate is None:
@@ -277,7 +277,7 @@ def mesh_plan(config_path: str | Path | None = None) -> tuple[dict[str, Any], in
     route_v4, route_v6 = _routes(config)
     nodes = parse_nodes(config)
     init_node = init_server_node(nodes)
-    init_host = (node_bootstrap_host(config, init_node) or init_node.name) if init_node else "<init-endpoint>"
+    init_host = (init_node.hostname or init_node.public_ipv4 or init_node.name) if init_node else "<init-endpoint>"
 
     # Placeholder keys + a single representative hub endpoint for preview.
     for member in members:
@@ -332,7 +332,7 @@ def mesh_up(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]
     from .bootstrap_config import load_operational_config
     from .install import _election_context
     from .inventory import collect_inventory
-    from .k3s_cluster import _init_join_host, _run_ssh_command, _ssh_target
+    from .k3s_cluster import _run_ssh_command, _ssh_target
     from .lan_election import resolve_lan_leadership
     from .nodes import identify_local_node, init_server_node, parse_nodes
 
@@ -378,7 +378,7 @@ def mesh_up(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]
 
     # 2. Push a per-node roster (hub endpoint computed for that node) and apply it.
     for node in nodes:
-        hub_host = _init_join_host(
+        hub_host = _hub_endpoint(
             init, node, election_lan_ips=election_lan_ips, inventory=inventory, local_node=local_node
         )
         roster_members = [
