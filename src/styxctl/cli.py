@@ -32,11 +32,14 @@ from .cluster_status import run_doctor, run_status
 from .wireguard_mesh import (
     apply_local,
     client_config,
+    ensure_egress_keypair,
     ensure_local_keypair,
+    ensure_pistyx_identity,
     mesh_plan,
     mesh_up,
     pistyx_info,
     render_mesh_report_text,
+    stage_pistyx_key,
 )
 from .uninstall import (
     apply_cluster_uninstall_plan,
@@ -862,6 +865,40 @@ def mesh_pistyx_show_cmd() -> None:
     report, code = pistyx_info(config_path=None)
     console.print(render_mesh_report_text(report), markup=False, soft_wrap=True)
     raise typer.Exit(code=code)
+
+
+@mesh_pistyx_app.command("pubkey-local")
+def mesh_pistyx_pubkey_local_cmd() -> None:
+    """Ensure the STABLE pistyx key exists locally and print its public key."""
+    ok, result = ensure_pistyx_identity()
+    if not ok:
+        console.print(result, markup=False)
+        raise typer.Exit(code=1)
+    typer.echo(result)
+
+
+@mesh_app.command("egress-pubkey-local")
+def mesh_egress_pubkey_local_cmd(
+    interface: str = typer.Option("StyxEgress", "--interface", help="egress WG interface name"),
+) -> None:
+    """Ensure this node's own StyxEgress keypair exists and print its public key (used by `mesh up`)."""
+    ok, result = ensure_egress_keypair(interface)
+    if not ok:
+        console.print(result, markup=False)
+        raise typer.Exit(code=1)
+    typer.echo(result)
+
+
+@mesh_app.command("stage-pistyx-key")
+def mesh_stage_pistyx_key_cmd(
+    key_b64: str = typer.Option(..., "--key-b64", help="base64-encoded stable pistyx private key"),
+) -> None:
+    """Write the pushed stable pistyx private key to local disk (used by `mesh up`)."""
+    ok, detail = stage_pistyx_key(key_b64)
+    if not ok:
+        console.print(detail, markup=False)
+        raise typer.Exit(code=1)
+    typer.echo(detail)
 
 
 @client_app.command("config")

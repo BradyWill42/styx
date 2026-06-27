@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import json
+import shlex
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass
@@ -365,9 +366,16 @@ def apply_local(
         use_sudo=True, sudo_available=True,
     )
     report["actions"].append(sdetail if synced else f"reload failed: {sdetail}")
+
+    egress = roster.get("egress")
+    egress_ok = True
+    if isinstance(egress, dict) and egress.get("holder"):
+        egress_ok, eg_detail = apply_egress_local(egress, local_name)
+        report["actions"].append(eg_detail)
+
     role = "hub" if local_name == init_name else "spoke"
-    report["message"] = f"{local_name} mesh config applied ({role})"
-    return report, (0 if synced else 1)
+    report["message"] = f"{local_name} mesh + egress applied ({role})"
+    return report, (0 if (synced and egress_ok) else 1)
 
 
 # --------------------------------------------------------------------------- plan (preview)
@@ -511,8 +519,76 @@ def mesh_up(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]
     for member in members:
         member.public_key = pubkeys.get(member.name)
 
-    # 2. Push a per-node roster (hub endpoint computed for that node) and apply it.
+    # 1b. Egress: ensure the STABLE pistyx key locally, pre-stage it on every node, and collect
+    # each node's OWN egress pubkey (so any node can become the holder with no runtime key fetch).
+    from .network_plan import cluster_stack_mode
+    from .nodes import node_effective_lan_ip, pistyx_holder
+
+    eg_interface, eg_port, eg_mtu, eg_hostname = _egress_settings(effective)
+    stack = cluster_stack_mode(effective)
+    eg_members, holder_name = egress_members(effective)
+    holder_node = pistyx_holder(effective, nodes)
+
+    pk_ok, pistyx_pub = ensure_pistyx_identity()
+    if not pk_ok:
+        report["status"] = "ERROR"
+        report["message"] = f"could not prepare the pistyx key: {pistyx_pub}"
+        return report, 1
+    pistyx_b64 = base64.b64encode((_read_key_file(_PISTYX_KEY_PATH) or "").encode()).decode()
+
+    egress_pubkeys: dict[str, str] = {}
     for node in nodes:
+        conn = ssh(node)
+        sk_ok, sk_detail = _run_ssh_command(
+            conn.target, f"{styx} mesh stage-pistyx-key --key-b64 {pistyx_b64}", port=conn.port, jump=conn.jump
+        )
+        if not sk_ok:
+            report["status"] = "ERROR"
+            report["message"] = f"could not stage the pistyx key on {node.name}: {sk_detail}"
+            return report, 1
+        ek_ok, ek_detail = _run_ssh_command(
+            conn.target, f"{styx} mesh egress-pubkey-local --interface {eg_interface}", port=conn.port, jump=conn.jump
+        )
+        ek = ek_detail.strip().splitlines()[-1].strip() if ek_ok and ek_detail.strip() else ""
+        if not ek_ok or len(ek) < 40 or " " in ek:
+            report["status"] = "ERROR"
+            report["message"] = f"could not collect egress pubkey from {node.name}: {ek_detail}"
+            return report, 1
+        egress_pubkeys[node.name] = ek
+
+    for member in eg_members:
+        member.public_key = pistyx_pub if member.name == holder_name else egress_pubkeys.get(member.name)
+
+    def egress_block_for(node) -> dict[str, Any]:
+        endpoint = eg_hostname  # the FLOATING pistyx name (dynamic); LAN IP only when colocated
+        if (
+            holder_node is not None
+            and holder_node.public_ipv4
+            and node.public_ipv4
+            and holder_node.public_ipv4 == node.public_ipv4
+        ):
+            lan = node_effective_lan_ip(
+                holder_node, election_lan_ips=election_lan_ips, inventory=inventory, local_node=local_node
+            )
+            if lan:
+                endpoint = lan
+        return {
+            "holder": holder_name,
+            "interface": eg_interface,
+            "port": eg_port,
+            "mtu": eg_mtu,
+            "stack_mode": stack,
+            "holder_endpoint": endpoint,
+            "members": [
+                {"name": m.name, "public_key": m.public_key, "ipv4": m.ipv4, "ipv6": m.ipv6}
+                for m in eg_members
+            ],
+        }
+
+    # 2. Push a per-node roster (hub endpoint computed for that node) and apply it. Apply the egress
+    # HOLDER first so its StyxEgress hub + NAT are up before any spoke flips its default route to it.
+    apply_order = sorted(nodes, key=lambda n: (n.name != holder_name, n.name))
+    for node in apply_order:
         hub_host = _hub_endpoint(
             init, node, election_lan_ips=election_lan_ips, inventory=inventory, local_node=local_node
         )
@@ -526,6 +602,7 @@ def mesh_up(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]
             "route_v6": route_v6,
             "interface": interface,
             "port": port,
+            "egress": egress_block_for(node) if holder_name else None,
         }
         b64 = base64.b64encode(json.dumps(roster).encode()).decode()
         conn = ssh(node)
@@ -548,7 +625,10 @@ def mesh_up(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]
 
     report["hub"] = init_name
     report["spokes"] = [m.name for m in members if m.name != init_name]
-    report["message"] = f"Styx mesh up: hub {init_name}, {len(members) - 1} spoke(s)"
+    report["pistyx"] = holder_name
+    report["message"] = (
+        f"Styx mesh up: hub {init_name}, {len(members) - 1} spoke(s); pistyx egress on {holder_name}"
+    )
     return report, 0
 
 
@@ -594,6 +674,236 @@ def _egress_settings(config: dict[str, Any]) -> tuple[str, int, int, str]:
         port if isinstance(port, int) else 47801,
         mtu if isinstance(mtu, int) else 1420,
         hostname if isinstance(hostname, str) else "pistyx.duckdns.org",
+    )
+
+
+# Two private keys live on each node for the egress overlay:
+#   - the STABLE pistyx key (same on every node, pre-staged) — used when this node IS the holder;
+#   - this node's OWN egress key (unique, stable) — used when this node is a spoke.
+# The active StyxEgress.conf is re-rendered each apply with whichever key the current role needs.
+_PISTYX_KEY_PATH = Path("/etc/wireguard/pistyx.key")
+
+
+def _egress_own_key_path(interface: str) -> Path:
+    return Path("/etc/wireguard") / f"{interface}.own.key"
+
+
+def _read_key_file(path: Path) -> str | None:
+    try:
+        out = subprocess.run(
+            ["sudo", "cat", str(path)], check=False, capture_output=True, text=True, timeout=10
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.strip() or None
+
+
+def _write_key_file(path: Path, key: str) -> RunResult:
+    from .remediation import _run_mutating
+
+    tmp = Path("/tmp") / f"styx-{path.name}"
+    try:
+        tmp.write_text(key.strip() + "\n", encoding="utf-8")
+    except OSError as exc:
+        return False, str(exc)
+    for cmd in (["mkdir", "-p", "/etc/wireguard"], ["cp", str(tmp), str(path)], ["chmod", "600", str(path)]):
+        ok, detail = _run_mutating(cmd, use_sudo=True, sudo_available=True)
+        if not ok:
+            return False, detail
+    tmp.unlink(missing_ok=True)
+    return True, f"wrote {path}"
+
+
+def ensure_egress_keypair(interface: str) -> tuple[bool, str]:
+    """Ensure this node's OWN egress private key exists (used when it's a spoke); return (ok, pubkey)."""
+    path = _egress_own_key_path(interface)
+    private = _read_key_file(path)
+    if private is None:
+        private = _gen_private_key()
+        if private is None:
+            return False, "wg not available to generate an egress key"
+        ok, detail = _write_key_file(path, private)
+        if not ok:
+            return False, detail
+    public = _public_key(private)
+    if public is None:
+        return False, "could not derive egress public key (is wireguard-tools installed?)"
+    return True, public
+
+
+def ensure_pistyx_identity() -> tuple[bool, str]:
+    """Ensure the STABLE pistyx private key is on local disk (generate if absent); return (ok, pubkey).
+
+    Pre-staged on every node so any node can become the holder without a runtime fetch — the key
+    must be local BEFORE StyxEgress comes up (MooseFS isn't mounted that early).
+    """
+    private = _read_key_file(_PISTYX_KEY_PATH)
+    if private is None:
+        private = _gen_private_key()
+        if private is None:
+            return False, "wg not available to generate the pistyx key"
+        ok, detail = _write_key_file(_PISTYX_KEY_PATH, private)
+        if not ok:
+            return False, detail
+    public = _public_key(private)
+    if public is None:
+        return False, "could not derive pistyx public key (is wireguard-tools installed?)"
+    return True, public
+
+
+def stage_pistyx_key(key_b64: str) -> tuple[bool, str]:
+    """Write a pushed STABLE pistyx private key to local disk (called over SSH by `mesh up`)."""
+    try:
+        key = base64.b64decode(key_b64).decode().strip()
+    except (ValueError, UnicodeDecodeError) as exc:
+        return False, f"bad key payload: {exc}"
+    if not key or " " in key:
+        return False, "invalid pistyx key payload"
+    return _write_key_file(_PISTYX_KEY_PATH, key)
+
+
+def _detect_wan_interface() -> str | None:
+    """Interface holding the default route (the real WAN egress); never hardcoded."""
+    try:
+        out = subprocess.run(
+            ["bash", "-c", "ip route get 1.1.1.1 2>/dev/null | grep -oP 'dev \\K\\S+' | head -n1"],
+            check=False, capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out or None
+
+
+def ensure_egress_nat(stack_mode: str = "dual-stack") -> tuple[bool, str]:
+    """On the pistyx holder: persist forwarding + idempotent v4/v6 MASQUERADE of the egress band out the WAN.
+
+    Scope is the egress band only (10.0.250.0/24 + fd00:cafe:0:250::/64), not the whole supernet:
+    every node SNATs its own traffic to its egress address before it reaches the holder, so the holder
+    only ever sees egress-band sources — masquerading the supernet would risk NATing intra-cluster traffic.
+    """
+    from .remediation import _run_mutating
+
+    wan = _detect_wan_interface()
+    if not wan:
+        return False, "could not detect WAN interface for masquerade"
+
+    tmp = Path("/tmp/styx-egress-forward.conf")
+    try:
+        tmp.write_text("net.ipv4.ip_forward=1\nnet.ipv6.conf.all.forwarding=1\n", encoding="utf-8")
+    except OSError as exc:
+        return False, str(exc)
+    for cmd in (
+        ["cp", str(tmp), "/etc/sysctl.d/99-styx-egress.conf"],
+        ["sysctl", "-w", "net.ipv4.ip_forward=1"],
+        ["sysctl", "-w", "net.ipv6.conf.all.forwarding=1"],
+    ):
+        ok, detail = _run_mutating(cmd, use_sudo=True, sudo_available=True)
+        if not ok:
+            return False, f"forwarding: {detail}"
+    tmp.unlink(missing_ok=True)
+
+    rules = []
+    if stack_mode in {"dual-stack", "ipv4-only"}:
+        rules.append(("iptables", "10.0.250.0/24"))
+    if stack_mode in {"dual-stack", "ipv6-only"}:
+        rules.append(("ip6tables", "fd00:cafe:0:250::/64"))
+    actions = [f"wan={wan}"]
+    for tool, src in rules:
+        check = f"{tool} -t nat -C POSTROUTING -s {src} -o {wan} -j MASQUERADE"
+        add = f"{tool} -t nat -A POSTROUTING -s {src} -o {wan} -j MASQUERADE"
+        ok, detail = _run_mutating(["bash", "-c", f"{check} 2>/dev/null || {add}"], use_sudo=True, sudo_available=True)
+        actions.append(f"{tool} masquerade {src}: {'ok' if ok else detail}")
+        if not ok:
+            return False, "; ".join(actions)
+    return True, "; ".join(actions)
+
+
+def apply_egress_local(egress: dict[str, Any], local_name: str) -> RunResult:
+    """Render + bring up THIS node's StyxEgress interface from the egress roster (run on each node).
+
+    Brought up with `wg-quick up` (NEVER syncconf) so wg-quick installs the 0.0.0.0/0 + ::/0 default
+    route plus the Table=auto fwmark / suppress_prefixlength loop-avoidance (the encrypted packets to
+    pistyx escape via the real WAN). The holder is a hub and comes up synchronously; a spoke flips its
+    own default to pistyx, so it comes up DETACHED + self-healing to never strand the node mid-SSH.
+    """
+    from .remediation import _run_mutating
+
+    holder_name = egress.get("holder")
+    if not holder_name:
+        return True, "no egress holder; skipped"
+    interface = egress.get("interface", "StyxEgress")
+    port = int(egress.get("port", 47801))
+    mtu = int(egress.get("mtu", 1420))
+    stack_mode = egress.get("stack_mode", "dual-stack")
+    members = [
+        MeshMember(name=m["name"], role="", ipv4=m.get("ipv4"), ipv6=m.get("ipv6"), public_key=m.get("public_key"))
+        for m in egress.get("members", [])
+    ]
+    for member in members:
+        if member.name == holder_name:
+            member.endpoint = egress.get("holder_endpoint")
+    is_holder = local_name == holder_name
+
+    if is_holder:
+        ok, detail = ensure_pistyx_identity()
+        if not ok:
+            return False, f"pistyx identity: {detail}"
+        private = _read_key_file(_PISTYX_KEY_PATH)
+        nat_ok, nat_detail = ensure_egress_nat(stack_mode)
+        if not nat_ok:
+            return False, f"egress NAT: {nat_detail}"
+    else:
+        ok, _pub = ensure_egress_keypair(interface)
+        if not ok:
+            return False, f"egress keypair: {_pub}"
+        private = _read_key_file(_egress_own_key_path(interface))
+    if private is None:
+        return False, f"no egress private key for {interface}"
+
+    content = render_egress_config(
+        local_name, private, members, holder_name, listen_port=port, mtu=mtu, stack_mode=stack_mode
+    )
+    ok, detail = _write_conf(interface, content)
+    if not ok:
+        return False, detail
+
+    if is_holder:
+        # Holder StyxEgress is a hub (per-spoke /32 peers, no self default route) — bringing it up
+        # never severs the holder, so do it synchronously and report.
+        up_ok, up_detail = _run_mutating(
+            ["bash", "-c", f"wg-quick down {interface} 2>/dev/null; wg-quick up {interface}"],
+            use_sudo=True, sudo_available=True,
+        )
+        return up_ok, f"StyxEgress up (holder): {up_detail}" if up_ok else f"StyxEgress up failed: {up_detail}"
+
+    # Spoke: SNAT this node's own traffic to its egress address so the holder's narrow masquerade
+    # matches. Then bring StyxEgress up DETACHED + SELF-HEALING — flipping the default route to
+    # pistyx must never strand this node over the SSH session configuring it. The node always stays
+    # reachable on its mesh IP (10.0.0.x, more-specific, never captured); if pistyx doesn't handshake
+    # within ~12s the egress auto-reverts (wg-quick down), restoring direct internet.
+    for tool in (["iptables"] if stack_mode in {"dual-stack", "ipv4-only"} else []) + (
+        ["ip6tables"] if stack_mode in {"dual-stack", "ipv6-only"} else []
+    ):
+        chk = f"{tool} -t nat -C POSTROUTING -o {interface} -j MASQUERADE"
+        add = f"{tool} -t nat -A POSTROUTING -o {interface} -j MASQUERADE"
+        _run_mutating(["bash", "-c", f"{chk} 2>/dev/null || {add}"], use_sudo=True, sudo_available=True)
+
+    heal = (
+        f"wg-quick down {interface} 2>/dev/null; "
+        f"wg-quick up {interface} || exit 0; "
+        f"sleep 12; "
+        f"hs=$(wg show {interface} latest-handshakes | cut -f2 | sort -n | tail -1); "
+        f"now=$(date +%s); "
+        f'if [ -z "$hs" ] || [ "$hs" -eq 0 ] || [ $((now - hs)) -gt 180 ]; then wg-quick down {interface}; fi'
+    )
+    disp_ok, disp_detail = _run_mutating(
+        ["bash", "-c", f"systemd-run --no-block --collect bash -c {shlex.quote(heal)}"],
+        use_sudo=True, sudo_available=True,
+    )
+    return disp_ok, (
+        f"StyxEgress dispatched (spoke, self-healing): {disp_detail}"
+        if disp_ok
+        else f"StyxEgress dispatch failed: {disp_detail}"
     )
 
 
