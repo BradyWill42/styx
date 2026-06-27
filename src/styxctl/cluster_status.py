@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .dns_publish import DUCKDNS_DEPLOYMENT, STYX_NAMESPACE
+from .dns_publish import DUCKDNS_APP, STYX_NAMESPACE
 
 
 def collect_styx_workloads(config_path: str | Path | None = None) -> dict[str, Any]:
@@ -49,7 +49,8 @@ def collect_styx_workloads(config_path: str | Path | None = None) -> dict[str, A
     )
     ok, detail = _run_ssh_command(
         connection.target,
-        f"sudo kubectl -n {STYX_NAMESPACE} get deployment {DUCKDNS_DEPLOYMENT} -o json 2>/dev/null",
+        f"sudo kubectl -n {STYX_NAMESPACE} get deployments "
+        f"-l app.kubernetes.io/name={DUCKDNS_APP} -o json 2>/dev/null",
         port=connection.port,
         jump=connection.jump,
     )
@@ -57,11 +58,22 @@ def collect_styx_workloads(config_path: str | Path | None = None) -> dict[str, A
         duckdns["detail"] = "not deployed (run: styxctl deploy dns apply)"
         return workloads
     try:
-        data = json.loads(detail)
-        status = data.get("status", {})
-        ready = int(status.get("readyReplicas", 0) or 0)
-        desired = int(status.get("replicas", 0) or data.get("spec", {}).get("replicas", 0) or 0)
-        duckdns.update({"present": True, "ready": ready, "desired": desired, "detail": f"{ready}/{desired} ready"})
+        items = json.loads(detail).get("items", [])
+        if not items:
+            duckdns["detail"] = "not deployed (run: styxctl deploy dns apply)"
+            return workloads
+        ready = sum(int(d.get("status", {}).get("readyReplicas", 0) or 0) for d in items)
+        desired = sum(
+            int(d.get("status", {}).get("replicas", 0) or d.get("spec", {}).get("replicas", 0) or 0)
+            for d in items
+        )
+        duckdns.update({
+            "present": True,
+            "publishers": len(items),
+            "ready": ready,
+            "desired": desired,
+            "detail": f"{len(items)} site publisher(s), {ready}/{desired} replicas ready",
+        })
     except (json.JSONDecodeError, ValueError):
         duckdns["detail"] = "could not parse kubectl output"
     return workloads
@@ -86,8 +98,8 @@ def run_doctor(config_path: str | Path | None = None) -> tuple[dict[str, Any], i
         hints.append("DuckDNS publisher is not deployed — run `styxctl deploy dns apply` on the init-server.")
     elif duckdns.get("ready", 0) < duckdns.get("desired", 1):
         hints.append(
-            f"DuckDNS publisher degraded ({duckdns.get('detail')}) — "
-            f"inspect: kubectl -n {STYX_NAMESPACE} describe deploy/{DUCKDNS_DEPLOYMENT}"
+            f"DuckDNS publisher degraded ({duckdns.get('detail')}) — inspect: "
+            f"kubectl -n {STYX_NAMESPACE} get deploy -l app.kubernetes.io/name={DUCKDNS_APP}"
         )
     for issue in status.get("issues", []):
         hints.append(f"{issue}")

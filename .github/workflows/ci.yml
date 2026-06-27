@@ -32,9 +32,9 @@ jobs:
         run: |
           cp styx.yaml.example styx.yaml
           styxctl deploy dns plan | tee /tmp/dns-plan.txt
-          grep -q "kind: Deployment" /tmp/dns-plan.txt
-          grep -q 'value: "pistyx"' /tmp/dns-plan.txt
-          grep -q "kubernetes.io/hostname" /tmp/dns-plan.txt
+          grep -q "kind: Deployment" /tmp/dns-plan.txt          # per-site publisher
+          grep -q "name: DUCKDNS_DOMAINS" /tmp/dns-plan.txt      # publishes site names
+          grep -q "kubernetes.io/hostname" /tmp/dns-plan.txt     # pinned to the site leader
           rm -f styx.yaml
 
       - name: Build wheel

@@ -45,15 +45,15 @@ nodes:
   #   role: server
   #   hostname: pithor.duckdns.org
 
-# pistyx.duckdns.org is a floating cluster name (not a node) — reserved for pointing at
-# the current leader/entrypoint so agents always have one stable endpoint to bootstrap to.
+# pistyx.duckdns.org is a floating cluster name (not a node) — reserved for the dynamic
+# "quickest site" pointer (deferred); the static per-site endpoints below are the river banks.
 
-# MVP3 — publish the floating name from inside the cluster. `styxctl deploy dns apply`
-# (run on the init-server) renders a tiny updater Deployment pinned to the init-server
-# node, so its egress IP is the cluster WAN. The DuckDNS token is NOT stored here: it is
-# read from $DUCKDNS_TOKEN at apply time (a repository secret in CI, like PIPASS) and
-# stored only as a k8s Secret. Preview with `styxctl deploy dns plan`.
+# MVP3 — per-site DuckDNS publishers. `styxctl deploy dns apply` (run on the init-server)
+# renders ONE updater Deployment per site, pinned to that site's leader, that keeps the
+# site's DuckDNS names (each node's `hostname`, e.g. pipegasus/pihydra) pointed at the
+# site's public IPv4+IPv6 (the leader's WAN). Names are derived from node hostnames — not
+# listed here. The DuckDNS token is NOT stored here: it's read from $DUCKDNS_TOKEN at apply
+# time (a repository secret in CI, like PIPASS) into a k8s Secret. Preview: `deploy dns plan`.
 dns:
   provider: duckdns
-  domains: [pistyx]        # floating cluster name(s) to keep current
   interval_seconds: 300
