@@ -306,11 +306,49 @@ def deploy_dns(
     return report, 0
 
 
+def uninstall_dns(*, sudo: bool = True) -> tuple[dict[str, Any], int]:
+    """One-shot uninstall: delete the per-site DuckDNS publishers + Secret by the managed-by label."""
+    report: dict[str, Any] = {"status": "OK", "deleting": True, "actions": []}
+    # Delete the publisher Deployments by app label, then the token Secret.
+    for kind, selector in (
+        ("deployment", f"app.kubernetes.io/name={DUCKDNS_APP}"),
+        ("secret", DUCKDNS_SECRET),
+    ):
+        if kind == "secret":
+            args = ["delete", "secret", DUCKDNS_SECRET, "-n", STYX_NAMESPACE, "--ignore-not-found"]
+        else:
+            args = ["delete", "deployment", "-n", STYX_NAMESPACE, "-l", selector, "--ignore-not-found"]
+        ok, detail = _kubectl_delete_local(args, sudo=sudo)
+        report["actions"].append(f"delete {kind}: {detail}")
+        if not ok:
+            report["status"] = "ERROR"
+            report["message"] = f"failed to delete {kind}: {detail}"
+            return report, 1
+    report["message"] = f"DuckDNS publishers + token Secret removed from {STYX_NAMESPACE}"
+    return report, 0
+
+
+def _kubectl_delete_local(args: list[str], *, sudo: bool) -> RunResult:
+    if shutil.which("kubectl") is None and not (sudo and shutil.which("sudo")):
+        return False, "kubectl not found on PATH"
+    command = (["sudo"] if sudo else []) + ["kubectl", *args]
+    try:
+        completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=120.0)
+    except subprocess.TimeoutExpired:
+        return False, "kubectl delete timed out after 120s"
+    except OSError as exc:
+        return False, str(exc)
+    if completed.returncode == 0:
+        return True, (completed.stdout or "deleted").strip()
+    return False, (completed.stderr or completed.stdout or "").strip() or f"kubectl exit {completed.returncode}"
+
+
 def render_dns_report_text(report: dict[str, Any]) -> str:
     """Human-readable rendering of a deploy_dns report."""
     lines: list[str] = []
     status = report.get("status", "OK")
-    lines.append(f"=== deploy dns ({'plan' if report.get('dry_run') else 'apply'}) — {status} ===")
+    mode = "delete" if report.get("deleting") else ("plan" if report.get("dry_run") else "apply")
+    lines.append(f"=== deploy dns ({mode}) — {status} ===")
     if report.get("message"):
         lines.append(report["message"])
     for site in report.get("sites", []):

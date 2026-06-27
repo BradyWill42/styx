@@ -27,7 +27,8 @@ from .install import (
     run_lan_election_status,
 )
 from .install_report import render_install_text, save_install_report
-from .dns_publish import deploy_dns, render_dns_report_text
+from .cluster_dns import deploy_resolver, render_resolver_report_text, uninstall_resolver
+from .dns_publish import deploy_dns, render_dns_report_text, uninstall_dns
 from .cluster_status import run_doctor, run_status
 from .wireguard_mesh import (
     apply_local,
@@ -97,6 +98,7 @@ uninstall_plan_app = typer.Typer(help="Preview uninstall plan without changing t
 uninstall_apply_app = typer.Typer(help="Apply uninstall plan without confirmation.", no_args_is_help=True)
 deploy_app = typer.Typer(help="Deploy Styx cluster workloads (MVP3).", no_args_is_help=True)
 deploy_dns_app = typer.Typer(help="Publish cluster DNS to DuckDNS from inside k3s.", no_args_is_help=True)
+deploy_resolver_app = typer.Typer(help="Node-local DNS resolver + forced /etc/resolv.conf (pod-based).", no_args_is_help=True)
 mesh_app = typer.Typer(help="Build and inspect the Styx WireGuard backbone mesh.", no_args_is_help=True)
 mesh_pistyx_app = typer.Typer(help="Inspect and move the movable pistyx egress.", no_args_is_help=True)
 client_app = typer.Typer(help="Generate roadwarrior client configs (connect to a chosen site).", no_args_is_help=True)
@@ -761,6 +763,39 @@ def deploy_dns_apply() -> None:
     raise typer.Exit(code=exit_code)
 
 
+@deploy_dns_app.command("delete")
+def deploy_dns_delete() -> None:
+    """Uninstall the DuckDNS publishers (delete the Deployments + Secret by label)."""
+    report, exit_code = uninstall_dns()
+    console.print(render_dns_report_text(report), markup=False, soft_wrap=True)
+    raise typer.Exit(code=exit_code)
+
+
+@deploy_resolver_app.command("plan")
+def deploy_resolver_plan() -> None:
+    """Render the node-local resolver + resolv.conf-enforcer manifests (no cluster access needed)."""
+    report, exit_code = deploy_resolver(dry_run=True, config_path=None)
+    console.print(render_resolver_report_text(report), markup=False, soft_wrap=True)
+    raise typer.Exit(code=exit_code)
+
+
+@deploy_resolver_app.command("apply")
+def deploy_resolver_apply() -> None:
+    """Deploy the node-local DNS resolver + force /etc/resolv.conf on every node. Run on the init-server."""
+    report, exit_code = deploy_resolver(dry_run=False, config_path=None)
+    console.print(render_resolver_report_text(report), markup=False, soft_wrap=True)
+    raise typer.Exit(code=exit_code)
+
+
+@deploy_resolver_app.command("delete")
+def deploy_resolver_delete() -> None:
+    """Uninstall the resolver + enforcer; each node's TERM trap restores its original resolv.conf."""
+    report, exit_code = uninstall_resolver()
+    report["deleting"] = True
+    console.print(render_resolver_report_text(report), markup=False, soft_wrap=True)
+    raise typer.Exit(code=exit_code)
+
+
 def _render_cluster_health(health: dict[str, object]) -> None:
     table = Table(title="Styx Cluster Status")
     table.add_column("Node")
@@ -941,6 +976,7 @@ app.add_typer(ports_app, name="ports")
 app.add_typer(install_app, name="install")
 app.add_typer(uninstall_app, name="uninstall")
 deploy_app.add_typer(deploy_dns_app, name="dns")
+deploy_app.add_typer(deploy_resolver_app, name="resolver")
 app.add_typer(deploy_app, name="deploy")
 mesh_app.add_typer(mesh_pistyx_app, name="pistyx")
 app.add_typer(mesh_app, name="mesh")

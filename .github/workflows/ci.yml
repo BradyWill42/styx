@@ -25,6 +25,7 @@ jobs:
           styxctl version
           styxctl --help
           styxctl deploy dns --help
+          styxctl deploy resolver --help
           styxctl status --help
           styxctl doctor --help
           styxctl mesh --help
@@ -55,6 +56,15 @@ jobs:
           styxctl mesh pistyx show | tee /tmp/pistyx.txt
           grep -q "holder pegasus" /tmp/pistyx.txt                          # PoP leader defaults to the init-server
           grep -q "pistyx.duckdns.org:47801" /tmp/pistyx.txt               # the floating entry endpoint
+          # Node-local DNS resolver + forced /etc/resolv.conf (all pod-based)
+          styxctl deploy resolver plan | tee /tmp/resolver.txt
+          grep -q "kind: DaemonSet" /tmp/resolver.txt                       # resolver + enforcer run as pods
+          grep -q "name: styx-resolver" /tmp/resolver.txt                   # node-local CoreDNS cache
+          grep -q "hostNetwork: true" /tmp/resolver.txt                     # binds 127.0.0.1:53 on the node
+          grep -q "name: styx-resolv-enforcer" /tmp/resolver.txt            # the resolv.conf enforcer
+          grep -q "privileged: true" /tmp/resolver.txt                      # needs host /etc + chattr
+          grep -q "chattr +i" /tmp/resolver.txt                             # makes resolv.conf immutable
+          grep -q "nameserver 127.0.0.1" /tmp/resolver.txt                  # forces node DNS to the local resolver
           rm -f styx.yaml
 
       - name: Build wheel

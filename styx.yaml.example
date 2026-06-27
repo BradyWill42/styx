@@ -80,3 +80,11 @@ egress:
 #   - name: brady-laptop
 #     public_key: "<client WG public key>"
 #     ipv4: 10.0.250.2
+
+# Cluster DNS (all pod-based). `styxctl deploy resolver apply` deploys a node-local CoreDNS cache
+# (DaemonSet on 127.0.0.1:53) plus a privileged enforcer DaemonSet that points each node's
+# /etc/resolv.conf at it and `chattr +i` locks it. `styxctl deploy resolver delete` uninstalls
+# cleanly — each node's enforcer restores its original resolv.conf on teardown (TERM trap).
+# resolver:
+#   upstreams: [1.1.1.1, 9.9.9.9]   # where the node-local cache forwards queries
+#   force: true                      # false = deploy the cache but DON'T lock /etc/resolv.conf
