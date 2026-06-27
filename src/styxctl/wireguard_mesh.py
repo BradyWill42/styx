@@ -434,3 +434,189 @@ def render_mesh_report_text(report: dict[str, Any]) -> str:
         lines.append(f"--- {name} ---")
         lines.append(cfg.rstrip())
     return "\n".join(lines) + "\n"
+
+
+# --------------------------------------------------------------------------- egress / client
+
+
+def _egress_settings(config: dict[str, Any]) -> tuple[str, int, int, str]:
+    """Return (interface, port, mtu, hostname) for the movable-pistyx StyxEgress interface."""
+    eg = config.get("egress", {})
+    if not isinstance(eg, dict):
+        eg = {}
+    interface = eg.get("interface", "StyxEgress")
+    port = eg.get("port", 47801)
+    mtu = eg.get("mtu", 1420)
+    hostname = eg.get("hostname", "pistyx.duckdns.org")
+    return (
+        interface if isinstance(interface, str) else "StyxEgress",
+        port if isinstance(port, int) else 47801,
+        mtu if isinstance(mtu, int) else 1420,
+        hostname if isinstance(hostname, str) else "pistyx.duckdns.org",
+    )
+
+
+def render_client_config(
+    client_name: str,
+    client_private_key: str,
+    *,
+    site_pubkey: str,
+    site_endpoint: str,
+    site_port: int,
+    address_v4: str | None,
+    address_v6: str | None,
+    mtu: int,
+) -> str:
+    """Render a roadwarrior client config: one [Peer] = the chosen ENTRY site's leader, full-tunnel.
+
+    The client homes to the site it dials (Endpoint = that site's DuckDNS name) and routes
+    EVERYTHING (0.0.0.0/0, ::/0) to that leader, which forwards to pistyx. The client never peers
+    pistyx directly, so a pistyx move is invisible to it. Families are pruned to the issued address.
+    """
+    addr: list[str] = []
+    allowed: list[str] = []
+    if address_v4:
+        addr.append(f"{address_v4}/32")
+        allowed.append("0.0.0.0/0")
+    if address_v6:
+        addr.append(f"{address_v6}/128")
+        allowed.append("::/0")
+
+    lines = [
+        f"# styx roadwarrior: {client_name} - entry via {site_endpoint}, egress via pistyx",
+        "[Interface]",
+        f"PrivateKey = {client_private_key}",
+    ]
+    if addr:
+        lines.append(f"Address = {', '.join(addr)}")
+    lines.append(f"MTU = {mtu}")
+    lines.append("")
+    lines += [
+        "[Peer]",
+        "# entry-site leader (forwards full-tunnel to pistyx)",
+        f"PublicKey = {site_pubkey}",
+        f"Endpoint = {site_endpoint}:{site_port}",
+        f"AllowedIPs = {', '.join(allowed)}",
+        f"PersistentKeepalive = {KEEPALIVE_SECONDS}",
+        "",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _collect_site_pubkey(site_node: ClusterNode, config: dict[str, Any]) -> tuple[str | None, str]:
+    """SSH the chosen entry site and read its mesh WireGuard public key (for a real client config)."""
+    from .install import _election_context
+    from .inventory import collect_inventory
+    from .k3s_cluster import _run_ssh_command, _ssh_target
+    from .lan_election import resolve_lan_leadership
+    from .nodes import identify_local_node, parse_nodes
+
+    inventory = collect_inventory()
+    effective, election = resolve_lan_leadership(config, inventory)
+    nodes = parse_nodes(effective)
+    local_node = identify_local_node(nodes, inventory, effective)
+    election_lan_ips, election_leader = _election_context(election)
+    interface, _port = _wg_settings(effective)
+    target = next((n for n in nodes if n.name == site_node.name), site_node)
+    conn = _ssh_target(
+        target, None, effective, inventory=inventory, local_node=local_node,
+        election_lan_ips=election_lan_ips, election_leader=election_leader,
+    )
+    ok, detail = _run_ssh_command(
+        conn.target, f"python3 -m styxctl.cli mesh pubkey-local --interface {interface}",
+        port=conn.port, jump=conn.jump,
+    )
+    key = detail.strip().splitlines()[-1].strip() if ok and detail.strip() else ""
+    if not ok or len(key) < 40 or " " in key:
+        return None, detail.strip() or "no key returned"
+    return key, "ok"
+
+
+def client_config(
+    site: str,
+    config_path: str | Path | None = None,
+    *,
+    name: str | None = None,
+    index: int = 0,
+    render_only: bool = False,
+) -> tuple[dict[str, Any], int]:
+    """Generate a roadwarrior client config homing to `site` (a node name), egressing via pistyx."""
+    from .config import find_config, load_config, resolve_config
+    from .network_plan import cluster_stack_mode, roadwarrior_ipv4_for_index, roadwarrior_ipv6_for_index
+    from .nodes import parse_nodes
+
+    candidate = Path(config_path) if config_path is not None else find_config()
+    if candidate is None:
+        return {"status": "ERROR", "message": "no styx.yaml found"}, 1
+    config = resolve_config(load_config(candidate))
+    nodes = parse_nodes(config)
+    site_node = next((n for n in nodes if n.name == site), None)
+    if site_node is None:
+        available = ", ".join(n.name for n in nodes) or "(none)"
+        return {"status": "ERROR", "message": f"no entry site named {site!r}; sites are node names: {available}"}, 1
+
+    site_endpoint = site_node.hostname or site_node.public_ipv4
+    if not site_endpoint:
+        return {"status": "ERROR", "message": f"entry site {site!r} has no DuckDNS hostname/public_ipv4 to dial"}, 1
+
+    _iface, mesh_port = _wg_settings(config)
+    _eg_iface, _eg_port, mtu, _eg_host = _egress_settings(config)
+    stack_mode = cluster_stack_mode(config)
+    want_v4 = stack_mode in {"dual-stack", "ipv4-only"}
+    want_v6 = stack_mode in {"dual-stack", "ipv6-only"}
+    address_v4 = roadwarrior_ipv4_for_index(index) if want_v4 else None
+    address_v6 = roadwarrior_ipv6_for_index(index) if want_v6 else None
+    client_name = name or f"{site}-client{index}"
+
+    report: dict[str, Any] = {"status": "OK", "actions": []}
+    if render_only:
+        client_private = "<client-private-key>"
+        site_pubkey = f"<pubkey:{site}>"
+        report["actions"].append("render-only: placeholder keys (no wg/SSH)")
+    else:
+        client_private = _gen_private_key()
+        if client_private is None:
+            return {"status": "ERROR", "message": "wg not available to generate the client keypair"}, 1
+        site_pubkey, detail = _collect_site_pubkey(site_node, config)
+        if not site_pubkey:
+            return {"status": "ERROR", "message": f"could not collect {site} public key: {detail}"}, 1
+
+    content = render_client_config(
+        client_name, client_private,
+        site_pubkey=site_pubkey, site_endpoint=site_endpoint, site_port=mesh_port,
+        address_v4=address_v4, address_v6=address_v6, mtu=mtu,
+    )
+    report["client"] = client_name
+    report["config"] = content
+    report["message"] = f"client {client_name}: home site {site} ({site_endpoint}), egress via pistyx"
+    if not render_only:
+        report["actions"].append("register this client on the entry-site leader before it can connect (Phase 2)")
+    return report, 0
+
+
+def pistyx_info(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]:
+    """Render-only: the current pistyx holder, reserved overlay IP, and egress settings."""
+    from .config import find_config, load_config, resolve_config
+    from .network_plan import PISTYX_IPV4, PISTYX_IPV6
+    from .nodes import parse_nodes, pistyx_holder
+
+    candidate = Path(config_path) if config_path is not None else find_config()
+    if candidate is None:
+        return {"status": "ERROR", "message": "no styx.yaml found"}, 1
+    config = resolve_config(load_config(candidate))
+    nodes = parse_nodes(config)
+    holder = pistyx_holder(config, nodes)
+    interface, port, mtu, hostname = _egress_settings(config)
+    holder_name = holder.name if holder else "<none>"
+    report = {
+        "status": "OK",
+        "message": f"pistyx egress: holder {holder_name} via {hostname}:{port}",
+        "actions": [
+            f"interface: {interface} (separate from the mesh; wg-quick up, not syncconf)",
+            f"endpoint:  {hostname}:{port}",
+            f"overlay:   {PISTYX_IPV4}/32, {PISTYX_IPV6}/128 (reserved)",
+            f"mtu:       {mtu}",
+            f"holder:    {holder_name}  (move with `styxctl mesh pistyx move <node>`, Phase 2)",
+        ],
+    }
+    return report, 0

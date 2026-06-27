@@ -1,0 +1,20 @@
+# CI render-test fixture. Unlike styx.yaml.example (the lean human reference), this carries
+# explicit `role:` on each node, because the per-push render-tests have no GitHub runner labels
+# to inject roles from. Mirrors a real generated styx.yaml. Not for humans.
+cluster:
+  name: styx
+nodes:
+  - name: pegasus
+    role: init-server
+    hostname: pipegasus.duckdns.org
+  - name: hydra
+    role: server
+    hostname: pihydra.duckdns.org
+  - name: kraken
+    role: agent
+    hostname: pikraken.duckdns.org
+  - name: atlas
+    role: agent
+    hostname: pipegasus.duckdns.org
+dns:
+  interval_seconds: 300

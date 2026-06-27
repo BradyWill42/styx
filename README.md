@@ -178,6 +178,7 @@ styxctl sysprep check local          # re-check until READY
 
 ```bash
 cp styx.yaml.example styx.yaml
+# for a manual deploy, add `role:` to each node (exactly one init-server); CI injects it from labels
 styxctl config show
 styxctl config validate
 ```
@@ -319,7 +320,7 @@ After MVP1 reports `READY` or `READY_WITH_WARNINGS`, MVP2 installs the local fou
 ### Typical workflow
 
 ```bash
-cp styx.yaml.example styx.yaml
+cp styx.yaml.example styx.yaml   # add `role:` per node for a manual deploy (CI injects from labels)
 styxctl config validate
 
 # Per-node local install (run on every gateway)
@@ -350,11 +351,10 @@ Bootstrap order: config enrichment -> local install -> LAN leader election (if e
 
 ### LAN leader election
 
-When multiple Styx gateways share a LAN, enable automatic leader election in `styx.yaml`:
+When multiple Styx gateways share a LAN, they automatically elect a leader (always on — there is no toggle). The election timing is tunable in `styx.yaml`:
 
 ```yaml
 cluster:
-  leader: lan-elected
   lan_election:
     port: 47802
     collect_sec: 3
@@ -379,11 +379,11 @@ styxctl install status lan
 
 ### Co-located nodes behind one WAN IP
 
-Homelab setups often have two or more gateway Pis on the same LAN behind one router. They share a single `public_ipv4` because the router can only forward each external port (`47810` SSH, `47811` k3s API) to one host. Enable `cluster.leader: lan-elected` and set `lan_ip` values explicitly if you orchestrate from outside the LAN.
+Homelab setups often have two or more gateway Pis on the same LAN behind one router. They share a single `public_ipv4` because the router can only forward each external port (`47810` SSH, `47811` k3s API) to one host. Leader election is automatic; set `lan_ip` values explicitly if you orchestrate from outside the LAN.
 
 ```yaml
 cluster:
-  leader: lan-elected
+  name: styx
 
 nodes:
   - name: pegasus
@@ -408,7 +408,7 @@ Election picks the site **entrypoint**. Only the entrypoint needs inbound port-f
 | node, same site | init-server | k3s join `https://<init lan_ip>:47811` |
 | node, different site | init-server | k3s join `https://<init public_ipv4>:47811` |
 
-When `cluster.bootstrap: true`, `styxctl` can fill the local node's public/LAN IPs and resolve remote `hostname` values. It can also scan the LAN for colocated peers listening on gateway SSH. If you run orchestration from another site, set `lan_ip` explicitly for every colocated node.
+`styxctl` auto-fills the local node's public/LAN IPs and resolves remote `hostname` values (always on), and scans the LAN for colocated peers listening on gateway SSH. If you run orchestration from another site, set `lan_ip` explicitly for every colocated node.
 
 ### Port forwards (router)
 
@@ -516,11 +516,13 @@ Copy the example and edit for your lab:
 
 ```bash
 cp styx.yaml.example styx.yaml
+# add `role: init-server|server|agent` to each node (exactly one init-server) for a manual deploy;
+# in CI this is injected from runner labels.
 styxctl config show
 styxctl config validate
 ```
 
-The shipped example is a live-deploy reference with `bootstrap: true`, explicit DuckDNS hostnames, a `dns:` block, and currently active/local nodes plus `thor` commented until it is reachable. In CI, the `nodes:` list is generated from runner labels; the checked-in example is not hand-maintained for the runner matrix.
+The shipped example is a lean live-deploy reference: explicit DuckDNS hostnames, a `dns:` block, and currently active/local nodes plus `thor` commented until it is reachable. `role:` is omitted from the example — CI injects it from runner labels; add it yourself for a manual deploy. In CI, the `nodes:` list is generated from runner labels; the checked-in example is not hand-maintained for the runner matrix.
 
 Per node you normally set:
 
@@ -533,20 +535,18 @@ Optional node fields:
 - `user:` or `ssh_user:` - override the SSH login user
 - `public_ipv4` / `public_ipv6` - pin public addresses instead of discovering/resolving them
 - `lan_ip` - required when a colocated node must be reached from outside its LAN
-- `site_entrypoint: true` - static shared-WAN entrypoint when not using LAN election
+- `site_entrypoint: true` - mark a node as its site's preferred shared-WAN entrypoint
 - `ipv4` / `ipv6` - override mesh IP assignment
 
-`styxctl` auto-detects the local public IPv4/IPv6 (`curl -4/-6 ifconfig.me`), local LAN IP, remote peer public IPs from explicit `hostname` values, and colocated LAN peers from gateway SSH scans when `cluster.bootstrap` is true.
+`styxctl` auto-detects the local public IPv4/IPv6 (`curl -4/-6 ifconfig.me`), local LAN IP, remote peer public IPs from explicit `hostname` values, and colocated LAN peers from gateway SSH scans (always on).
 
 ### Example
 
 ```yaml
 cluster:
   name: styx
-  leader: lan-elected
-  bootstrap: true
 
-nodes:
+nodes:                       # role: shown for a manual deploy; CI injects it from runner labels
   - name: pegasus
     role: init-server
     hostname: pipegasus.duckdns.org
@@ -558,7 +558,6 @@ nodes:
     hostname: pikraken.duckdns.org
 
 dns:
-  provider: duckdns
   interval_seconds: 300
 ```
 

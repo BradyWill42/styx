@@ -28,10 +28,11 @@ jobs:
           styxctl status --help
           styxctl doctor --help
           styxctl mesh --help
+          styxctl client --help
 
       - name: Verify deploy dns + mesh plans render (no cluster)
         run: |
-          cp styx.yaml.example styx.yaml
+          cp .github/fixtures/styx.test.yaml styx.yaml   # fixture carries roles (no runner labels in render-tests)
           styxctl deploy dns plan | tee /tmp/dns-plan.txt
           grep -q "kind: Deployment" /tmp/dns-plan.txt          # per-site publisher
           grep -q "name: DUCKDNS_DOMAINS" /tmp/dns-plan.txt      # publishes site names
@@ -41,6 +42,14 @@ jobs:
           grep -q "AllowedIPs = 10.0.0.0/14" /tmp/mesh-plan.txt  # spokes route the supernet
           grep -q "PersistentKeepalive = 25" /tmp/mesh-plan.txt  # spoke -> hub keepalive
           grep -q "Endpoint = pipegasus.duckdns.org:" /tmp/mesh-plan.txt  # DuckDNS name, never a hardcoded IP
+          # Per-site client (ENTRY) + movable-pistyx (EGRESS)
+          styxctl client config pegasus --render-only | tee /tmp/client.txt
+          grep -q "Endpoint = pipegasus.duckdns.org:47800" /tmp/client.txt  # homes to the chosen site by DuckDNS name
+          grep -q "AllowedIPs = 0.0.0.0/0, ::/0" /tmp/client.txt            # full-tunnel out
+          grep -q "MTU = 1420" /tmp/client.txt
+          styxctl mesh pistyx show | tee /tmp/pistyx.txt
+          grep -q "holder pegasus" /tmp/pistyx.txt                          # pistyx defaults to the init-server
+          grep -q "pistyx.duckdns.org:47801" /tmp/pistyx.txt                # separate StyxEgress endpoint
           rm -f styx.yaml
 
       - name: Build wheel

@@ -31,7 +31,6 @@ RunResult = tuple[bool, str]
 
 @dataclass(slots=True)
 class DnsPublishSettings:
-    provider: str
     interval_seconds: int
     token_env: str
     image: str
@@ -43,9 +42,6 @@ def parse_dns_settings(config: dict[str, Any]) -> DnsPublishSettings | None:
     if not isinstance(dns, dict):
         return None
 
-    provider = dns.get("provider")
-    provider = provider.strip().lower() if isinstance(provider, str) else ""
-
     interval = dns.get("interval_seconds", DEFAULT_INTERVAL_SECONDS)
     if not isinstance(interval, int) or interval <= 0:
         interval = DEFAULT_INTERVAL_SECONDS
@@ -56,7 +52,7 @@ def parse_dns_settings(config: dict[str, Any]) -> DnsPublishSettings | None:
     image = dns.get("image")
     image = image.strip() if isinstance(image, str) and image.strip() else DEFAULT_UPDATER_IMAGE
 
-    return DnsPublishSettings(provider=provider, interval_seconds=interval, token_env=token_env, image=image)
+    return DnsPublishSettings(interval_seconds=interval, token_env=token_env, image=image)
 
 
 def _subdomain(hostname: str | None) -> str | None:
@@ -255,11 +251,7 @@ def deploy_dns(
     settings = parse_dns_settings(config)
     if settings is None:
         report["status"] = "ERROR"
-        report["message"] = "no dns: block in styx.yaml — add `dns: {provider: duckdns}`"
-        return report, 1
-    if settings.provider != "duckdns":
-        report["status"] = "ERROR"
-        report["message"] = f"dns.provider {settings.provider!r} unsupported (MVP3 supports: duckdns)"
+        report["message"] = "no dns: block in styx.yaml — add a `dns:` block to enable DuckDNS publishing"
         return report, 1
 
     publishers = site_publishers(config)

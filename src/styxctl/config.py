@@ -22,7 +22,6 @@ DEFAULT_CONFIG_FILENAMES = ("styx.yaml", "styx.yml")
 DEFAULT_CONFIG: dict[str, Any] = {
     "cluster": {
         "mode": "dual-stack",
-        "leader": "lan-elected",
         "lan_election": {
             "port": 47802,
             "collect_sec": 3,
@@ -36,6 +35,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "wireguard": {
         "interface": "Styx",
         "port": 47800,
+    },
+    # Movable-pistyx full-tunnel egress. Separate WG interface (brought up via wg-quick, never
+    # syncconf) so the default route + anti-loop fwmark install. hostname is the movable DuckDNS
+    # name; the stable pistyx private key lives on the shared keystore, never in styx.yaml.
+    "egress": {
+        "interface": "StyxEgress",
+        "port": 47801,
+        "mtu": 1420,
+        "hostname": "pistyx.duckdns.org",
     },
 }
 
@@ -159,15 +167,6 @@ def validate_config(
                     "expected dual-stack, ipv4-only, or ipv6-only",
                 )
             )
-        leader = cluster.get("leader")
-        if leader is not None and leader not in {"static", "lan-elected"}:
-            issues.append(
-                ValidationIssue(
-                    "error",
-                    "cluster.leader",
-                    "expected static or lan-elected",
-                )
-            )
         lan_election = cluster.get("lan_election")
         if lan_election is not None:
             lan_map = _require_mapping(lan_election, "cluster.lan_election", issues)
@@ -198,6 +197,8 @@ def validate_config(
             "service_ipv6",
             "roadwarrior_ipv4",
             "roadwarrior_ipv6",
+            "pistyx_ipv4",
+            "pistyx_ipv6",
         ):
             if key in network:
                 _validate_network_prefix(network.get(key), f"network.{key}", issues)
@@ -227,6 +228,42 @@ def validate_config(
                 )
             )
 
+    egress = config.get("egress")
+    if isinstance(egress, dict):
+        eg_interface = _require_str(egress.get("interface"), "egress.interface", issues)
+        wg_interface = wireguard.get("interface") if isinstance(wireguard, dict) else None
+        if eg_interface and eg_interface == wg_interface:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "egress.interface",
+                    "egress interface must differ from the mesh wireguard interface",
+                )
+            )
+        eg_port = egress.get("port")
+        if not isinstance(eg_port, int):
+            issues.append(ValidationIssue("error", "egress.port", "expected an integer port"))
+        elif not (RESERVED_PORT_START <= eg_port <= RESERVED_PORT_END):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "egress.port",
+                    f"port must be within Styx reserved range {RESERVED_PORT_START}-{RESERVED_PORT_END}",
+                )
+            )
+        elif isinstance(wireguard, dict) and eg_port == wireguard.get("port"):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "egress.port",
+                    "egress port must differ from the mesh wireguard port (the pistyx holder runs both)",
+                )
+            )
+        mtu = egress.get("mtu")
+        if mtu is not None and (not isinstance(mtu, int) or not (1280 <= mtu <= 1500)):
+            issues.append(ValidationIssue("error", "egress.mtu", "expected an integer MTU 1280-1500"))
+        _require_str(egress.get("hostname"), "egress.hostname", issues)
+
     gateway = parse_gateway_ports(config)
     for message in gateway.validate():
         issues.append(ValidationIssue("error", "gateway", message))
@@ -241,11 +278,7 @@ def validate_config(
     if dns is not None:
         dns_map = _require_mapping(dns, "dns", issues)
         if dns_map:
-            provider = _require_str(dns_map.get("provider"), "dns.provider", issues)
-            if provider and provider.lower() != "duckdns":
-                issues.append(
-                    ValidationIssue("error", "dns.provider", "only 'duckdns' is supported in MVP3")
-                )
+            # DuckDNS is the only supported provider — no provider field to validate.
             # Per-site DuckDNS names are derived from each node's `hostname` — not listed here.
             interval = dns_map.get("interval_seconds")
             if interval is not None and (not isinstance(interval, int) or interval <= 0):

@@ -152,17 +152,12 @@ def parse_nodes(config: dict[str, Any]) -> list[ClusterNode]:
 
 
 def cluster_leader_mode(config: dict[str, Any] | None) -> str:
-    if not config:
-        return "static"
-    cluster = config.get("cluster")
-    if not isinstance(cluster, dict):
-        return "static"
-    leader = cluster.get("leader", "static")
-    return leader.strip().lower() if isinstance(leader, str) else "static"
+    # Sites always elect their leader on the LAN; the `cluster.leader` option was removed.
+    return LEADER_LAN_ELECTED
 
 
 def lan_election_enabled(config: dict[str, Any] | None) -> bool:
-    return cluster_leader_mode(config) == LEADER_LAN_ELECTED
+    return True
 
 
 def sites_by_public_ip(nodes: list[ClusterNode]) -> dict[str, list[ClusterNode]]:
@@ -279,14 +274,6 @@ def validate_nodes(
         if len(site_nodes) < 2:
             continue
 
-        explicit_entrypoints = [site_node for site_node in site_nodes if site_node.site_entrypoint]
-        if not lan_elected and len(explicit_entrypoints) != 1:
-            for site_node in site_nodes:
-                errors.append(
-                    f"nodes.{site_node.name}: nodes sharing public_ipv4 {public_ip} require "
-                    "local election (cluster.leader: lan-elected) or one site_entrypoint"
-                )
-
         entrypoint = site_entrypoint_for(
             site_nodes[0],
             nodes,
@@ -323,12 +310,18 @@ def validate_nodes(
                     f"nodes.{init_node.name}: init-server in a shared-WAN site must be that site's entrypoint"
                 )
 
+    from .network_plan import PISTYX_IPV4, PISTYX_IPV6
+
+    reserved = {PISTYX_IPV4, PISTYX_IPV6}
     for node in nodes:
         if not node.ipv4 and not node.ipv6:
             errors.append(
                 f"nodes.{node.name}: mesh ipv4 or ipv6 is required for k3s --node-ip"
             )
         for ip in node.all_ips():
+            bare = ip.split("%", 1)[0]
+            if bare in reserved:
+                errors.append(f"nodes.{node.name}: uses the reserved pistyx egress address {bare}")
             if ip in seen_mesh_ips:
                 errors.append(f"nodes.{node.name}: duplicate mesh IP {ip}")
             seen_mesh_ips.add(ip)
@@ -418,6 +411,24 @@ def init_server_node(nodes: list[ClusterNode]) -> ClusterNode | None:
         if node.role == "init-server":
             return node
     return None
+
+
+def pistyx_holder(config: dict[str, Any] | None, nodes: list[ClusterNode]) -> ClusterNode | None:
+    """The node currently holding the movable pistyx egress role.
+
+    Decoupled from the init-server: honours `pistyx.current_host` when set, otherwise defaults
+    to the init-server (today's static holder). Returns None if no candidate matches.
+    """
+    current = None
+    if isinstance(config, dict):
+        pistyx = config.get("pistyx")
+        if isinstance(pistyx, dict):
+            current = pistyx.get("current_host")
+    if isinstance(current, str) and current.strip():
+        for node in nodes:
+            if node.name == current.strip():
+                return node
+    return init_server_node(nodes)
 
 
 def sort_nodes_for_install(nodes: list[ClusterNode]) -> list[ClusterNode]:

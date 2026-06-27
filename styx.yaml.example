@@ -1,59 +1,73 @@
 # Copy to styx.yaml. `name` is the node's identity AND its SSH login (the PIPASS
-# account). Mesh overlay IPs assign automatically. With bootstrap: true, the local
-# node's public_ipv4/public_ipv6 are auto-detected (curl -4/-6 ifconfig.me); remote
-# peers are found by resolving each node's `hostname` (its DuckDNS name) — no SSH or
-# port-forward needed just to discover one. Colocated peers (same WAN) are found by a
-# LAN scan and reached over their lan_ip. Port 22 is admin SSH only — styxctl uses 47810.
+# account). Mesh overlay IPs assign automatically. The local node's public_ipv4/public_ipv6
+# are auto-detected (curl -4/-6 ifconfig.me); remote peers are found by resolving each node's
+# `hostname` (its DuckDNS name) — no SSH or port-forward needed just to discover one. Colocated
+# peers (same WAN) are found by a LAN scan and reached over their lan_ip. Each site LAN-elects
+# its leader (port-forward face + DuckDNS publisher + styx uplink). Port 22 is admin SSH only —
+# styxctl uses 47810.
 #
 # PREREQUISITE: each remote node runs a DuckDNS updater keeping its `hostname` current.
 # styxctl only RESOLVES these names, so it needs no DuckDNS token.
-# NOTE: do NOT set cluster.dns_suffix here — node names (kraken, pegasus) are NOT unique
-# DuckDNS subdomains, so deriving {name}.duckdns.org would resolve to strangers' boxes.
-# Always map the real, unique subdomain explicitly via `hostname:`.
+# NOTE: node names (kraken, pegasus) are NOT unique DuckDNS subdomains, so always map the real,
+# unique subdomain explicitly via `hostname:` — never derive {name}.duckdns.org.
 
 cluster:
   name: styx
-  leader: lan-elected
-  bootstrap: true
 
 nodes:
   # IN CI this nodes list is AUTO-GENERATED from the live GitHub runner labels
   # (.github/scripts/generate_styx_config.py) — the runner labels are the single source of
-  # truth, so you never hand-edit roles here for the test. The list below is only the
-  # reference for real (non-CI) deployments. Roles mirror each Pi's runner labels: exactly
-  # ONE init-server, then servers, then agents. Each node's hostname is its unique DuckDNS
-  # name (atlas borrows pegasus's — there is no piatlas).
+  # truth. `role` is NOT listed here: it is injected from each runner's role label (exactly
+  # ONE init-server, then servers, then agents). For a MANUAL (non-CI) deploy, add
+  # `role: init-server|server|agent` to each node yourself. Each node's hostname is its unique
+  # DuckDNS name (atlas borrows pegasus's — there is no piatlas).
   - name: pegasus
-    role: init-server
     hostname: pipegasus.duckdns.org
   - name: hydra
-    role: server
     hostname: pihydra.duckdns.org
   - name: kraken
-    role: agent
     hostname: pikraken.duckdns.org
   - name: atlas
-    role: agent
     hostname: pipegasus.duckdns.org   # no piatlas; colocated with pegasus, borrows its
     # name (shared WAN IP). The LAN scan distinguishes atlas by its own lan_ip.
 
-  # thor — OFFLINE right now. It's the remote-site node and is init-server+server capable,
-  # but pegasus already holds the single init-server slot, so thor joins as a server.
-  # Adding an unreachable node would fail stage-2 connectivity, so leave it commented
-  # until thor is back online, then uncomment:
+  # thor — OFFLINE right now. It's the remote-site node; uncomment when it's back online:
   # - name: thor
-  #   role: server
   #   hostname: pithor.duckdns.org
 
-# pistyx.duckdns.org is a floating cluster name (not a node) — reserved for the dynamic
-# "quickest site" pointer (deferred); the static per-site endpoints below are the river banks.
+# pistyx.duckdns.org is a floating cluster name (not a node) — the single movable EGRESS endpoint
+# (see the `egress:`/`pistyx:` blocks below). The per-site endpoints are the river banks; pistyx
+# is the river. Auto-repointing to the "quickest site" is still deferred; the move is manual for now.
 
 # MVP3 — per-site DuckDNS publishers. `styxctl deploy dns apply` (run on the init-server)
 # renders ONE updater Deployment per site, pinned to that site's leader, that keeps the
 # site's DuckDNS names (each node's `hostname`, e.g. pipegasus/pihydra) pointed at the
 # site's public IPv4+IPv6 (the leader's WAN). Names are derived from node hostnames — not
-# listed here. The DuckDNS token is NOT stored here: it's read from $DUCKDNS_TOKEN at apply
-# time (a repository secret in CI, like PIPASS) into a k8s Secret. Preview: `deploy dns plan`.
+# listed here. DuckDNS is the only provider. The DuckDNS token is NOT stored here: it's read
+# from $DUCKDNS_TOKEN at apply time (a repository secret in CI, like PIPASS) into a k8s Secret.
 dns:
-  provider: duckdns
   interval_seconds: 300
+
+# Movable-pistyx EGRESS + per-site ENTRY.
+#
+# ENTRY: `styxctl client config <site>` generates a roadwarrior WireGuard config that homes to
+# the site you name (a node, e.g. pegasus or hydra) by dialing that site's DuckDNS name. The
+# client routes EVERYTHING (full-tunnel) to that site's leader.
+#
+# EGRESS: each entry leader forwards full-tunnel traffic out a single logical endpoint,
+# `pistyx.duckdns.org` (the movable exit). pistyx rides a SEPARATE WireGuard interface
+# (StyxEgress, 47801/udp) brought up via wg-quick (not syncconf) so the default route +
+# anti-loop fwmark install. Moving pistyx = repoint pistyx.duckdns.org + load the stable pistyx
+# key on the new holder (the key lives on the shared MooseFS keystore, never in styx.yaml).
+# Inspect with `styxctl mesh pistyx show`. (Runtime move/NAT = Phase 2.)
+egress:
+  interface: StyxEgress
+  port: 47801                 # within the forwarded 47800-47850 range; must differ from wireguard.port
+  mtu: 1420                   # full-tunnel encapsulation overhead; lower for PPPoE/native-v6 underlays
+  hostname: pistyx.duckdns.org
+
+# Which site currently holds pistyx. Optional — defaults to the init-server. The stable pistyx
+# PUBLIC key is recorded here; the private key is NOT (it lives on the shared keystore).
+# pistyx:
+#   current_host: pegasus
+#   public_key: "<stable pistyx WG public key>"

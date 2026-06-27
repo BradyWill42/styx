@@ -29,7 +29,15 @@ from .install import (
 from .install_report import render_install_text, save_install_report
 from .dns_publish import deploy_dns, render_dns_report_text
 from .cluster_status import run_doctor, run_status
-from .wireguard_mesh import apply_local, ensure_local_keypair, mesh_plan, mesh_up, render_mesh_report_text
+from .wireguard_mesh import (
+    apply_local,
+    client_config,
+    ensure_local_keypair,
+    mesh_plan,
+    mesh_up,
+    pistyx_info,
+    render_mesh_report_text,
+)
 from .uninstall import (
     apply_cluster_uninstall_plan,
     apply_uninstall_plan,
@@ -88,6 +96,8 @@ uninstall_apply_app = typer.Typer(help="Apply uninstall plan without confirmatio
 deploy_app = typer.Typer(help="Deploy Styx cluster workloads (MVP3).", no_args_is_help=True)
 deploy_dns_app = typer.Typer(help="Publish cluster DNS to DuckDNS from inside k3s.", no_args_is_help=True)
 mesh_app = typer.Typer(help="Build and inspect the Styx WireGuard backbone mesh.", no_args_is_help=True)
+mesh_pistyx_app = typer.Typer(help="Inspect and move the movable pistyx egress.", no_args_is_help=True)
+client_app = typer.Typer(help="Generate roadwarrior client configs (connect to a chosen site).", no_args_is_help=True)
 
 
 @app.callback()
@@ -846,6 +856,32 @@ def mesh_apply_local_cmd(
     raise typer.Exit(code=code)
 
 
+@mesh_pistyx_app.command("show")
+def mesh_pistyx_show_cmd() -> None:
+    """Show the current pistyx holder, reserved overlay IP, and egress settings (render-only)."""
+    report, code = pistyx_info(config_path=None)
+    console.print(render_mesh_report_text(report), markup=False, soft_wrap=True)
+    raise typer.Exit(code=code)
+
+
+@client_app.command("config")
+def client_config_cmd(
+    site: str = typer.Argument(..., help="entry site = the node name to home to (e.g. pegasus)"),
+    name: str = typer.Option("", "--name", help="client name (default: <site>-client<index>)"),
+    index: int = typer.Option(0, "--index", help="client slot; sets the roadwarrior IP offset"),
+    render_only: bool = typer.Option(
+        False, "--render-only", help="render the structure with placeholder keys (no wg/SSH)"
+    ),
+) -> None:
+    """Generate a WireGuard config that homes to <site> by its DuckDNS name and egresses via pistyx."""
+    report, code = client_config(site, name=name or None, index=index, render_only=render_only)
+    if report.get("config"):
+        typer.echo(report["config"])
+    else:
+        console.print(render_mesh_report_text(report), markup=False, soft_wrap=True)
+    raise typer.Exit(code=code)
+
+
 def _future_app(label: str, milestone: str) -> typer.Typer:
     future = typer.Typer(help=f"Future {label} commands ({milestone}).", no_args_is_help=True)
 
@@ -882,9 +918,10 @@ app.add_typer(install_app, name="install")
 app.add_typer(uninstall_app, name="uninstall")
 deploy_app.add_typer(deploy_dns_app, name="dns")
 app.add_typer(deploy_app, name="deploy")
+mesh_app.add_typer(mesh_pistyx_app, name="pistyx")
 app.add_typer(mesh_app, name="mesh")
+app.add_typer(client_app, name="client")
 # status + doctor are real top-level commands (see status_cmd / doctor_cmd above).
-app.add_typer(_future_app("client", "MVP4"), name="client")
 app.add_typer(_future_app("gateway", "MVP3"), name="gateway")
 app.add_typer(_future_app("siem", "MVP4"), name="siem")
 app.add_typer(config_app, name="config")
