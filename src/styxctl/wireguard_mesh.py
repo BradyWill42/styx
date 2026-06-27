@@ -91,6 +91,78 @@ def render_local_config(
     return "\n".join(lines) + "\n"
 
 
+def render_egress_config(
+    local_name: str,
+    private_key: str,
+    members: list[MeshMember],
+    holder_name: str,
+    *,
+    listen_port: int,
+    mtu: int,
+    stack_mode: str = "dual-stack",
+) -> str:
+    """Render a node's StyxEgress interface — the movable-pistyx full-tunnel egress overlay.
+
+    A SECOND hub-and-spoke, separate from the mesh and ALWAYS cycled with `wg-quick up/down` (never
+    `wg syncconf`) so the default route + Table=auto fwmark + suppress_prefixlength loop-avoidance
+    install. `members` carry each node's EGRESS overlay address (ipv4/ipv6) and egress public_key;
+    the holder (pistyx) is the hub. The holder owns the egress subnet and gets one [Peer] per spoke
+    (routed by the spoke's egress /32, +/128) with NO self-peer (it egresses natively, NAT out-of-band).
+    A spoke gets a single [Peer] = the holder with AllowedIPs 0.0.0.0/0 + ::/0 (full tunnel).
+    """
+    want_v4 = stack_mode in {"dual-stack", "ipv4-only"}
+    want_v6 = stack_mode in {"dual-stack", "ipv6-only"}
+    by_name = {m.name: m for m in members}
+    local = by_name[local_name]
+    holder = by_name.get(holder_name)
+    is_holder = local_name == holder_name
+
+    lines = ["[Interface]", f"PrivateKey = {private_key}"]
+    addr: list[str] = []
+    if want_v4 and local.ipv4:
+        addr.append(f"{local.ipv4}/24" if is_holder else f"{local.ipv4}/32")
+    if want_v6 and local.ipv6:
+        addr.append(f"{local.ipv6}/64" if is_holder else f"{local.ipv6}/128")
+    if addr:
+        lines.append(f"Address = {', '.join(addr)}")
+    lines.append(f"MTU = {mtu}")
+    if is_holder:
+        lines.append(f"ListenPort = {listen_port}")
+    lines.append("")
+
+    if is_holder:
+        for member in members:
+            if member.name == holder_name:
+                continue
+            allowed = []
+            if want_v4 and member.ipv4:
+                allowed.append(f"{member.ipv4}/32")
+            if want_v6 and member.ipv6:
+                allowed.append(f"{member.ipv6}/128")
+            if not allowed:
+                continue
+            lines += [
+                "[Peer]",
+                f"# {member.name}",
+                f"PublicKey = {member.public_key}",
+                f"AllowedIPs = {', '.join(allowed)}",
+                "",
+            ]
+    elif holder is not None:
+        allowed = []
+        if want_v4:
+            allowed.append("0.0.0.0/0")
+        if want_v6:
+            allowed.append("::/0")
+        lines += ["[Peer]", "# pistyx (floating gateway)", f"PublicKey = {holder.public_key}"]
+        if holder.endpoint:
+            lines.append(f"Endpoint = {holder.endpoint}:{listen_port}")
+        lines.append(f"AllowedIPs = {', '.join(allowed)}")
+        lines.append(f"PersistentKeepalive = {KEEPALIVE_SECONDS}")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 # --------------------------------------------------------------------------- roster from config
 
 def _routes(config: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -109,6 +181,45 @@ def mesh_members(config: dict[str, Any]) -> tuple[list[MeshMember], str | None]:
         for n in nodes
     ]
     return members, (init.name if init else None)
+
+
+def egress_members(config: dict[str, Any]) -> tuple[list[MeshMember], str | None]:
+    """Build StyxEgress members (egress overlay addresses + roles); return (members, holder_name).
+
+    The holder (pistyx) takes the reserved overlay .1; every other node takes its own node-egress
+    address. MeshMember.ipv4/ipv6 here are the EGRESS addresses (not the mesh addresses).
+    """
+    from .network_plan import (
+        PISTYX_IPV4,
+        PISTYX_IPV6,
+        cluster_stack_mode,
+        node_egress_ipv4_for_index,
+        node_egress_ipv6_for_index,
+    )
+    from .nodes import parse_nodes, pistyx_holder
+
+    nodes = parse_nodes(config)
+    holder = pistyx_holder(config, nodes)
+    holder_name = holder.name if holder else None
+    mode = cluster_stack_mode(config)
+    want_v4 = mode in {"dual-stack", "ipv4-only"}
+    want_v6 = mode in {"dual-stack", "ipv6-only"}
+
+    members: list[MeshMember] = []
+    for index, node in enumerate(nodes):
+        if node.name == holder_name:
+            ev4, ev6 = PISTYX_IPV4, PISTYX_IPV6
+        else:
+            ev4, ev6 = node_egress_ipv4_for_index(index), node_egress_ipv6_for_index(index)
+        members.append(
+            MeshMember(
+                name=node.name,
+                role=node.role,
+                ipv4=ev4 if want_v4 else None,
+                ipv6=ev6 if want_v6 else None,
+            )
+        )
+    return members, holder_name
 
 
 def _wg_settings(config: dict[str, Any]) -> tuple[str, int]:
@@ -299,6 +410,30 @@ def mesh_plan(config_path: str | Path | None = None) -> tuple[dict[str, Any], in
             for m in members
         },
     }
+
+    # Egress overlay preview: StyxEgress -> the floating pistyx gateway (full tunnel).
+    from .network_plan import cluster_stack_mode
+
+    eg_members, holder_name = egress_members(config)
+    eg_interface, eg_port, eg_mtu, eg_hostname = _egress_settings(config)
+    stack = cluster_stack_mode(config)
+    for member in eg_members:
+        member.public_key = f"<pubkey:{member.name}-egress>"
+        if member.name == holder_name:
+            member.endpoint = eg_hostname   # the FLOATING name, not the holder node's hostname
+    report["pistyx"] = holder_name
+    report["egress_interface"] = eg_interface
+    report["egress_configs"] = (
+        {
+            m.name: render_egress_config(
+                m.name, f"<privkey:{m.name}-egress>", eg_members, holder_name,
+                listen_port=eg_port, mtu=eg_mtu, stack_mode=stack,
+            )
+            for m in eg_members
+        }
+        if holder_name
+        else {}
+    )
     return report, 0
 
 
@@ -427,11 +562,17 @@ def render_mesh_report_text(report: dict[str, Any]) -> str:
         lines.append(f"spokes: {', '.join(report['spokes'])}")
     if report.get("route"):
         lines.append(f"spoke route (AllowedIPs): {', '.join(report['route'])}")
+    if report.get("pistyx"):
+        lines.append(f"pistyx (egress gateway): {report['pistyx']}  [interface {report.get('egress_interface', 'StyxEgress')}]")
     for action in report.get("actions", []):
         lines.append(f"  - {action}")
     for name, cfg in (report.get("configs") or {}).items():
         lines.append("")
-        lines.append(f"--- {name} ---")
+        lines.append(f"--- {name} [mesh] ---")
+        lines.append(cfg.rstrip())
+    for name, cfg in (report.get("egress_configs") or {}).items():
+        lines.append("")
+        lines.append(f"--- {name} [StyxEgress] ---")
         lines.append(cfg.rstrip())
     return "\n".join(lines) + "\n"
 

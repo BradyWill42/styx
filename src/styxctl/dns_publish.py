@@ -6,7 +6,9 @@ IPv4+IPv6 (the leader's WAN — its pod egress). Sites are derived by resolving 
 configured `hostname` (its DuckDNS name) to a public IP and grouping. The DuckDNS token is
 read from $DUCKDNS_TOKEN at apply time into a Secret — never written to styx.yaml.
 
-The floating `pistyx` ("quickest site") is the deferred dynamic part and is NOT handled here.
+The floating `pistyx` name is published by whichever site currently holds the gateway (so a
+move repoints it automatically — the new holder's site updater starts answering for it). The
+auto-"quickest site" selection is the only deferred dynamic part.
 """
 
 from __future__ import annotations
@@ -78,6 +80,8 @@ def site_publishers(config: dict[str, Any]) -> list[SitePublisher]:
         sites_by_public_ip,
     )
 
+    from .nodes import pistyx_holder
+
     nodes = parse_nodes(config)
     # Resolve each node's DuckDNS hostname to a public IP so colocated nodes group together.
     for node in nodes:
@@ -85,6 +89,13 @@ def site_publishers(config: dict[str, Any]) -> list[SitePublisher]:
             resolved = resolve_dns_ipv4(node_hostname(config, node) or "")
             if resolved:
                 node.public_ipv4 = resolved
+
+    # The floating pistyx name rides on whichever site currently holds the gateway, so a move
+    # repoints it for free: the holder's site updater starts answering for pistyx.duckdns.org.
+    holder = pistyx_holder(config, nodes)
+    egress = config.get("egress") if isinstance(config.get("egress"), dict) else {}
+    egress_hostname = egress.get("hostname", "pistyx.duckdns.org")
+    egress_sub = _subdomain(egress_hostname if isinstance(egress_hostname, str) else "pistyx.duckdns.org")
 
     publishers: list[SitePublisher] = []
     for _public_ip, site_nodes in sites_by_public_ip(nodes).items():
@@ -94,6 +105,9 @@ def site_publishers(config: dict[str, Any]) -> list[SitePublisher]:
             sub = _subdomain(node_hostname(config, node))
             if sub and sub not in domains:
                 domains.append(sub)
+        if egress_sub and holder is not None and any(n.name == holder.name for n in site_nodes):
+            if egress_sub not in domains:
+                domains.append(egress_sub)
         if domains:
             publishers.append(SitePublisher(leader=leader.name, domains=sorted(domains)))
     publishers.sort(key=lambda p: p.leader)
