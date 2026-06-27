@@ -57,8 +57,9 @@ dns:
 # EGRESS: each entry leader forwards full-tunnel traffic out a single logical endpoint,
 # `pistyx.duckdns.org` (the movable exit). pistyx rides a SEPARATE WireGuard interface
 # (StyxEgress, 47801/udp) brought up via wg-quick (not syncconf) so the default route +
-# anti-loop fwmark install. Moving pistyx = repoint pistyx.duckdns.org + load the stable pistyx
-# key on the new holder (the key lives on the shared MooseFS keystore, never in styx.yaml).
+# anti-loop fwmark install. Moving pistyx = `wg-quick up StyxEgress` on the new holder + repoint
+# pistyx.duckdns.org. The stable pistyx key is pre-staged on each node's LOCAL disk at mesh-up
+# (never in styx.yaml; NOT on MooseFS — WG must come up before MooseFS could mount).
 # Inspect with `styxctl mesh pistyx show`. (Runtime move/NAT = Phase 2.)
 egress:
   interface: StyxEgress
@@ -67,7 +68,7 @@ egress:
   hostname: pistyx.duckdns.org
 
 # Which site currently holds pistyx. Optional — defaults to the init-server. The stable pistyx
-# PUBLIC key is recorded here; the private key is NOT (it lives on the shared keystore).
+# PUBLIC key is recorded here; the private key is NOT (it's pre-staged on each node's local disk).
 # pistyx:
 #   current_host: pegasus
 #   public_key: "<stable pistyx WG public key>"
