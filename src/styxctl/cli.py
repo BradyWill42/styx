@@ -29,6 +29,7 @@ from .install import (
 from .install_report import render_install_text, save_install_report
 from .dns_publish import deploy_dns, render_dns_report_text
 from .cluster_status import run_doctor, run_status
+from .wireguard_mesh import apply_local, ensure_local_keypair, mesh_plan, mesh_up, render_mesh_report_text
 from .uninstall import (
     apply_cluster_uninstall_plan,
     apply_uninstall_plan,
@@ -86,6 +87,7 @@ uninstall_plan_app = typer.Typer(help="Preview uninstall plan without changing t
 uninstall_apply_app = typer.Typer(help="Apply uninstall plan without confirmation.", no_args_is_help=True)
 deploy_app = typer.Typer(help="Deploy Styx cluster workloads (MVP3).", no_args_is_help=True)
 deploy_dns_app = typer.Typer(help="Publish cluster DNS to DuckDNS from inside k3s.", no_args_is_help=True)
+mesh_app = typer.Typer(help="Build and inspect the Styx WireGuard backbone mesh.", no_args_is_help=True)
 
 
 @app.callback()
@@ -794,6 +796,56 @@ def doctor_cmd() -> None:
     raise typer.Exit(code=exit_code)
 
 
+@mesh_app.command("plan")
+def mesh_plan_cmd() -> None:
+    """Preview the hub-and-spoke mesh (topology + rendered configs); no cluster needed."""
+    report, code = mesh_plan(config_path=None)
+    console.print(render_mesh_report_text(report), markup=False, soft_wrap=True)
+    raise typer.Exit(code=code)
+
+
+@mesh_app.command("up")
+def mesh_up_cmd() -> None:
+    """Bring up the Styx mesh: collect keys, wire peers, enable hub forwarding. Run on the init-server."""
+    report, code = mesh_up(config_path=None)
+    console.print(render_mesh_report_text(report), markup=False, soft_wrap=True)
+    raise typer.Exit(code=code)
+
+
+@mesh_app.command("pubkey-local")
+def mesh_pubkey_local_cmd(
+    interface: str = typer.Option("", "--interface", help="WG interface name (default: config or 'Styx')"),
+) -> None:
+    """Ensure this node's WG keypair exists and print its public key (used by `mesh up`)."""
+    if interface:
+        config = {"wireguard": {"interface": interface}}
+    else:
+        found = find_config()
+        config = load_config(found) if found else {}
+    ok, result = ensure_local_keypair(config)
+    if not ok:
+        console.print(result, markup=False)
+        raise typer.Exit(code=1)
+    typer.echo(result)
+
+
+@mesh_app.command("apply-local")
+def mesh_apply_local_cmd(
+    roster_b64: str = typer.Option(..., "--roster-b64", help="base64-encoded JSON roster"),
+    local_name: str = typer.Option("", "--local-name", help="this node's name in the roster (from `mesh up`)"),
+) -> None:
+    """Render and install this node's mesh config from a roster (used by `mesh up`)."""
+    import base64
+    import json
+
+    found = find_config()
+    config = load_config(found) if found else {}
+    roster = json.loads(base64.b64decode(roster_b64).decode())
+    report, code = apply_local(roster, config, local_name=local_name or None)
+    console.print(render_mesh_report_text(report), markup=False, soft_wrap=True)
+    raise typer.Exit(code=code)
+
+
 def _future_app(label: str, milestone: str) -> typer.Typer:
     future = typer.Typer(help=f"Future {label} commands ({milestone}).", no_args_is_help=True)
 
@@ -830,6 +882,7 @@ app.add_typer(install_app, name="install")
 app.add_typer(uninstall_app, name="uninstall")
 deploy_app.add_typer(deploy_dns_app, name="dns")
 app.add_typer(deploy_app, name="deploy")
+app.add_typer(mesh_app, name="mesh")
 # status + doctor are real top-level commands (see status_cmd / doctor_cmd above).
 app.add_typer(_future_app("client", "MVP4"), name="client")
 app.add_typer(_future_app("gateway", "MVP3"), name="gateway")

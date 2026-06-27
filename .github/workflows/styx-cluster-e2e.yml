@@ -74,7 +74,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [pegasus, kraken, thor]
+        runner: [pegasus, hydra, kraken, atlas]
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -138,6 +138,11 @@ jobs:
 
       - name: Cluster doctor
         run: styxctl install doctor cluster
+
+      - name: Bring up Styx mesh (hub-and-spoke, init-server = hub)
+        run: |
+          styxctl mesh plan
+          styxctl mesh up
 
   deploy-dns:
     name: "4. Deploy DuckDNS publisher"
