@@ -50,13 +50,20 @@ jobs:
           # Online runners targetable by their own name label — these are what we actually run.
           targetable="$(jq -c '[.runners[] | . as $r | select($r.status=="online") | select(([$r.labels[].name] | index($r.name)) != null)]' runners.json)"
           runners="$(printf '%s' "$targetable" | jq -c '[.[].name] | sort')"
-          # A minimum viable cluster needs >=1 online init-server AND >=1 online agent (server optional).
-          roles="$(printf '%s' "$targetable" | jq -c '[.[].labels[].name] | unique')"
-          has_init="$(printf '%s' "$roles" | jq 'index("init-server") != null')"
-          has_agent="$(printf '%s' "$roles" | jq 'index("agent") != null')"
-          echo "Online targetable runners: $runners; roles: $roles"
-          if [ "$has_init" != "true" ] || [ "$has_agent" != "true" ]; then
-            echo "::error::Need at least one online init-server AND one online agent (server optional). Online: $runners; init-server=$has_init agent=$has_agent"
+          # EXACTLY ONE runner in the whole fleet may carry the init-server label (one k3s cluster
+          # bootstrapper). Multiple init-server labels are rejected here — not silently resolved.
+          init_labeled="$(jq -c '[.runners[] | select(([.labels[].name] | index("init-server")) != null) | .name] | sort' runners.json)"
+          init_labeled_count="$(printf '%s' "$init_labeled" | jq 'length')"
+          if [ "$init_labeled_count" -gt 1 ]; then
+            echo "::error::Multiple init-servers are not allowed — exactly one runner may carry the init-server label. Found $init_labeled_count: $init_labeled. Relabel all but one to server/agent."
+            exit 1
+          fi
+          # The init-server AND at least one agent must be online (server optional).
+          init_online="$(printf '%s' "$targetable" | jq '[.[] | select(([.labels[].name] | index("init-server")) != null)] | length')"
+          agent_online="$(printf '%s' "$targetable" | jq '[.[] | select(([.labels[].name] | index("agent")) != null)] | length')"
+          echo "Online targetable: $runners; init-labeled=$init_labeled init-online=$init_online agent-online=$agent_online"
+          if [ "$init_online" -lt 1 ] || [ "$agent_online" -lt 1 ]; then
+            echo "::error::Need the init-server AND at least one agent online (server optional). init-online=$init_online agent-online=$agent_online; online: $runners"
             exit 1
           fi
           echo "runners=$runners" >> "$GITHUB_OUTPUT"
