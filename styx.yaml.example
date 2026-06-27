@@ -48,27 +48,35 @@ nodes:
 dns:
   interval_seconds: 300
 
-# Movable-pistyx EGRESS + per-site ENTRY.
+# pistyx — the floating client entry that bounces clients to the FASTEST site (local breakout).
 #
-# ENTRY: `styxctl client config <site>` generates a roadwarrior WireGuard config that homes to
-# the site you name (a node, e.g. pegasus or hydra) by dialing that site's DuckDNS name. The
-# client routes EVERYTHING (full-tunnel) to that site's leader.
+# Each site is a self-contained PoP: its leader runs the pistyx interface (StyxEgress, 47801/udp)
+# bound to a SHARED pistyx identity (same WG key on every leader) and LOCAL-NATs client traffic out
+# its OWN internet. Styx never carries client traffic — each site egresses locally.
 #
-# EGRESS: each entry leader forwards full-tunnel traffic out a single logical endpoint,
-# `pistyx.duckdns.org` (the movable exit). pistyx rides a SEPARATE WireGuard interface
-# (StyxEgress, 47801/udp) brought up via wg-quick (not syncconf) so the default route +
-# anti-loop fwmark install. Moving pistyx = `wg-quick up StyxEgress` on the new holder + repoint
-# pistyx.duckdns.org. The stable pistyx key is pre-staged on each node's LOCAL disk at mesh-up
-# (never in styx.yaml; NOT on MooseFS — WG must come up before MooseFS could mount).
-# Inspect with `styxctl mesh pistyx show`. (Runtime move/NAT = Phase 2.)
+# ENTRY: `styxctl client config <name>` emits a roadwarrior config that dials `pistyx.duckdns.org`
+# (the floating name) and full-tunnels to it; `--site <node>` pins one site instead of auto-fastest.
+# A client peers the SHARED pistyx key, so when the name repoints it reconnects with zero reconfig.
+#
+# FASTEST-SITE (Phase 2, needs >=2 real sites): a client lands on a site → that site RTT-probes the
+# client's IP from every site over the backbone → repoints pistyx.duckdns.org to the lowest-latency
+# site → client reconnects there. The stable pistyx key is pre-staged on every node's LOCAL disk at
+# `mesh up`. Inspect with `styxctl mesh pistyx show`.
 egress:
   interface: StyxEgress
   port: 47801                 # within the forwarded 47800-47850 range; must differ from wireguard.port
-  mtu: 1420                   # full-tunnel encapsulation overhead; lower for PPPoE/native-v6 underlays
+  mtu: 1420                   # client full-tunnel encapsulation overhead; lower for PPPoE/native-v6
   hostname: pistyx.duckdns.org
 
-# Which site currently holds pistyx. Optional — defaults to the init-server. The stable pistyx
-# PUBLIC key is recorded here; the private key is NOT (it's pre-staged on each node's local disk).
+# The current pistyx holder + the SHARED pistyx PUBLIC key (clients peer it; the private key is NOT
+# stored here — it's pre-staged on each node's local disk). Optional; holder defaults to the init-server.
 # pistyx:
 #   current_host: pegasus
-#   public_key: "<stable pistyx WG public key>"
+#   public_key: "<shared pistyx WG public key — `styxctl mesh pistyx pubkey-local` prints it>"
+
+# clients: roadwarriors registered as peers on every leader's pistyx PoP (so a repoint reconnects
+# them transparently). `styxctl client config` allocates from 10.0.250.0/24 (.2+); add here to persist.
+# clients:
+#   - name: brady-laptop
+#     public_key: "<client WG public key>"
+#     ipv4: 10.0.250.2

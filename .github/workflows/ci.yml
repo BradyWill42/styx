@@ -43,17 +43,18 @@ jobs:
           grep -q "AllowedIPs = 10.0.0.0/14" /tmp/mesh-plan.txt  # spokes route the supernet
           grep -q "PersistentKeepalive = 25" /tmp/mesh-plan.txt  # spoke -> hub keepalive
           grep -q "Endpoint = pipegasus.duckdns.org:" /tmp/mesh-plan.txt  # DuckDNS name, never a hardcoded IP
-          grep -q "pistyx (egress gateway): pegasus" /tmp/mesh-plan.txt   # floating gateway holder
-          grep -q "StyxEgress" /tmp/mesh-plan.txt                          # separate egress interface
-          grep -q "Endpoint = pistyx.duckdns.org:47801" /tmp/mesh-plan.txt # egress spokes dial the floating name
-          # Per-site client (ENTRY) + movable-pistyx (EGRESS)
-          styxctl client config pegasus --render-only | tee /tmp/client.txt
-          grep -q "Endpoint = pipegasus.duckdns.org:47800" /tmp/client.txt  # homes to the chosen site by DuckDNS name
-          grep -q "AllowedIPs = 0.0.0.0/0, ::/0" /tmp/client.txt            # full-tunnel out
+          grep -q "pistyx (egress gateway): pegasus" /tmp/mesh-plan.txt   # the leader runs the pistyx PoP
+          grep -q "StyxEgress" /tmp/mesh-plan.txt                          # separate client-entry interface
+          grep -q "ListenPort = 47801" /tmp/mesh-plan.txt                  # PoP listens for clients
+          grep -q "Address = 10.0.250.1/24" /tmp/mesh-plan.txt             # PoP binds the shared pistyx gateway addr
+          # Roadwarrior client dials pistyx (the floating entry), egress is the leader's LOCAL internet
+          styxctl client config testclient --render-only | tee /tmp/client.txt
+          grep -q "Endpoint = pistyx.duckdns.org:47801" /tmp/client.txt    # dials the floating pistyx name
+          grep -q "AllowedIPs = 0.0.0.0/0, ::/0" /tmp/client.txt           # full-tunnel to the PoP
           grep -q "MTU = 1420" /tmp/client.txt
           styxctl mesh pistyx show | tee /tmp/pistyx.txt
-          grep -q "holder pegasus" /tmp/pistyx.txt                          # pistyx defaults to the init-server
-          grep -q "pistyx.duckdns.org:47801" /tmp/pistyx.txt                # separate StyxEgress endpoint
+          grep -q "holder pegasus" /tmp/pistyx.txt                          # PoP leader defaults to the init-server
+          grep -q "pistyx.duckdns.org:47801" /tmp/pistyx.txt               # the floating entry endpoint
           rm -f styx.yaml
 
       - name: Build wheel

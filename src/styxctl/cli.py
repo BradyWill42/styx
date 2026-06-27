@@ -32,7 +32,6 @@ from .cluster_status import run_doctor, run_status
 from .wireguard_mesh import (
     apply_local,
     client_config,
-    ensure_egress_keypair,
     ensure_local_keypair,
     ensure_pistyx_identity,
     mesh_plan,
@@ -877,18 +876,6 @@ def mesh_pistyx_pubkey_local_cmd() -> None:
     typer.echo(result)
 
 
-@mesh_app.command("egress-pubkey-local")
-def mesh_egress_pubkey_local_cmd(
-    interface: str = typer.Option("StyxEgress", "--interface", help="egress WG interface name"),
-) -> None:
-    """Ensure this node's own StyxEgress keypair exists and print its public key (used by `mesh up`)."""
-    ok, result = ensure_egress_keypair(interface)
-    if not ok:
-        console.print(result, markup=False)
-        raise typer.Exit(code=1)
-    typer.echo(result)
-
-
 @mesh_app.command("stage-pistyx-key")
 def mesh_stage_pistyx_key_cmd(
     key_b64: str = typer.Option(..., "--key-b64", help="base64-encoded stable pistyx private key"),
@@ -903,15 +890,15 @@ def mesh_stage_pistyx_key_cmd(
 
 @client_app.command("config")
 def client_config_cmd(
-    site: str = typer.Argument(..., help="entry site = the node name to home to (e.g. pegasus)"),
-    name: str = typer.Option("", "--name", help="client name (default: <site>-client<index>)"),
+    name: str = typer.Argument(..., help="client name (e.g. brady-laptop)"),
+    site: str = typer.Option("", "--site", help="pin a specific site by node name (default: pistyx, auto-fastest)"),
     index: int = typer.Option(0, "--index", help="client slot; sets the roadwarrior IP offset"),
     render_only: bool = typer.Option(
-        False, "--render-only", help="render the structure with placeholder keys (no wg/SSH)"
+        False, "--render-only", help="render the structure with placeholder keys (no wg)"
     ),
 ) -> None:
-    """Generate a WireGuard config that homes to <site> by its DuckDNS name and egresses via pistyx."""
-    report, code = client_config(site, name=name or None, index=index, render_only=render_only)
+    """Generate a roadwarrior config that dials pistyx (auto-fastest) or a pinned --site."""
+    report, code = client_config(name, site=site or None, index=index, render_only=render_only)
     if report.get("config"):
         typer.echo(report["config"])
     else:

@@ -72,27 +72,14 @@ def assign_node_mesh_ips(config: dict[str, Any]) -> None:
             item["ipv6"] = mesh_ipv6_for_node(index)
 
 
-# The egress /24 (and /64) is partitioned so pistyx, node-egress, and roadwarrior clients never
-# collide on the StyxEgress network:
-#   .1            -> pistyx, the floating gateway (reserved; PISTYX_IPV4/6 above)
-#   .2  .. .99    -> per-node StyxEgress address (a node forwarding full-tunnel to pistyx)
-#   .100 .. .254  -> roadwarrior clients
-NODE_EGRESS_OFFSET = 2
-ROADWARRIOR_CLIENT_OFFSET = 100
-
-
-def node_egress_ipv4_for_index(index: int) -> str:
-    """A cluster node's own StyxEgress IPv4 (its address on the egress net when it forwards to pistyx)."""
-    return str(ipaddress.ip_address(int(ROADWARRIOR_IPV4_NETWORK.network_address) + NODE_EGRESS_OFFSET + index))
-
-
-def node_egress_ipv6_for_index(index: int) -> str:
-    """A cluster node's own StyxEgress IPv6."""
-    return str(ipaddress.ip_address(int(ROADWARRIOR_IPV6_NETWORK.network_address) + NODE_EGRESS_OFFSET + index))
+# The egress /24 (and /64): .1 is pistyx — the SHARED PoP gateway address every leader binds
+# (reserved as PISTYX_IPV4/6 above) — and roadwarrior clients take .2 upward. Each site's leader
+# runs the pistyx PoP at .1 and local-NATs the client range out its OWN WAN; styx never backhauls.
+ROADWARRIOR_CLIENT_OFFSET = 2
 
 
 def roadwarrior_ipv4_for_index(index: int) -> str:
-    """Roadwarrior client IPv4 for the given client slot (clients live above the node-egress band)."""
+    """Roadwarrior client IPv4 for the given client slot (+2 keeps .0 network and .1 pistyx reserved)."""
     return str(ipaddress.ip_address(int(ROADWARRIOR_IPV4_NETWORK.network_address) + ROADWARRIOR_CLIENT_OFFSET + index))
 
 
