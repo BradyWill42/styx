@@ -304,6 +304,29 @@ def mesh_plan(config_path: str | Path | None = None) -> tuple[dict[str, Any], in
 
 # --------------------------------------------------------------------------- orchestration
 
+def _hub_endpoint(
+    init: ClusterNode,
+    spoke: ClusterNode,
+    *,
+    election_lan_ips: dict[str, str] | None,
+    inventory: Any,
+    local_node: ClusterNode | None,
+) -> str | None:
+    """The hub host a spoke dials. Detected DuckDNS hostname for a REMOTE spoke (dynamic —
+    never a pinned public IP, so it follows the per-site DuckDNS publisher), or the hub's
+    LAN IP for a COLOCATED spoke (the name would resolve to the public IP and hairpin NAT)."""
+    from .nodes import node_effective_lan_ip
+
+    colocated = bool(init.public_ipv4 and spoke.public_ipv4 and init.public_ipv4 == spoke.public_ipv4)
+    if colocated:
+        lan = node_effective_lan_ip(
+            init, election_lan_ips=election_lan_ips, inventory=inventory, local_node=local_node
+        )
+        if lan:
+            return lan
+    return init.hostname or init.public_ipv4
+
+
 def mesh_up(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]:
     """Collect public keys over SSH, build the roster, and have each node apply it."""
     from .bootstrap_config import load_operational_config

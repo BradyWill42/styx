@@ -1,15 +1,15 @@
 # styxctl
 
-**The control CLI for [Styx](https://github.com/BradyWill42/styx)** — a k3s-native, dual-stack WireGuard mesh and access gateway platform.
+**The control CLI for [Styx](https://github.com/BradyWill42/styx)** - a k3s-native, dual-stack WireGuard mesh and access gateway platform.
 
-`styxctl` prepares Linux gateway nodes, installs the k3s foundation, and (in future milestones) deploys the full Styx mesh. The CLI is **command-discovery-first**: composable subcommands, no workflow flags, and shell tab completion.
+`styxctl` prepares Linux gateway nodes, installs the k3s + WireGuard foundation, publishes per-site DuckDNS records, and brings up the current Styx backbone mesh. The CLI is **command-discovery-first**: composable subcommands, no workflow flags, and shell tab completion.
 
 | | |
 |---|---|
 | **Version** | `0.3.0` |
 | **Python** | 3.10+ |
 | **License** | MIT |
-| **Status** | MVP1 + MVP2 shipped on `main` |
+| **Status** | MVP1 + MVP2 shipped; MVP3 in progress on `main` |
 
 ---
 
@@ -17,10 +17,12 @@
 
 - [What is Styx?](#what-is-styx)
 - [Architecture](#architecture)
+- [Repository](#repository)
 - [Quick start](#quick-start)
 - [Milestone roadmap](#milestone-roadmap)
 - [MVP1: Assess and remediate](#mvp1-assess-and-remediate)
 - [MVP2: Install prerequisites](#mvp2-install-prerequisites)
+- [MVP3: Mesh, DNS, status, and doctor](#mvp3-mesh-dns-status-and-doctor)
 - [Configuration (`styx.yaml`)](#configuration-styxyaml)
 - [Reserved port plan](#reserved-port-plan)
 - [Safety doctrine](#safety-doctrine)
@@ -29,6 +31,7 @@
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
 - [Continuous integration](#continuous-integration)
+- [Known issues and deferred work](#known-issues-and-deferred-work)
 - [License](#license)
 
 ---
@@ -38,11 +41,12 @@
 Styx is a homelab and small-site platform that combines:
 
 - **k3s** for lightweight Kubernetes orchestration across gateway nodes
-- **Dual-stack WireGuard** (`Styx` interface on UDP `47800`) for mesh connectivity — separate from any existing `wg0` tunnel you already run
-- **Reserved service ports** (`47800–47850`) for gateway APIs, agents, diagnostics, and metrics
-- **Declarative cluster config** in `styx.yaml` — nodes, CIDRs, and future SIEM integration
+- **Dual-stack WireGuard** (`Styx` interface on UDP `47800`) for the current backbone mesh, separate from any existing `wg0` tunnel
+- **Reserved service ports** (`47800-47850`) for gateway APIs, agents, diagnostics, SSH, k3s API, metrics, and future services
+- **Declarative cluster config** in `styx.yaml`: nodes, roles, hostnames, site topology, DNS publishing, and future client/SIEM work
+- **Site-aware routing** for multiple Pis on one LAN behind one router, using LAN leader election and ProxyJump when needed
 
-`styxctl` is the operator-facing tool that drives each phase. It collects inventory, remediates only what is provably safe, installs k3s with your network plan, and writes human-readable plus machine-readable reports at every step.
+`styxctl` is the operator-facing tool that drives each phase. It collects inventory, remediates only what is provably safe, installs k3s with the built-in Styx IP plan, brings up the hub-and-spoke WireGuard backbone, and writes human-readable plus machine-readable reports along the way.
 
 ---
 
@@ -50,61 +54,93 @@ Styx is a homelab and small-site platform that combines:
 
 ```mermaid
 flowchart TB
-    subgraph operator["Operator workstation"]
+    subgraph operator["Operator workstation / CI runner"]
         CLI["styxctl CLI"]
         CFG["styx.yaml"]
         RPT["reports/styx/"]
     end
 
-    subgraph mvp1["MVP1 — Sysprep"]
+    subgraph mvp1["MVP1 - Sysprep"]
         INV["Inventory collection"]
-        PORTS["Port scan 47800–47850"]
+        PORTS["Port scan 47800-47850"]
         SAFE["Safe remediation"]
     end
 
-    subgraph mvp2["MVP2 — Install"]
+    subgraph mvp2["MVP2 - Install"]
         K3S["k3s cluster"]
         WG["WireGuard Styx interface"]
-        SSH["SSH cluster join"]
+        SSH["Gateway SSH on 47810"]
+        LAN["LAN leader election"]
     end
 
-    subgraph future["MVP3+ — Deploy"]
-        DEPLOY["Gateway workloads"]
-        CLIENT["Client profiles"]
-        SIEM["Wazuh SIEM"]
+    subgraph mvp3["MVP3 - In progress"]
+        MESH["Backbone mesh\nhub-and-spoke"]
+        DNS["Per-site DuckDNS publishers"]
+        HEALTH["status / doctor"]
+    end
+
+    subgraph future["MVP4+ - Deferred"]
+        SITEWG["Per-site WG nets"]
+        PISTYX["pistyx quickest-site loop"]
+        CLIENT["Roadwarrior client tool"]
+        SIEM["SIEM integration"]
     end
 
     CLI --> CFG
     CLI --> INV --> PORTS
     PORTS --> SAFE
     SAFE --> K3S
-    K3S --> WG
     K3S --> SSH
-    WG --> DEPLOY
+    K3S --> LAN
+    K3S --> WG
+    WG --> MESH
+    K3S --> DNS
+    K3S --> HEALTH
     CLI --> RPT
-    DEPLOY --> CLIENT
-    DEPLOY --> SIEM
+    MESH --> SITEWG
+    DNS --> PISTYX
+    SITEWG --> CLIENT
+    CLIENT --> SIEM
 ```
 
 **Node roles** (defined in `styx.yaml`):
 
 | Role | Purpose |
 |------|---------|
-| `init-server` | Bootstraps the k3s cluster with `--cluster-init` and dual-stack CIDRs |
-| `server` | Additional k3s control-plane / server node |
+| `init-server` | The single k3s bootstrap node; installed with `--cluster-init`; current WireGuard backbone hub |
+| `server` | Additional k3s server/control-plane node |
 | `agent` | k3s worker node |
 
-Each node uses `public_ipv4` (router WAN IP with port forwards) for bootstrap SSH and k3s joins when it is the site's entrypoint or a remote node, `lan_ip` for co-located LAN routing, optional `hostname` for stable naming, and mesh `ipv4` / `ipv6` for k3s `--node-ip`. **SSH runs on port 22 (admin/runner) and on `gateway.ssh_port` (47810, Styx cluster)** — both listen together after `install apply local`. Install and cluster join use gateway ports `47810` (SSH) and `47811` (k3s API); co-located nodes without their own port-forward join over the LAN or outbound NAT. External DNS (for example DuckDNS) is deployed as a cluster pod in MVP3, after the cluster is up.
+Exactly one node may be `init-server`. "Site leader" is a separate overlay role: the leader is the port-forward face for a LAN/site, the DuckDNS publisher target for that site, and the future site uplink.
+
+Each node can use:
+
+- `public_ipv4` / `public_ipv6` for WAN bootstrap and DNS publishing
+- explicit `hostname` values, usually unique DuckDNS names such as `pipegasus.duckdns.org`, for cross-site discovery
+- `lan_ip` for co-located nodes behind one public IP
+- mesh `ipv4` / `ipv6` addresses assigned from the built-in Styx plan for k3s `--node-ip`
+- gateway ports `47810` (SSH) and `47811` (k3s API)
+
+**Port 22 stays admin/runner SSH.** `install apply local` adds Styx gateway SSH on `gateway.ssh_port` (`47810`) alongside port 22; it does not replace the normal admin path.
 
 ---
 
 ## Repository
 
-All development happens on [`main`](https://github.com/BradyWill42/styx/tree/main). It contains the full MVP1 (sysprep) and MVP2 (install) platform, including `public_ipv4` bootstrap, gateway ports, and LAN leader election.
+All development happens on [`main`](https://github.com/BradyWill42/styx/tree/main). It contains:
 
-- Bootstrap connectivity uses each node's `public_ipv4` and router 1:1 port forwards (`47810` SSH, `47811` k3s API).
-- External DNS publish (DuckDNS and similar) is deferred to MVP3 as a cluster pod after install succeeds.
-- `cluster.leader: lan-elected` elects the strongest configured peer on the local LAN (UDP `47802`), ignoring peers not listed in `styx.yaml`. Co-located nodes may share one `public_ipv4` when election is enabled; the elected leader becomes that site's entrypoint for port-forwards and ProxyJump routing.
+- MVP1 sysprep and safe remediation
+- MVP2 local install, cluster install, LAN leader election, and uninstall
+- bootstrap discovery by public IP detection, explicit DuckDNS hostname resolution, and LAN scanning
+- MVP3 `deploy dns`, top-level `status` / `doctor`, and `mesh plan` / `mesh up`
+- CI scripts that generate `styx.yaml` from live runner labels for the primary integration gate
+
+Current bootstrap rule of thumb:
+
+- Remote peer discovery uses explicit node `hostname` values. `styxctl` only resolves DNS; it does not need a DuckDNS token for discovery.
+- Co-located peer discovery uses the shared public IP plus a LAN scan on gateway SSH port `47810`.
+- Only the site leader/entrypoint needs inbound WAN port forwards for a shared-WAN site.
+- The DuckDNS token is only used later by `styxctl deploy dns apply`, where it becomes a Kubernetes Secret.
 
 ---
 
@@ -138,28 +174,62 @@ styxctl sysprep safe apply local     # apply without prompt
 styxctl sysprep check local          # re-check until READY
 ```
 
-### 3. Install the foundation (MVP2)
+### 3. Configure the cluster
 
 ```bash
 cp styx.yaml.example styx.yaml
-styxctl config validate          # auto-detects IPs when bootstrap: true
+styxctl config show
+styxctl config validate
+```
 
+For a real cross-site deployment, set explicit, unique node `hostname:` values. Do **not** derive `{node}.duckdns.org` from bare names unless you own those subdomains.
+
+### 4. Install the foundation (MVP2)
+
+Run local install on every gateway:
+
+```bash
 styxctl install plan local
-styxctl install apply local      # adds gateway SSH on 47810 alongside port 22
+styxctl install apply local
+styxctl install status local
+```
 
+Then from the init-server/operator path:
+
+```bash
 styxctl install plan cluster
-styxctl install apply cluster    # cluster SSH on gateway.ssh_port (47810)
+styxctl install apply cluster
+styxctl install doctor cluster
+```
+
+### 5. Bring up the current MVP3 pieces
+
+On the init-server after the cluster is healthy:
+
+```bash
+styxctl mesh plan
+styxctl mesh up
+
+styxctl deploy dns plan
+export DUCKDNS_TOKEN=...
+styxctl deploy dns apply
+
+styxctl status
+styxctl doctor
 ```
 
 ### Requirements
 
-| Requirement | MVP1 | MVP2 |
-|-------------|------|------|
+| Requirement | MVP1 | MVP2/MVP3 |
+|-------------|------|-----------|
 | Linux gateway host | Yes | Yes |
 | Python 3.10+ (for CLI) | Yes | Yes |
 | `sudo` (non-interactive for mutating commands) | Recommended | Required |
-| `ss` / `iproute2` | Recommended | Installed by MVP2 |
-| Passwordless SSH to configured nodes | No | Required for `install cluster` |
+| `ss` / `iproute2` | Recommended | Installed or verified by MVP2 |
+| WireGuard tools | No | Required for install/mesh |
+| `curl` + CA certificates | No | Required for install, IP detection, DuckDNS updater |
+| Passwordless/key-based SSH to configured nodes | No | Required for cluster install/status/mesh/uninstall |
+| `kubectl` on init-server | No | Required for `deploy dns`, `status`, and `doctor` |
 | `styx.yaml` | Optional | Required |
 
 ---
@@ -168,12 +238,12 @@ styxctl install apply cluster    # cluster SSH on gateway.ssh_port (47810)
 
 | Milestone | Status | Scope |
 |-----------|--------|-------|
-| **MVP1** | Shipped | Read-only inventory, port scan, safe remediation |
-| **MVP2** | Shipped | k3s install, `Styx` WireGuard interface, multi-node cluster join |
-| **MVP3** | Planned | `sysprep reset` / `nuke`, `deploy`, DuckDNS/external DNS pod, `gateway`, `status`, `doctor` |
-| **MVP4** | Planned | Remote sysprep (`check all` / `check node`), `client`, `siem` |
+| **MVP1** | Shipped | Read-only inventory, reserved port scan, safe remediation |
+| **MVP2** | Shipped | k3s install, `Styx` WireGuard interface, gateway SSH, multi-node cluster join, uninstall |
+| **MVP3** | In progress | `mesh plan/up`, `deploy dns plan/apply`, top-level `status` / `doctor`; remaining `gateway`, `sysprep reset` / `nuke` deferred |
+| **MVP4** | Planned | Remote sysprep (`check all` / `check node`), roadwarrior `client`, SIEM |
 
-Placeholder commands exist today and print a clear "not implemented" message — they never mutate the host.
+Placeholder commands still print a clear "not implemented" message and make no changes.
 
 ---
 
@@ -190,17 +260,17 @@ styxctl sysprep safe apply local
 styxctl sysprep check local
 ```
 
-1. **Check** — read-only inventory and port scan
-2. **Plan** — preview safe cleanup actions (no changes)
-3. **Apply** — execute safe cleanup (or use `sysprep safe local` for interactive confirm)
-4. **Re-check** — repeat until `READY` or `READY_WITH_WARNINGS`
+1. **Check** - read-only inventory and port scan
+2. **Plan** - preview safe cleanup actions
+3. **Apply** - execute safe cleanup, or use `sysprep safe local` for interactive confirm
+4. **Re-check** - repeat until `READY` or `READY_WITH_WARNINGS`
 
 ### What `sysprep check local` collects
 
 - Host identity, OS, kernel, architecture, boot time
 - Network interfaces, default route, DNS resolvers, LAN IPs
-- WireGuard interfaces (including `wg0` preservation status)
-- Processes and systemd units listening on ports `47800–47850`
+- WireGuard interfaces, including `wg0` preservation status
+- Processes and systemd units listening on ports `47800-47850`
 - k3s / flannel / CNI artifacts and leftover services
 - Sudo availability, time sync, disk and memory snapshot
 - Detected binaries (`k3s`, `kubectl`, `wg`, `ss`, etc.)
@@ -211,7 +281,7 @@ styxctl sysprep check local
 |--------|---------|-----------|
 | `READY` | Clear to proceed to MVP2 | `0` |
 | `READY_WITH_WARNINGS` | Usable; review warnings first | `0` |
-| `BLOCKED` | Critical ports `47800–47808` occupied | `1` |
+| `BLOCKED` | Critical ports `47800-47808` occupied | `1` |
 
 When blocked, try `styxctl sysprep safe plan local` to preview cleanup, or `styxctl ports check local` to inspect conflicts.
 
@@ -228,12 +298,12 @@ When blocked, try `styxctl sysprep safe plan local` to preview cleanup, or `styx
 - `wg0` or its configuration
 - LAN networking, SSH, BIND, Caddy, MooseFS, home directories
 - Unsafe port conflicts (non-Styx/k3s processes)
-- k3s data directories (reserved for MVP3 `reset` / `nuke`)
+- k3s data directories (reserved for future reset/nuke work)
 
 ### Port commands
 
 ```bash
-styxctl ports check local          # conflicts in 47800–47850
+styxctl ports check local          # conflicts in 47800-47850
 styxctl ports list local           # full port plan
 styxctl ports clear plan local     # preview safe port cleanup
 styxctl ports clear apply local    # apply safe port cleanup
@@ -250,14 +320,13 @@ After MVP1 reports `READY` or `READY_WITH_WARNINGS`, MVP2 installs the local fou
 
 ```bash
 cp styx.yaml.example styx.yaml
-# Set each node's public_ipv4 (router WAN) and lan_ip when co-located
 styxctl config validate
 
 # Per-node local install (run on every gateway)
 styxctl install plan local
 styxctl install apply local
 
-# Cluster join over each node's public_ipv4 (router port forwards to 47810/47811)
+# Cluster join from the init-server/operator path
 styxctl install plan cluster
 styxctl install apply cluster
 
@@ -270,13 +339,14 @@ styxctl install doctor cluster
 
 Each node uses:
 
-- `public_ipv4` — router WAN IP with 1:1 port forwards to this Pi (`47810` SSH, `47811` k3s API) for bootstrap connectivity when this node is the site entrypoint or a remote node
-- `lan_ip` — optional LAN address for co-located nodes sharing one `public_ipv4`; used for ProxyJump SSH and same-site k3s joins
-- `site_entrypoint` — optional override marking the single host per shared-WAN site that owns port-forwards (election sets this automatically)
-- `hostname` — optional stable name (used in TLS SANs when set; external DNS publish is MVP3)
-- `ipv4` / `ipv6` — mesh addresses passed to k3s as `--node-ip` (internal overlay, not your LAN or public IP)
+- `hostname` - explicit DuckDNS/FQDN name for remote discovery and TLS SANs
+- `public_ipv4` - router WAN IP with 1:1 forwards for the site entrypoint or remote node
+- `public_ipv6` - optional public IPv6, also published by DuckDNS when available
+- `lan_ip` - LAN address for co-located nodes sharing one `public_ipv4`
+- `site_entrypoint` - optional static marker for the node that owns router forwards
+- `ipv4` / `ipv6` - mesh addresses passed to k3s as `--node-ip`
 
-Bootstrap order: local networking install -> LAN leader election (if enabled) -> cluster join over `public_ipv4` -> steady-state checks over public IPs and mesh addresses.
+Bootstrap order: config enrichment -> local install -> LAN leader election (if enabled) -> cluster join -> status/doctor checks -> mesh/DNS deploy.
 
 ### LAN leader election
 
@@ -290,7 +360,7 @@ cluster:
     collect_sec: 3
 ```
 
-Before `install plan local`, `install apply local`, and `install apply cluster`, styxctl:
+Before local/cluster install planning and apply paths, `styxctl`:
 
 1. Broadcasts on the local subnet (UDP port `47802`, Styx director API)
 2. Collects peer announcements from other Styx nodes on the same LAN
@@ -298,11 +368,18 @@ Before `install plan local`, `install apply local`, and `install apply cluster`,
 4. Scores each remaining peer by RAM, CPU cores, architecture, disk, and existing k3s
 5. Elects the strongest configured peer on this LAN as leader
 
-If the configured `init-server` is on the same LAN and two or more peers are present, the elected leader is promoted to `init-server` and the previous init-server is demoted to `server`. The elected leader is also marked as that site's **entrypoint** (the single host that owns router port-forwards). If the init-server lives on a different site, election still picks a LAN leader for visibility but k3s roles stay unchanged.
+If the configured `init-server` is on the same LAN and two or more peers are present, the elected leader is promoted to `init-server` and the previous init-server is demoted to `server` for the effective plan. If the init-server lives on a different site, election still picks a LAN leader for visibility, but k3s roles stay unchanged.
+
+Preview or inspect election without installing:
+
+```bash
+styxctl install plan lan
+styxctl install status lan
+```
 
 ### Co-located nodes behind one WAN IP
 
-Homelab setups often have two or more gateway Pis on the same LAN behind one router. They share a single `public_ipv4` because the router can only forward each external port (`47810` SSH, `47811` k3s API) to one host. Enable `cluster.leader: lan-elected` and set each Pi's `lan_ip`:
+Homelab setups often have two or more gateway Pis on the same LAN behind one router. They share a single `public_ipv4` because the router can only forward each external port (`47810` SSH, `47811` k3s API) to one host. Enable `cluster.leader: lan-elected` and set `lan_ip` values explicitly if you orchestrate from outside the LAN.
 
 ```yaml
 cluster:
@@ -313,14 +390,15 @@ nodes:
     public_ipv4: 71.104.114.70
     lan_ip: 192.168.1.10
     role: init-server
-    # ...
+    hostname: pipegasus.duckdns.org
   - name: kraken
-    public_ipv4: 71.104.114.70   # same WAN IP — allowed with lan-elected
+    public_ipv4: 71.104.114.70   # same WAN IP is allowed with lan-elected
     lan_ip: 192.168.1.11
     role: server
+    hostname: pikraken.duckdns.org
 ```
 
-Election picks the site **entrypoint** (strongest peer on that LAN). Only the entrypoint needs inbound port-forwards; co-located peers join k3s outbound through NAT and are reached over the LAN:
+Election picks the site **entrypoint**. Only the entrypoint needs inbound port-forwards; co-located peers join k3s outbound through NAT and are reached over the LAN:
 
 | From | To | Mechanism |
 |------|-----|-----------|
@@ -330,39 +408,29 @@ Election picks the site **entrypoint** (strongest peer on that LAN). Only the en
 | node, same site | init-server | k3s join `https://<init lan_ip>:47811` |
 | node, different site | init-server | k3s join `https://<init public_ipv4>:47811` |
 
-When `styxctl install apply cluster` runs on the shared LAN, election auto-fills missing `lan_ip` values from peer discovery. If you orchestrate from a different site, set `lan_ip` explicitly for every co-located node.
-
-Set `site_entrypoint: true` on exactly one node per shared-WAN site when using `cluster.leader: static` instead of election.
-
-Cluster health checks use the same site-aware routing. `styxctl install status cluster` and `styxctl install doctor cluster` resolve co-located peers through the elected entrypoint, fall back to the site's `init-server` when election data is unavailable, and report node validation warnings without blocking otherwise healthy plans.
-
-Preview or inspect election without installing:
-
-```bash
-styxctl install plan lan
-styxctl install status lan
-```
+When `cluster.bootstrap: true`, `styxctl` can fill the local node's public/LAN IPs and resolve remote `hostname` values. It can also scan the LAN for colocated peers listening on gateway SSH. If you run orchestration from another site, set `lan_ip` explicitly for every colocated node.
 
 ### Port forwards (router)
 
-Forward the Styx reserved range on each gateway node's router to that node:
+Forward these Styx ports to the site entrypoint:
 
 | External (WAN) | Forward to node | Service |
 |---|---|---|
 | `47800/udp` | `47800/udp` | Styx WireGuard |
-| `47810/tcp` | `47810/tcp` | SSH (sshd listens on Pi) |
-| `47811/tcp` | `47811/tcp` | k3s API (k3s listens on Pi) |
+| `47810/tcp` | `47810/tcp` | Styx gateway SSH |
+| `47811/tcp` | `47811/tcp` | k3s API |
 
-`install apply local` adds a drop-in so sshd also listens on `gateway.ssh_port` and `gateway.k3s_api_port` — **port 22 stays up** for admin and GitHub runner access. Router forwards are 1:1 — same port outside and inside. styxctl connects to `public_ipv4:47810` for cluster SSH and `https://public_ipv4:47811` for k3s join.
+Router forwards are 1:1: same port outside and inside. `styxctl` connects to `public_ipv4:47810` for cluster SSH and `https://public_ipv4:47811` for k3s joins. Port `22` remains for admin and GitHub runner access.
 
 ### What MVP2 installs
 
 | Component | Detail |
 |-----------|--------|
 | **Packages** | `iproute2`, WireGuard tools, `curl`, `ca-certificates` via supported `apt`, `dnf`, or `yum` hosts |
-| **k3s** | Server or agent role per `styx.yaml`; dual-stack pod/service CIDRs |
+| **k3s** | Server or agent role per `styx.yaml`; dual-stack pod/service CIDRs; gateway API port on servers |
 | **WireGuard** | `Styx` interface on UDP `47800` (never `wg0`) |
-| **Firewall** | Minimal allowance for Styx WireGuard UDP when `ufw`, `firewalld`, or `nftables` is detected |
+| **Gateway SSH** | sshd drop-in for `gateway.ssh_port` (`47810`) while port `22` remains active |
+| **Firewall** | Minimal allowance for Styx WireGuard, gateway SSH, and k3s API where supported |
 | **Preservation** | `wg0` config hash/mtime snapshotted before and verified after |
 
 ### Install gates
@@ -370,19 +438,19 @@ Forward the Styx reserved range on each gateway node's router to that node:
 Install is **blocked** when:
 
 - `styx.yaml` is missing or `INVALID`
-- Sysprep status is `BLOCKED` on ports `47800–47808`
+- Sysprep status is `BLOCKED` on ports `47800-47808`
 - Non-interactive `sudo` is unavailable for mutating install steps
-- Cluster join cannot reach remote nodes over SSH
+- Cluster join cannot reach remote nodes over gateway SSH
 
 Always run `install plan` before `install apply`. Interactive commands (`install local`, `install cluster`) ask for confirmation; `install apply` variants skip the prompt.
 
 ### Cluster install order
 
-1. `init-server` node — `curl -sfL https://get.k3s.io` with `--cluster-init` and network CIDRs
-2. `server` nodes — join with token from init-server
-3. `agent` nodes — join as k3s agents
+1. `init-server` node - `curl -sfL https://get.k3s.io` with `--cluster-init` and network CIDRs
+2. `server` nodes - join with token from init-server
+3. `agent` nodes - join as k3s agents
 
-Remote steps SSH as each node's Linux user (defaults to the node `name`, e.g. `pegasus@pegasus`). styxctl connects on `gateway.ssh_port` (`47810`) and joins k3s at `https://<public_ipv4>:47811`. Ensure key-based SSH works between every node. You can set `cluster.join_token` when a non-init node must join without fetching the token from the init-server over SSH.
+Remote steps SSH as each node's Linux user (defaults to the node `name`). `styxctl` connects on `gateway.ssh_port` (`47810`) and joins k3s at `https://<init host>:47811`. You can set `cluster.join_token` when a non-init node must join without fetching the token from the init-server over SSH.
 
 ### Health checks
 
@@ -395,7 +463,50 @@ Remote steps SSH as each node's Linux user (defaults to the node `name`, e.g. `p
 - `wg0` preserved unchanged
 - Critical ports clear
 
-`install doctor cluster` checks reachability and k3s status for every configured node.
+`install doctor cluster` checks reachability and k3s status for every configured node using the same site-aware SSH rules.
+
+---
+
+## MVP3: Mesh, DNS, status, and doctor
+
+MVP3 is in progress. The backbone mesh, DuckDNS publisher, and cluster status/doctor surfaces exist today.
+
+### Backbone mesh
+
+```bash
+styxctl mesh plan
+styxctl mesh up
+```
+
+The current mesh is hub-and-spoke:
+
+- the `init-server` is the WireGuard hub
+- every other k3s node is a spoke
+- spokes route the whole Styx supernet (`10.0.0.0/14` and `fd00:cafe::/48`) through the hub
+- spokes use `PersistentKeepalive = 25`
+- each node keeps its own private key
+- `mesh up` collects only public keys over gateway SSH, then asks each node to render its own `[Peer]` blocks with `mesh apply-local`
+
+`mesh plan` is safe and render-only. `mesh up`, `mesh pubkey-local`, and `mesh apply-local` can write or reload the local `Styx` WireGuard config.
+
+### Per-site DuckDNS publishers
+
+```bash
+styxctl deploy dns plan
+export DUCKDNS_TOKEN=...
+styxctl deploy dns apply
+```
+
+`deploy dns` creates one updater Deployment per site, pinned to that site's leader. Each publisher updates the DuckDNS subdomains derived from node `hostname` values, using the site's public IPv4 and IPv6. The token is read from `$DUCKDNS_TOKEN` at apply time and stored in the cluster as a Secret; it is never written to `styx.yaml`.
+
+### Cluster status and doctor
+
+```bash
+styxctl status
+styxctl doctor
+```
+
+These top-level commands combine k3s node health with Styx workload state. Today that workload state is the DuckDNS publisher in the `styx-system` namespace. Missing optional workloads are reported as hints; node-level cluster issues make `doctor` exit non-zero.
 
 ---
 
@@ -409,16 +520,23 @@ styxctl config show
 styxctl config validate
 ```
 
-The shipped example is a minimal three-node layout (pegasus, kraken, thor) with `bootstrap: true`. Per node you only set:
+The shipped example is a live-deploy reference with `bootstrap: true`, explicit DuckDNS hostnames, a `dns:` block, and currently active/local nodes plus `thor` commented until it is reachable. In CI, the `nodes:` list is generated from runner labels; the checked-in example is not hand-maintained for the runner matrix.
 
-- `name` — must match the host's hostname
-- `role` — `init-server`, `server`, or `agent`
+Per node you normally set:
 
-SSH login user defaults to the node `name` (override with `user:` if needed). Passwordless SSH between nodes on **gateway port 47810** is required for cluster operations and CI.
+- `name` - node identity and default SSH login user
+- `role` - `init-server`, `server`, or `agent`
+- `hostname` - explicit, unique DuckDNS/FQDN name for remote discovery and DNS publishing
 
-`styxctl` auto-detects `public_ipv4` / `public_ipv6` (`curl -4` / `curl -6` on ifconfig.me) and `lan_ip` for co-located peers. Mesh overlay IPs assign from node order.
+Optional node fields:
 
-Styx ships with a fixed backbone IP plan (mesh, pod, service, and infra CIDRs). You do not configure those in `styx.yaml` — `styxctl` applies them automatically.
+- `user:` or `ssh_user:` - override the SSH login user
+- `public_ipv4` / `public_ipv6` - pin public addresses instead of discovering/resolving them
+- `lan_ip` - required when a colocated node must be reached from outside its LAN
+- `site_entrypoint: true` - static shared-WAN entrypoint when not using LAN election
+- `ipv4` / `ipv6` - override mesh IP assignment
+
+`styxctl` auto-detects the local public IPv4/IPv6 (`curl -4/-6 ifconfig.me`), local LAN IP, remote peer public IPs from explicit `hostname` values, and colocated LAN peers from gateway SSH scans when `cluster.bootstrap` is true.
 
 ### Example
 
@@ -431,15 +549,22 @@ cluster:
 nodes:
   - name: pegasus
     role: init-server
+    hostname: pipegasus.duckdns.org
+  - name: hydra
+    role: server
+    hostname: pihydra.duckdns.org
   - name: kraken
     role: agent
-  - name: thor
-    role: server
+    hostname: pikraken.duckdns.org
+
+dns:
+  provider: duckdns
+  interval_seconds: 300
 ```
 
-**Optional later:** `public_ipv4`, `lan_ip`, and DNS publish (not in the default example).
+**Name-collision warning:** do not infer DuckDNS names from bare node names. `atlas.duckdns.org` or `pegasus.duckdns.org` may be someone else's box. Always set the exact hostname you own.
 
-Built-in defaults (no YAML required):
+Built-in defaults:
 
 | Setting | Default |
 |---------|---------|
@@ -447,23 +572,26 @@ Built-in defaults (no YAML required):
 | LAN leader election | `lan-elected` on UDP `47802` |
 | WireGuard interface / port | `Styx` / `47800` |
 | Gateway SSH / k3s API ports | `47810` / `47811` |
+| IPv4 / IPv6 supernet | `10.0.0.0/14` / `fd00:cafe::/48` |
+| Mesh CIDR (v4 / v6) | `10.0.0.0/16` / `fd00:cafe:0::/48` |
+| Infra CIDR (v4 / v6) | `10.1.0.0/16` / `fd00:cafe:1::/56` |
 | Pod CIDR (v4 / v6) | `10.2.0.0/16` / `fd00:cafe:2::/56` |
 | Service CIDR (v4 / v6) | `10.3.0.0/16` / `fd00:cafe:3::/112` |
-| Mesh CIDR (v4 / v6) | `10.0.0.0/16` / `fd00:cafe:0::/48` |
+| Roadwarrior CIDR (v4 / v6) | `10.0.250.0/24` / `fd00:cafe:0:250::/64` |
 
 Config validation status:
 
 | Status | Meaning |
 |--------|---------|
 | `VALID` | Ready for MVP2 |
-| `VALID_WITH_WARNINGS` | Usable; e.g. no nodes defined yet |
+| `VALID_WITH_WARNINGS` | Usable; review warnings first |
 | `INVALID` | Blocking errors; fix before install |
 
 ---
 
 ## Reserved port plan
 
-Only ports `47800–47850` are managed by `styxctl`. Critical production ports `47800–47808` block MVP2 install when occupied.
+Only ports `47800-47850` are managed by `styxctl`. Critical production ports `47800-47808` block MVP2 install when occupied.
 
 | Port | Protocol | Purpose |
 |------|----------|---------|
@@ -479,15 +607,15 @@ Only ports `47800–47850` are managed by `styxctl`. Critical production ports `
 | 47809 | any | Reserved |
 | 47810 | TCP | SSH gateway listen |
 | 47811 | TCP | k3s API gateway listen |
-| 47812–47819 | any | Site/gateway spare |
-| 47820–47829 | any | Client/profile testing |
-| 47830–47839 | any | Development/debug |
-| 47840–47850 | any | Reserved future |
+| 47812-47819 | any | Site/gateway spare |
+| 47820-47829 | any | Client/profile testing |
+| 47830-47839 | any | Development/debug |
+| 47840-47850 | any | Reserved future |
 
-Planned WireGuard endpoint for production clients:
+Planned WireGuard endpoint style for production clients:
 
 ```ini
-Endpoint = styx-lab-init.example.com:47800
+Endpoint = pistyx.duckdns.org:47800
 ```
 
 ---
@@ -496,17 +624,21 @@ Endpoint = styx-lab-init.example.com:47800
 
 Styx is designed for gateway nodes that may already run critical services. `styxctl` enforces strict boundaries:
 
-| Command class | Mutates host? | Scope |
-|---------------|---------------|-------|
-| `sysprep check`, `ports check`, `ports list`, `config show`, `install plan`, `install status`, `install doctor`, `uninstall plan`, `report`, `version`, `completion` | No | Read-only host inspection |
-| `sysprep safe`, `ports clear`, `install apply`, `uninstall apply` | Yes | Only pre-identified safe targets |
-| `sysprep reset`, `sysprep nuke`, `deploy` | MVP3 | Not implemented yet |
+| Command class | Mutates host/cluster? | Scope |
+|---------------|-----------------------|-------|
+| `sysprep check`, `ports check`, `ports list`, `config show`, `config validate`, `install plan`, `install status`, `install doctor`, `uninstall plan`, `deploy dns plan`, `mesh plan`, `status`, `doctor`, `report`, `version`, `completion` | No host mutation | Read-only inspection, planning, rendering, reports, DNS/SSH/kubectl queries |
+| `sysprep safe`, `ports clear` | Yes | Only pre-identified safe targets |
+| `install apply`, `install local`, `install cluster` | Yes | Packages, k3s, `Styx` WireGuard, gateway SSH, Styx firewall allowances |
+| `deploy dns apply` | Yes | Kubernetes namespace, Secret, and per-site DuckDNS Deployments |
+| `mesh up`, `mesh pubkey-local`, `mesh apply-local` | Yes | `Styx` WireGuard key/config material and hub forwarding |
+| `uninstall apply`, `uninstall local`, `uninstall cluster` | Yes | Styx-managed k3s, WireGuard, SSH drop-in, firewall rules, and leftover artifacts |
+| `sysprep reset`, `sysprep nuke`, `gateway soon`, `client soon`, `siem soon` | Not implemented | Placeholder only |
 
-**`wg0` is sacred.** It is inventoried, reported, and hash-verified — never removed or modified by MVP1 or MVP2.
+**`wg0` is sacred.** It is inventoried, reported, and hash-verified - never removed or modified by MVP1 or MVP2.
 
 Read-only planning and reporting commands may write local artifacts under `reports/styx/`; they do not mutate gateway services or networking.
 
-Every mutating command follows **plan → confirm → apply**:
+Every interactive mutating command follows **plan -> confirm -> apply**:
 
 ```bash
 styxctl sysprep safe plan local     # dry-run
@@ -524,7 +656,16 @@ Discover commands with tab completion:
 styxctl <TAB>
 styxctl sysprep <TAB>
 styxctl install <TAB>
+styxctl mesh <TAB>
 ```
+
+### Root
+
+| Command | Description |
+|---------|-------------|
+| `version` | Print `styxctl` version |
+| `status` | Show cluster node health plus deployed Styx workloads |
+| `doctor` | Diagnose cluster health and print remediation hints |
 
 ### Sysprep
 
@@ -566,29 +707,45 @@ styxctl install <TAB>
 | `install doctor local` | Actionable local health diagnosis |
 | `install doctor cluster` | Site-aware cluster-wide health diagnosis |
 
+### Mesh
+
+| Command | Description |
+|---------|-------------|
+| `mesh plan` | Preview hub-and-spoke topology and rendered configs |
+| `mesh up` | Collect public keys, apply peer configs, and enable hub forwarding |
+| `mesh pubkey-local` | Ensure local WireGuard keypair exists and print public key |
+| `mesh apply-local` | Apply this node's config from a roster generated by `mesh up` |
+
+### Deploy DNS
+
+| Command | Description |
+|---------|-------------|
+| `deploy dns plan` | Render DuckDNS publisher manifests without applying them |
+| `deploy dns apply` | Deploy per-site DuckDNS publishers; reads `$DUCKDNS_TOKEN` |
+
 ### Uninstall
 
-Removes only what Styx installed: k3s, the `Styx` WireGuard interface (including `wg-quick@Styx.service` if enabled), gateway SSH drop-in, and Styx firewall allowances. **Does not** remove persistent runner configs, `wg0`, other WireGuard tunnels, GitHub Actions runner registration, or OS packages.
+Removes only what Styx installed: k3s, the `Styx` WireGuard interface, gateway SSH drop-in, and Styx firewall allowances. **Does not** remove persistent runner configs, `wg0`, other WireGuard tunnels, GitHub Actions runner registration, port `22`, or OS packages.
 
 | Command | Description |
 |---------|-------------|
 | `uninstall plan local` | Preview local removal steps and preserved configs |
-| `uninstall plan cluster` | Preview cluster-wide removal (per-node pending steps) |
+| `uninstall plan cluster` | Preview cluster-wide removal |
 | `uninstall local` | Local uninstall with confirm |
 | `uninstall apply local` | Local uninstall without confirm |
 | `uninstall cluster` | Cluster uninstall with confirm |
 | `uninstall apply cluster` | Cluster uninstall without confirm |
 
-On self-hosted runners, `/etc/styx/styx.yaml` is preserved so the next workflow run can reuse site-specific settings. **Uninstall removes only Styx artifacts in the reserved port range (47800–47850)** — including the `styx-gateway.conf` sshd drop-in — and leaves **port 22** listening for admin and GitHub runner access. Always run `uninstall plan` first to review **Will remove** vs **Will preserve** sections.
+On self-hosted runners, `/etc/styx/styx.yaml` is preserved so the next workflow run can reuse site-specific settings.
 
 ```bash
-styxctl uninstall plan local      # dry-run: shows preserved /etc/styx/styx.yaml, wg0, runner
-styxctl uninstall apply local     # apply without prompt
-styxctl uninstall plan cluster    # preview all nodes before CI teardown
-styxctl uninstall apply cluster   # used by Styx cluster E2E workflow
+styxctl uninstall plan local
+styxctl uninstall apply local
+styxctl uninstall plan cluster
+styxctl uninstall apply cluster
 ```
 
-### Config, sysprep reports, and shell
+### Config, reports, and shell
 
 | Command | Description |
 |---------|-------------|
@@ -596,19 +753,16 @@ styxctl uninstall apply cluster   # used by Styx cluster E2E workflow
 | `config validate` | Validate config; exit `1` if invalid |
 | `report show [hostname]` | Display latest sysprep report |
 | `report json [hostname]` | Print sysprep report as JSON |
-| `version` | Print `styxctl` version |
 | `completion bash\|zsh\|fish` | Print shell completion script |
+| `completion install` | Show shell completion install guidance |
 | `--install-completion` | Install completion for active shell |
 
 ### Future (placeholders)
 
 ```bash
-styxctl deploy soon      # MVP3
-styxctl gateway soon     # MVP3
-styxctl status soon      # MVP3
-styxctl doctor soon      # MVP3
-styxctl client soon      # MVP4
-styxctl siem soon        # MVP4
+styxctl gateway soon     # MVP3 placeholder
+styxctl client soon      # MVP4 placeholder
+styxctl siem soon        # MVP4 placeholder
 ```
 
 ---
@@ -627,6 +781,13 @@ styxctl siem soon        # MVP4
 ```text
 ./reports/styx/<hostname>/install-report.json
 ./reports/styx/<hostname>/install-report.txt
+```
+
+### Runner integration reports
+
+```text
+./reports/styx/runner-integration/<runner>-prerequisites.json
+./reports/styx/runner-integration/<runner>-connectivity.json
 ```
 
 Inspect saved sysprep reports:
@@ -651,7 +812,7 @@ styxctl sysprep safe apply local
 styxctl sysprep check local
 ```
 
-If a non-Styx process holds a critical port, stop it manually — MVP1 will not kill unsafe processes.
+If a non-Styx process holds a critical port, stop it manually. MVP1 will not kill unsafe processes.
 
 ### Install blocked: invalid config
 
@@ -659,7 +820,7 @@ If a non-Styx process holds a critical port, stop it manually — MVP1 will not 
 styxctl config validate
 ```
 
-Common fixes: set mesh IPs for k3s `--node-ip`, ensure exactly one `init-server`, port-forward `47810`/`47811`, and keep `wireguard.interface` as `Styx` (not `wg0`).
+Common fixes: ensure exactly one `init-server`, set explicit `hostname:` values for remote nodes, verify `47810`/`47811` port forwards, and keep `wireguard.interface` as `Styx` (not `wg0`).
 
 ### Install blocked: sudo unavailable
 
@@ -680,14 +841,35 @@ styxctl install apply local
 ### Cluster join failures
 
 ```bash
-# From init-server, verify SSH to each node hostname on gateway port 47810
-ssh -p 47810 pegasus@pegasus true
+# From the operator/init-server path, verify gateway SSH
+ssh -p 47810 <user>@<public-or-lan-host> true
 
 styxctl install status cluster
 styxctl install doctor cluster
 ```
 
 Ensure every node has completed `install apply local` before `install apply cluster`.
+
+### DuckDNS publisher absent
+
+```bash
+styxctl deploy dns plan
+export DUCKDNS_TOKEN=...
+styxctl deploy dns apply
+styxctl status
+```
+
+`deploy dns plan` needs no token. `deploy dns apply` must run where `kubectl` can apply to the cluster, normally the init-server.
+
+### Mesh plan renders, but mesh up fails
+
+```bash
+styxctl mesh plan
+styxctl install doctor cluster
+ssh -p 47810 <user>@<node> 'python3 -m styxctl.cli mesh pubkey-local'
+```
+
+`mesh up` needs gateway SSH to every node and WireGuard tools on each node.
 
 ### `wg0` preservation warning
 
@@ -708,6 +890,7 @@ python -m pip install -e ".[dev]"
 ```bash
 python3 .github/scripts/stage1-prerequisites.py
 python3 .github/scripts/stage2-connectivity.py
+python3 .github/scripts/summarize_reports.py reports/styx/runner-integration
 ```
 
 ### Project layout
@@ -719,12 +902,38 @@ src/styxctl/
   ports.py            # Reserved port scan and plan
   remediation.py      # Safe cleanup actions (MVP1)
   reports.py          # Sysprep report generation
-  config.py           # styx.yaml load and validate
-  nodes.py            # Cluster node parsing
-  install.py          # Local + cluster install (MVP2)
+  config.py           # styx.yaml load, defaults, and validate
+  bootstrap_config.py # Runtime public IP, DuckDNS, and LAN enrichment
+  bootstrap_mode.py   # Bootstrap-mode helper
+  nodes.py            # Cluster node parsing and connectivity helpers
+  network_plan.py     # Built-in CIDRs and flat mesh IP assignment
+  network_detect.py   # Public IP, DuckDNS resolve, LAN scan
+  gateway.py          # Gateway SSH / k3s API ports
+  install.py          # Local install, gates, health, LAN election integration
   k3s_cluster.py      # k3s cluster planning and SSH orchestration
+  lan_election.py     # LAN peer discovery and leader election
   install_report.py   # Install report generation
-styx.yaml.example     # Copy to styx.yaml (gitignored)
+  uninstall.py        # Local and cluster uninstall
+  dns_publish.py      # Per-site DuckDNS publisher manifests
+  cluster_status.py   # Top-level status / doctor workload checks
+  wireguard_mesh.py   # Hub-and-spoke WireGuard backbone
+styx.yaml.example     # Copy to styx.yaml (gitignored); CI regenerates nodes
+```
+
+```text
+.github/workflows/
+  ci.yml
+  styx-runners.yml
+  styx-cluster-e2e.yml
+  runner-smoke.yml
+
+.github/scripts/
+  generate_styx_config.py
+  runner_lib.py
+  stage1-prerequisites.py
+  stage2-connectivity.py
+  print_report.py
+  summarize_reports.py
 ```
 
 ---
@@ -733,50 +942,94 @@ styx.yaml.example     # Copy to styx.yaml (gitignored)
 
 Every pull request and push to `main` runs:
 
-1. **CI** (GitHub-hosted) — install package, `styxctl --help`, wheel build
-2. **Styx runner integration** (self-hosted) — **primary gate** on **pegasus, kraken, and thor**
+1. **CI** (GitHub-hosted) - package sanity, CLI help, `deploy dns plan`, `mesh plan`, wheel build
+2. **Styx runner integration** (self-hosted) - primary live gate with dynamic runner discovery and generated config
+
+Manual workflows:
+
+1. **Runner smoke** - quick online-runner ping
+2. **Styx cluster E2E** - destructive install -> join -> mesh -> DNS -> status/doctor -> uninstall
 
 ### Styx runner integration (primary)
 
-All three runners must be **online**. Each runs both stages:
+The workflow discovers online runners through the GitHub API, gates on role coverage, generates `styx.yaml` from runner labels, then runs one matrix leg per online targetable runner.
+
+Discovery requirements:
+
+- `RUNNER_API_TOKEN` can list repo runners
+- every targetable runner has its own name as a label
+- exactly one runner in the fleet has the `init-server` label
+- at least one `init-server` and one `agent` are online
+
+Pipeline:
 
 | Stage | What it checks |
 |-------|----------------|
-| **1 — prerequisites** | Identity, sudo, tools, sysprep, local `public_ipv4` (curl), gateway SSH on **47810** (Styx range only — never port 22) |
-| **2 — connectivity** | Discover peer IPs via gateway SSH, validate config, SSH from this runner to **every other node** on **47810** |
+| **discover** | Online targetable runners, exactly one init-server label, generated `styx.yaml` |
+| **uninstall** | Best-effort cleanup of prior local Styx state |
+| **1 - prerequisites** | Identity, passwordless sudo, tools, sysprep, gateway SSH on `47810`, local `public_ipv4` |
+| **2 - connectivity** | Config validation and SSH from each online runner to peers on `47810`; LAN identity mapping for colocated peers |
+| **summary** | Aggregates all stage JSON output |
 
-Uses `styx.yaml.example` copied to `styx.yaml`. JSON reports are written to `reports/styx/runner-integration/` and summarized in the workflow **Integration summary** job.
-
-```bash
-python3 .github/scripts/stage1-prerequisites.py
-python3 .github/scripts/stage2-connectivity.py
-python3 .github/scripts/summarize_reports.py   # read all stage JSON output
-```
+JSON reports are written to `reports/styx/runner-integration/` and uploaded as `styx-stage1-<runner>` / `styx-stage2-<runner>` artifacts.
 
 ### CI (GitHub-hosted)
 
-Package install + wheel build only.
+Package sanity only. It does not run a live cluster. It verifies:
 
-### Self-hosted runners (required)
+- `styxctl version`
+- root help and command help for current MVP3 surfaces
+- `deploy dns plan` renders per-site Deployment manifests
+- `mesh plan` renders hub-and-spoke WireGuard configs
+- wheel build
 
-| Runner | Site |
-|--------|------|
-| `pegasus` | Hub (co-located with kraken) |
-| `kraken` | Hub (co-located with pegasus) |
-| `thor` | Remote site |
+### Styx cluster E2E (manual, destructive)
 
-| Workflow | Trigger | Purpose |
-|----------|---------|---------|
-| **Styx runner integration** | Push / PR | **Primary gate** — stages 1 and 2 on all three runners |
-| **Runner smoke** | Manual | Quick online-runner ping |
-| **Styx cluster E2E** | Manual | Destructive install → join → uninstall |
+This is the only workflow that exercises runtime cluster behavior. It runs:
 
-View results in **Actions** → **Integration summary** (aggregates all stage JSON). Per-runner artifacts: `styx-stage1-<runner>`, `styx-stage2-<runner>`.
+1. preflight cluster uninstall (unless skipped)
+2. local install on configured runners
+3. cluster join
+4. `mesh plan` and `mesh up`
+5. `deploy dns plan` and `deploy dns apply`
+6. `status` and `doctor`
+7. teardown cluster uninstall (unless skipped)
+
+### Secrets
+
+| Secret | Purpose | Notes |
+|---|---|---|
+| `PIPASS` | sshpass password for SSH on `47810` in stage 2 | shared Pi login password |
+| `DUCKDNS_TOKEN` | DuckDNS record updates (`deploy dns apply`) | read into a Kubernetes Secret |
+| `RUNNER_API_TOKEN` | discover job lists runners | fine-grained PAT, `Administration: read`; `GITHUB_TOKEN` cannot list runners |
+
+### Runner labels
+
+Runner labels are the source of truth for CI. Each runner carries:
+
+- `self-hosted`, OS/arch labels such as `Linux`, `ARM64`
+- its own runner name, so `runs-on` can pin per machine
+- one or more role/capability labels from `init-server`, `server`, or `agent`
+
+Exactly one runner in the fleet may carry `init-server`, and at least one `agent` must be online for the primary integration gate.
+
+Re-label a runner and the next integration run regenerates `styx.yaml` automatically.
+
+---
+
+## Known issues and deferred work
+
+- **Bug:** `lan_election.parse_root_avail_kb` checks `len(parts) >= 4` but indexes `parts[5]`.
+- **Backbone done, site overlay deferred:** `mesh plan/up` builds the current hub-and-spoke backbone. Per-site `/24` carving, the second per-site WireGuard net, leader-to-styx uplinks, and movable `styx` hub behavior are not built yet.
+- **`pistyx` loop deferred:** DuckDNS has no GeoDNS. Fastest-site behavior needs client-measured routing or a server-side single-record repoint loop.
+- **MVP4 client deferred:** roadwarrior clients will eventually dial a specific site or `pistyx`, homed to the edge site they enter.
+- **Runtime verification is E2E-only:** per-push CI can render and sanity-check; live k3s behavior only runs in the manual cluster E2E workflow.
+- **Workflow verification gotcha:** after watching a GitHub run, verify the conclusion with `gh run view <id> --json conclusion`; wrapper commands can hide a failed `gh run watch`.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).
 
 Copyright (c) 2026 Brady Williams
