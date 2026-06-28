@@ -10,8 +10,6 @@ from typing import Any
 from .inventory import SystemInventory
 
 VALID_ROLES = frozenset({"init-server", "server", "agent"})
-LEADER_LAN_ELECTED = "lan-elected"
-CONNECTIVITY_BOOTSTRAP = "bootstrap"
 
 
 def resolve_hostname(hostname: str) -> str | None:
@@ -31,7 +29,7 @@ def node_dns_name(explicit_hostname: str | None) -> str | None:
     return None
 
 
-def node_hostname(config: dict[str, Any], node: ClusterNode) -> str | None:
+def node_hostname(node: ClusterNode) -> str | None:
     """Resolvable hostname: the node's explicit hostname (its DuckDNS name), if any."""
     return node_dns_name(node.hostname)
 
@@ -52,8 +50,8 @@ class ClusterNode:
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
 
-    def resolved_ipv4(self, config: dict[str, Any], *, mode: str = CONNECTIVITY_BOOTSTRAP) -> str | None:
-        host = node_connectivity_host(config, self, mode=mode)
+    def resolved_ipv4(self) -> str | None:
+        host = node_bootstrap_host(self)
         if not host:
             return None
         try:
@@ -71,7 +69,6 @@ class ClusterNode:
 
 
 def node_bootstrap_host(
-    config: dict[str, Any],
     node: ClusterNode,
     *,
     inventory: SystemInventory | None = None,
@@ -85,17 +82,6 @@ def node_bootstrap_host(
 
         return detect_public_ipv4()
     return None
-
-
-def node_connectivity_host(
-    config: dict[str, Any],
-    node: ClusterNode,
-    *,
-    mode: str = CONNECTIVITY_BOOTSTRAP,
-    inventory: SystemInventory | None = None,
-    local_node: ClusterNode | None = None,
-) -> str | None:
-    return node_bootstrap_host(config, node, inventory=inventory, local_node=local_node)
 
 
 def node_ssh_user(node: ClusterNode) -> str:
@@ -149,15 +135,6 @@ def parse_nodes(config: dict[str, Any]) -> list[ClusterNode]:
             )
         )
     return nodes
-
-
-def cluster_leader_mode(config: dict[str, Any] | None) -> str:
-    # Sites always elect their leader on the LAN; the `cluster.leader` option was removed.
-    return LEADER_LAN_ELECTED
-
-
-def lan_election_enabled(config: dict[str, Any] | None) -> bool:
-    return True
 
 
 def sites_by_public_ip(nodes: list[ClusterNode]) -> dict[str, list[ClusterNode]]:
@@ -246,18 +223,20 @@ def validate_nodes(
     seen_mesh_ips: set[str] = set()
     seen_single_site_hosts: set[str] = set()
     sites = sites_by_public_ip(nodes)
-    lan_elected = lan_election_enabled(config)
 
     for node in nodes:
         if node.role not in VALID_ROLES:
             errors.append(f"nodes.{node.name}.role: expected init-server, server, or agent")
 
-        host = node_bootstrap_host(
-            config or {},
-            node,
-            inventory=inventory,
-            local_node=local_node,
-        ) if config else node.public_ipv4
+        host = (
+            node_bootstrap_host(
+                node,
+                inventory=inventory,
+                local_node=local_node,
+            )
+            if config
+            else node.public_ipv4
+        )
         if not host:
             errors.append(
                 f"nodes.{node.name}: set public_ipv4 (router WAN IP with port forwards) for bootstrap connectivity"
@@ -280,7 +259,7 @@ def validate_nodes(
             election_lan_ips=election_lan_ips,
             election_leader=election_leader,
         )
-        if entrypoint is None and lan_elected and election_leader:
+        if entrypoint is None and election_leader:
             for site_node in site_nodes:
                 if site_node.name == election_leader:
                     entrypoint = site_node
@@ -296,19 +275,11 @@ def validate_nodes(
                 local_node=local_node,
             )
             if not effective_lan_ip:
-                if require_lan_ip or not lan_elected:
+                if require_lan_ip:
                     errors.append(
                         f"nodes.{site_node.name}: lan_ip is required for co-located nodes "
                         f"sharing public_ipv4 {public_ip}"
                     )
-
-        init_in_site = [site_node for site_node in site_nodes if site_node.role == "init-server"]
-        if len(init_in_site) == 1:
-            init_node = init_in_site[0]
-            if entrypoint is not None and init_node.name != entrypoint.name and not lan_elected:
-                errors.append(
-                    f"nodes.{init_node.name}: init-server in a shared-WAN site must be that site's entrypoint"
-                )
 
     from .network_plan import PISTYX_IPV4, PISTYX_IPV6
 
@@ -342,7 +313,7 @@ def validate_nodes_warnings(
     local_node: ClusterNode | None = None,
 ) -> list[str]:
     warnings: list[str] = []
-    if not nodes or not lan_election_enabled(config):
+    if not nodes:
         return warnings
 
     sites = sites_by_public_ip(nodes)
@@ -394,7 +365,7 @@ def identify_local_node(nodes: list[ClusterNode], inventory: SystemInventory, co
         if node.name.lower() in local_names:
             return node
         if config:
-            host = node_hostname(config, node)
+            host = node_hostname(node)
             if host:
                 host_short = host.split(".", 1)[0].lower()
                 if host_short in local_names or host.lower() in local_names:
@@ -459,7 +430,7 @@ def all_node_tls_sans(
         if effective_lan_ip and effective_lan_ip not in sans:
             sans.append(effective_lan_ip)
         if config:
-            host = node_hostname(config, node)
+            host = node_hostname(node)
             if host and host not in sans:
                 sans.append(host)
         for ip in node.all_ips():

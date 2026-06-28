@@ -14,11 +14,10 @@ from .gateway import k3s_join_url, k3s_gateway_listen_args, parse_gateway_ports
 from .lan_election import local_lan_subnet
 from .nodes import (
     ClusterNode,
-    CONNECTIVITY_BOOTSTRAP,
     all_node_tls_sans,
     init_server_node,
     is_colocated,
-    node_connectivity_host,
+    node_bootstrap_host,
     node_effective_lan_ip,
     node_hostname,
     node_ssh_user,
@@ -132,10 +131,8 @@ def _node_ssh_connection(
 
     if not is_colocated(node, nodes) or (entrypoint is not None and node.name == entrypoint.name):
         host = (
-            node_connectivity_host(
-                config,
+            node_bootstrap_host(
                 node,
-                mode=CONNECTIVITY_BOOTSTRAP,
                 inventory=inventory,
                 local_node=local_node,
             )
@@ -349,7 +346,7 @@ def build_cluster_plan(
             if join_host:
                 node_join_url = k3s_join_url(join_host, gateway)
 
-        resolved = node.resolved_ipv4(config, mode=CONNECTIVITY_BOOTSTRAP)
+        resolved = node.resolved_ipv4()
         env, args, display = k3s_install_spec(
             config,
             node,
@@ -617,11 +614,11 @@ def assess_cluster_nodes(
             port=connection.port,
             jump=connection.jump,
         )
-        resolved = node.resolved_ipv4(config, mode=CONNECTIVITY_BOOTSTRAP)
+        resolved = node.resolved_ipv4()
         entry = {
             "name": node.name,
             "role": node.role,
-            "hostname": node_hostname(config, node),
+            "hostname": node_hostname(node),
             "public_ipv4": node.public_ipv4,
             "ipv4": node.ipv4,
             "ipv6": node.ipv6,

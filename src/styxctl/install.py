@@ -35,7 +35,6 @@ from .k3s_cluster import (
 )
 from .lan_election import LanElectionResult, apply_lan_election_roles, resolve_lan_leadership, run_lan_election
 from .nodes import (
-    CONNECTIVITY_BOOTSTRAP,
     ClusterNode,
     identify_local_node,
     init_server_node,

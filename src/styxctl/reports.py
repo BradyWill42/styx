@@ -121,58 +121,6 @@ def _block_or_none(lines: list[str], none_text: str = "none") -> str:
     return "\n".join(f"  {line}" for line in lines)
 
 
-def _format_detected(inventory: SystemInventory) -> list[str]:
-    interface_names = set(inventory.interface_names)
-    wg_interfaces = set(inventory.wireguard_interfaces)
-    detected: list[str] = []
-    k3s_path = inventory.detected_binaries.get("k3s")
-    detected.append(f"k3s: {k3s_path if k3s_path else 'not installed'}")
-    detected.append(f"containerd: {inventory.detected_binaries.get('containerd') or 'not installed'}")
-    detected.append(f"Docker: {inventory.detected_binaries.get('docker') or 'not installed'}")
-    detected.append(f"Wazuh: {inventory.detected_binaries.get('wazuh-control') or inventory.detected_binaries.get('wazuh-agentd') or 'not installed'}")
-    detected.append(f"watchdog: {inventory.detected_binaries.get('watchdog') or 'not installed'}")
-    detected.append(f"wg0: {'present, preserved' if 'wg0' in interface_names or 'wg0' in wg_interfaces else 'absent'}")
-    detected.append(f"Styx interface: {_present_absent('Styx' in interface_names or 'Styx' in wg_interfaces)}")
-    detected.append(f"cni0: {_present_absent('cni0' in interface_names)}")
-    detected.append(f"flannel.1: {_present_absent('flannel.1' in interface_names)}")
-    detected.append(f"flannel-v6.1: {_present_absent('flannel-v6.1' in interface_names)}")
-    detected.append(f"firewall backend: {inventory.firewall_backend.get('preferred', 'unknown')}")
-    return detected
-
-
-def _format_ports(inventory: SystemInventory) -> list[str]:
-    lines: list[str] = [f"Range: {RESERVED_PORT_START}-{RESERVED_PORT_END}"]
-
-    for port in sorted(PORT_PLAN):
-        protocol = planned_protocol(port)
-        conflicts = conflicts_for_port(inventory.ports.conflicts, port)
-        if conflicts:
-            for conflict in conflicts:
-                owner = conflict.process_name or "unknown process"
-                pid = f" pid={conflict.pid}" if conflict.pid else ""
-                unit = f" unit={conflict.systemd_unit}" if conflict.systemd_unit else ""
-                safe = "yes" if conflict.safe_to_stop else "no"
-                lines.append(
-                    f"{port}/{conflict.protocol}: occupied by {owner}{pid}{unit} safe_to_stop={safe}"
-                )
-        else:
-            lines.append(f"{port}/{protocol}: free ({port_purpose(port)})")
-
-    extra_conflicts = [conflict for conflict in inventory.ports.conflicts if conflict.port not in PORT_PLAN]
-    if extra_conflicts:
-        lines.append("Additional occupied reserved ports:")
-        for conflict in extra_conflicts:
-            owner = conflict.process_name or "unknown process"
-            pid = f" pid={conflict.pid}" if conflict.pid else ""
-            unit = f" unit={conflict.systemd_unit}" if conflict.systemd_unit else ""
-            safe = "yes" if conflict.safe_to_stop else "no"
-            lines.append(
-                f"{conflict.port}/{conflict.protocol}: occupied by {owner}{pid}{unit} "
-                f"purpose={port_purpose(conflict.port)} safe_to_stop={safe}"
-            )
-    return lines
-
-
 def render_sysprep_text(report: dict[str, Any]) -> str:
     inventory_dict = report["inventory"]
     # The report data is JSON-friendly; the original object is not available here.

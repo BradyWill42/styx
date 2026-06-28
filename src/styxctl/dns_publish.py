@@ -86,7 +86,7 @@ def site_publishers(config: dict[str, Any]) -> list[SitePublisher]:
     # Resolve each node's DuckDNS hostname to a public IP so colocated nodes group together.
     for node in nodes:
         if not node.public_ipv4:
-            resolved = resolve_dns_ipv4(node_hostname(config, node) or "")
+            resolved = resolve_dns_ipv4(node_hostname(node) or "")
             if resolved:
                 node.public_ipv4 = resolved
 
@@ -102,7 +102,7 @@ def site_publishers(config: dict[str, Any]) -> list[SitePublisher]:
         leader = site_entrypoint_for(site_nodes[0], nodes) or site_nodes[0]
         domains: list[str] = []
         for node in site_nodes:
-            sub = _subdomain(node_hostname(config, node))
+            sub = _subdomain(node_hostname(node))
             if sub and sub not in domains:
                 domains.append(sub)
         if egress_sub and holder is not None and any(n.name == holder.name for n in site_nodes):

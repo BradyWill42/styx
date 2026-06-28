@@ -43,7 +43,7 @@ Styx is a homelab and small-site platform that combines:
 - **k3s** for lightweight Kubernetes orchestration across gateway nodes
 - **Dual-stack WireGuard** (`Styx` interface on UDP `47800`) for the current backbone mesh, separate from any existing `wg0` tunnel
 - **Reserved service ports** (`47800-47850`) for gateway APIs, agents, diagnostics, SSH, k3s API, metrics, and future services
-- **Declarative cluster config** in `styx.yaml`: nodes, roles, hostnames, site topology, DNS publishing, and future client/SIEM work
+- **Declarative cluster config** in `styx.yaml`: nodes, roles, hostnames, site topology, DNS publishing, and client profile defaults
 - **Site-aware routing** for multiple Pis on one LAN behind one router, using LAN leader election and ProxyJump when needed
 
 `styxctl` is the operator-facing tool that drives each phase. It collects inventory, remediates only what is provably safe, installs k3s with the built-in Styx IP plan, brings up the hub-and-spoke WireGuard backbone, and writes human-readable plus machine-readable reports along the way.
@@ -82,7 +82,7 @@ flowchart TB
     subgraph future["MVP4+ - Deferred"]
         SITEWG["Per-site WG nets"]
         PISTYX["pistyx quickest-site loop"]
-        CLIENT["Roadwarrior client tool"]
+        CLIENT["Client automation"]
         SIEM["SIEM integration"]
     end
 
@@ -242,7 +242,7 @@ styxctl doctor
 | **MVP1** | Shipped | Read-only inventory, reserved port scan, safe remediation |
 | **MVP2** | Shipped | k3s install, `Styx` WireGuard interface, gateway SSH, multi-node cluster join, uninstall |
 | **MVP3** | In progress | `mesh plan/up`, `deploy dns plan/apply`, top-level `status` / `doctor`; remaining `gateway`, `sysprep reset` / `nuke` deferred |
-| **MVP4** | Planned | Remote sysprep (`check all` / `check node`), roadwarrior `client`, SIEM |
+| **MVP4** | Planned | Remote sysprep (`check all` / `check node`), automated client registration, SIEM |
 
 Placeholder commands still print a clear "not implemented" message and make no changes.
 
@@ -347,7 +347,7 @@ Each node uses:
 - `site_entrypoint` - optional static marker for the node that owns router forwards
 - `ipv4` / `ipv6` - mesh addresses passed to k3s as `--node-ip`
 
-Bootstrap order: config enrichment -> local install -> LAN leader election (if enabled) -> cluster join -> status/doctor checks -> mesh/DNS deploy.
+Bootstrap order: config enrichment -> local install -> LAN leader election (always on) -> cluster join -> status/doctor checks -> mesh/DNS deploy.
 
 ### LAN leader election
 
@@ -631,7 +631,7 @@ Styx is designed for gateway nodes that may already run critical services. `styx
 | `deploy dns apply` | Yes | Kubernetes namespace, Secret, and per-site DuckDNS Deployments |
 | `mesh up`, `mesh pubkey-local`, `mesh apply-local` | Yes | `Styx` WireGuard key/config material and hub forwarding |
 | `uninstall apply`, `uninstall local`, `uninstall cluster` | Yes | Styx-managed k3s, WireGuard, SSH drop-in, firewall rules, and leftover artifacts |
-| `sysprep reset`, `sysprep nuke`, `gateway soon`, `client soon`, `siem soon` | Not implemented | Placeholder only |
+| `sysprep reset`, `sysprep nuke`, `gateway soon`, `siem soon` | Not implemented | Placeholder only |
 
 **`wg0` is sacred.** It is inventoried, reported, and hash-verified - never removed or modified by MVP1 or MVP2.
 
@@ -760,7 +760,6 @@ styxctl uninstall apply cluster
 
 ```bash
 styxctl gateway soon     # MVP3 placeholder
-styxctl client soon      # MVP4 placeholder
 styxctl siem soon        # MVP4 placeholder
 ```
 
@@ -903,7 +902,6 @@ src/styxctl/
   reports.py          # Sysprep report generation
   config.py           # styx.yaml load, defaults, and validate
   bootstrap_config.py # Runtime public IP, DuckDNS, and LAN enrichment
-  bootstrap_mode.py   # Bootstrap-mode helper
   nodes.py            # Cluster node parsing and connectivity helpers
   network_plan.py     # Built-in CIDRs and flat mesh IP assignment
   network_detect.py   # Public IP, DuckDNS resolve, LAN scan
@@ -1018,10 +1016,9 @@ Re-label a runner and the next integration run regenerates `styx.yaml` automatic
 
 ## Known issues and deferred work
 
-- **Bug:** `lan_election.parse_root_avail_kb` checks `len(parts) >= 4` but indexes `parts[5]`.
 - **Backbone done, site overlay deferred:** `mesh plan/up` builds the current hub-and-spoke backbone. Per-site `/24` carving, the second per-site WireGuard net, leader-to-styx uplinks, and movable `styx` hub behavior are not built yet.
 - **`pistyx` loop deferred:** DuckDNS has no GeoDNS. Fastest-site behavior needs client-measured routing or a server-side single-record repoint loop.
-- **MVP4 client deferred:** roadwarrior clients will eventually dial a specific site or `pistyx`, homed to the edge site they enter.
+- **Client automation deferred:** `client config` renders usable roadwarrior profiles today; automatic registration and fastest-site selection are still deferred.
 - **Runtime verification is E2E-only:** per-push CI can render and sanity-check; live k3s behavior only runs in the manual cluster E2E workflow.
 - **Workflow verification gotcha:** after watching a GitHub run, verify the conclusion with `gh run view <id> --json conclusion`; wrapper commands can hide a failed `gh run watch`.
 

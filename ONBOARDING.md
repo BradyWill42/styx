@@ -18,7 +18,7 @@ Command-discovery-first Typer CLI. Status as of **2026-06-26**: MVP1 + MVP2 ship
 
 ## 2. Designed but deferred (the rest of the overlay)
 
-The **backbone** mesh above is built. Still **designed, not built**: the per-site `/24` carve (`assign_node_mesh_ips` is still FLAT), the second per-site WG net (intra-site full mesh), `styx`-as-movable-hub, the `pistyx` quickest-site loop, and the MVP4 `client` tool. These are only meaningfully testable once **pithor** is a real *remote* second site.
+The **backbone** mesh above is built. Still **designed, not built**: the per-site `/24` carve (`assign_node_mesh_ips` is still FLAT), the second per-site WG net (intra-site full mesh), `styx`-as-movable-hub, the `pistyx` quickest-site loop, and automated client registration. These are only meaningfully testable once **pithor** is a real *remote* second site.
 
 ## 3. Roadmap (ordered)
 
@@ -26,7 +26,7 @@ The **backbone** mesh above is built. Still **designed, not built**: the per-sit
 2. **Bring pithor online as a real remote 2nd site** → unblocks all cross-site mesh work.
 3. **Per-site WG nets** (backbone hub-and-spoke is done): per-site `/24` carve in `network_plan.assign_node_mesh_ips` (leader `.1`, site 0 = styx); the *second* WG net per node (intra-site full mesh + leader↔styx uplinks, NAT-aware); styx-as-movable-hub.
 4. **`pistyx` quickest-site loop** — client lands on current `pistyx` site → that site asks peers over styx if one is quicker (probe the client's WAN IP; fallback hop-count or client-side probe) → repoint `pistyx` → client reconnects.
-5. **MVP4 `client` tool** — roadwarrior clients dial a specific site or `pistyx`, homed to the site they enter.
+5. **Client automation** — roadwarrior config rendering exists; automatic registration and fastest-site selection are still deferred.
 6. **Remaining MVP3:** `gateway`, `sysprep reset` / `nuke`.
 
 ## 4. Architecture (two-tier overlay)
@@ -65,9 +65,8 @@ Each runner carries `self-hosted, Linux, ARM64`, **its own name** (so `runs-on` 
 
 ## 9. Known issues / cleanup
 
-- **Bug (unfixed):** `lan_election.parse_root_avail_kb` guards `len(parts) >= 4` but indexes `parts[5]` — a 1-line fix.
-- **Doc staleness:** the README "Continuous integration" section predates the label-driven matrix (still describes fixed role legs / "all three runners pegasus, kraken, thor").
-- **Minor:** `node_connectivity_host` carries vestigial `mode`/`config` indirection (works; could simplify).
+- **Runtime verification:** per-push CI can render and sanity-check; live k3s behavior still requires the manual `Styx cluster E2E` workflow.
+- **Deferred overlay work:** per-site `/24` carving, the second per-site WireGuard net, leader-to-styx uplinks, and the `pistyx` quickest-site loop are still planned.
 
 ## 10. Gotchas / hard-won lessons
 

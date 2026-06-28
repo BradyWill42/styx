@@ -20,6 +20,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "build>=1.2",
+  "pytest>=8.0",
 ]
 
 [project.scripts]
@@ -27,3 +28,8 @@ styxctl = "styxctl.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/styxctl"]
+
+[tool.pytest.ini_options]
+# Run `pytest` from the repo root with no install needed (CI also does `pip install -e .`).
+pythonpath = ["src"]
+testpaths = ["tests"]

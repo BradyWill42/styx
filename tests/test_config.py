@@ -1,7 +1,7 @@
 """Pure config resolution/validation tests — no inventory, no cluster, no pithor."""
 
 from styxctl.config import resolve_config, validate_config
-from styxctl.nodes import parse_nodes, pistyx_holder
+from styxctl.nodes import parse_nodes, pistyx_holder, validate_nodes
 
 
 def _base_config():
@@ -46,3 +46,33 @@ def test_pistyx_holder_follows_current_host():
     cfg = resolve_config({**_base_config(), "pistyx": {"current_host": "hydra"}})
     nodes = parse_nodes(cfg)
     assert pistyx_holder(cfg, nodes).name == "hydra"
+
+
+def test_colocated_election_leader_validation_has_no_toggle_dependency():
+    cfg = resolve_config(
+        {
+            "cluster": {"name": "styx"},
+            "nodes": [
+                {
+                    "name": "pegasus",
+                    "role": "init-server",
+                    "hostname": "pipegasus.duckdns.org",
+                    "public_ipv4": "203.0.113.1",
+                },
+                {
+                    "name": "hydra",
+                    "role": "agent",
+                    "hostname": "pihydra.duckdns.org",
+                    "public_ipv4": "203.0.113.2",
+                },
+                {
+                    "name": "atlas",
+                    "role": "agent",
+                    "hostname": "piatlas.duckdns.org",
+                    "public_ipv4": "203.0.113.2",
+                },
+            ],
+        }
+    )
+
+    assert validate_nodes(parse_nodes(cfg), cfg, election_leader="hydra") == []

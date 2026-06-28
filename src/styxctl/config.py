@@ -268,12 +268,6 @@ def validate_config(
     for message in gateway.validate():
         issues.append(ValidationIssue("error", "gateway", message))
 
-    siem = config.get("siem")
-    if siem is not None:
-        siem_map = _require_mapping(siem, "siem", issues)
-        if siem_map and siem_map.get("enabled") is True:
-            _require_str(siem_map.get("provider"), "siem.provider", issues)
-
     dns = config.get("dns")
     if dns is not None:
         dns_map = _require_mapping(dns, "dns", issues)
@@ -340,16 +334,11 @@ def format_config_summary(config: dict[str, Any], config_path: Path | None) -> s
         f"{wireguard.get('interface', 'unknown')} on port {wireguard.get('port', 'unknown')}"
     )
     lines.append(f"Gateway ports: SSH {gateway.ssh}, k3s API {gateway.k3s_api}")
-    siem = config.get("siem", {})
-    if siem:
-        provider = siem.get("provider")
-        provider_suffix = f" ({provider})" if provider else ""
-        lines.append(f"SIEM: {'enabled' if siem.get('enabled') else 'disabled'}{provider_suffix}")
     nodes = parse_nodes(config)
     if nodes:
         lines.append(f"Nodes: {len(nodes)} configured")
         for node in nodes:
-            host = node_hostname(config, node) or "-"
+            host = node_hostname(node) or "-"
             pub = node.public_ipv4 or "-"
             pub6 = node.public_ipv6 or "-"
             lan = node.lan_ip or "-"
