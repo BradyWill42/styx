@@ -1,0 +1,27 @@
+# Keep the repo LF-only so a Windows checkout doesn't show the whole tree as
+# "modified" (CRLF) and so shell scripts shipped to Linux/Raspberry Pi nodes
+# never carry CR bytes. Without this, `git status` was dirty on every file.
+* text=auto eol=lf
+
+# Belt-and-suspenders for the file types this project actually ships.
+*.py        text eol=lf
+*.pyi       text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.md        text eol=lf
+*.toml      text eol=lf
+*.cfg       text eol=lf
+*.ini       text eol=lf
+*.sh        text eol=lf
+*.example   text eol=lf
+LICENSE     text eol=lf
+
+# Binaries: never touch line endings.
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.gz        binary
+*.zip       binary
+*.whl       binary
