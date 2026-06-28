@@ -1,0 +1,117 @@
+name: Pistyx hosted smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: Floating pistyx hostname to probe
+        default: pistyx.duckdns.org
+        required: true
+      port:
+        description: Floating pistyx WireGuard UDP port
+        default: "47801"
+        required: true
+      require_wireguard:
+        description: Fail if the optional WireGuard handshake secrets are missing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  hosted-pistyx:
+    name: Hosted pistyx smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install styxctl
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Verify render-time move behavior
+        run: python .github/scripts/pistyx_hosted_smoke.py --render-checks
+
+      - name: Probe public pistyx DNS and UDP route
+        run: |
+          python .github/scripts/pistyx_hosted_smoke.py \
+            --public-probe \
+            --host "${{ inputs.host }}" \
+            --port "${{ inputs.port }}"
+
+      - name: Optional WireGuard handshake
+        env:
+          PISTYX_HOST: ${{ inputs.host }}
+          PISTYX_PORT: ${{ inputs.port }}
+          REQUIRE_WIREGUARD: ${{ inputs.require_wireguard }}
+          PISTYX_CI_CLIENT_PRIVATE_KEY: ${{ secrets.PISTYX_CI_CLIENT_PRIVATE_KEY }}
+          PISTYX_PUBLIC_KEY: ${{ secrets.PISTYX_PUBLIC_KEY }}
+          PISTYX_CI_CLIENT_ADDRESS: ${{ secrets.PISTYX_CI_CLIENT_ADDRESS }}
+          PISTYX_PING_TARGET: ${{ secrets.PISTYX_PING_TARGET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PISTYX_CI_CLIENT_PRIVATE_KEY}" ] || [ -z "${PISTYX_PUBLIC_KEY}" ]; then
+            if [ "${REQUIRE_WIREGUARD}" = "true" ]; then
+              echo "::error::PISTYX_CI_CLIENT_PRIVATE_KEY and PISTYX_PUBLIC_KEY are required for a real WireGuard handshake"
+              exit 1
+            fi
+            echo "::notice::Skipping real WireGuard handshake; configure PISTYX_CI_CLIENT_PRIVATE_KEY and PISTYX_PUBLIC_KEY to enable it"
+            exit 0
+          fi
+
+          sudo apt-get update
+          sudo apt-get install -y wireguard-tools iproute2 iputils-ping
+          sudo install -d -m 700 /etc/wireguard
+
+          address="${PISTYX_CI_CLIENT_ADDRESS:-10.0.250.254/32}"
+          target="${PISTYX_PING_TARGET:-10.0.250.1}"
+          ping_target="${target%%/*}"
+          allowed="${target}"
+          case "${allowed}" in
+            */*) ;;
+            *) allowed="${allowed}/32" ;;
+          esac
+          umask 077
+          cat > /tmp/pistyx-ci.conf <<EOF
+          [Interface]
+          PrivateKey = ${PISTYX_CI_CLIENT_PRIVATE_KEY}
+          Address = ${address}
+          MTU = 1420
+
+          [Peer]
+          PublicKey = ${PISTYX_PUBLIC_KEY}
+          Endpoint = ${PISTYX_HOST}:${PISTYX_PORT}
+          AllowedIPs = ${allowed}
+          PersistentKeepalive = 25
+          EOF
+          sudo mv /tmp/pistyx-ci.conf /etc/wireguard/pistyx-ci.conf
+
+          cleanup() {
+            sudo wg-quick down pistyx-ci >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          sudo wg-quick up pistyx-ci
+          for _ in $(seq 1 12); do
+            ping -c 1 -W 2 "${ping_target}" >/dev/null 2>&1 || true
+            latest="$(sudo wg show pistyx-ci latest-handshakes | awk '{print $2}' | head -n1)"
+            now="$(date +%s)"
+            if [ -n "${latest}" ] && [ "${latest}" -gt 0 ] && [ "$((now - latest))" -lt 180 ]; then
+              sudo wg show pistyx-ci
+              echo "WireGuard handshake with ${PISTYX_HOST}:${PISTYX_PORT} succeeded"
+              exit 0
+            fi
+            sleep 5
+          done
+
+          sudo wg show pistyx-ci || true
+          echo "::error::No WireGuard handshake observed with ${PISTYX_HOST}:${PISTYX_PORT}"
+          exit 1

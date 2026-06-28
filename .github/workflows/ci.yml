@@ -84,5 +84,8 @@ jobs:
           grep -q "wg set" /tmp/cl-reresolve.txt
           rm -f styx.yaml
 
+      - name: Hosted pistyx render/move smoke
+        run: python .github/scripts/pistyx_hosted_smoke.py --render-checks
+
       - name: Build wheel
         run: python -m pip install build && python -m build

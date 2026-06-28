@@ -946,6 +946,7 @@ Manual workflows:
 
 1. **Runner smoke** - quick online-runner ping
 2. **Styx cluster E2E** - destructive install -> join -> mesh -> DNS -> status/doctor -> uninstall
+3. **Pistyx hosted smoke** - GitHub-hosted check for pistyx render moves, public DNS/UDP routeability, and optional WireGuard handshake
 
 ### Styx runner integration (primary)
 
@@ -978,6 +979,7 @@ Package sanity only. It does not run a live cluster. It verifies:
 - root help and command help for current MVP3 surfaces
 - `deploy dns plan` renders per-site Deployment manifests
 - `mesh plan` renders hub-and-spoke WireGuard configs
+- pistyx render/move behavior keeps the client endpoint stable while moving the publisher/PoP holder
 - wheel build
 
 ### Styx cluster E2E (manual, destructive)
@@ -999,6 +1001,10 @@ This is the only workflow that exercises runtime cluster behavior. It runs:
 | `PIPASS` | sshpass password for SSH on `47810` in stage 2 | shared Pi login password |
 | `DUCKDNS_TOKEN` | DuckDNS record updates (`deploy dns apply`) | read into a Kubernetes Secret |
 | `RUNNER_API_TOKEN` | discover job lists runners | fine-grained PAT, `Administration: read`; `GITHUB_TOKEN` cannot list runners |
+| `PISTYX_CI_CLIENT_PRIVATE_KEY` | optional hosted-runner WireGuard smoke client key | its public key must be registered under `clients:` before `mesh up` |
+| `PISTYX_PUBLIC_KEY` | optional shared pistyx public key | printed by `styxctl mesh pistyx pubkey-local` on a node |
+| `PISTYX_CI_CLIENT_ADDRESS` | optional hosted-runner client address | defaults to `10.0.250.254/32` |
+| `PISTYX_PING_TARGET` | optional pistyx overlay ping target | defaults to `10.0.250.1` |
 
 ### Runner labels
 
