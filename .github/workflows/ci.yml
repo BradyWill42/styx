@@ -26,10 +26,14 @@ jobs:
           styxctl --help
           styxctl deploy dns --help
           styxctl deploy resolver --help
+          styxctl deploy reresolve --help
           styxctl status --help
           styxctl doctor --help
           styxctl mesh --help
           styxctl client --help
+          # rendered k8s manifests must parse as YAML (block-scalar shell scripts are easy to mis-indent)
+          python -c "import yaml; from styxctl.cluster_dns import render_resolver_manifest as r, parse_resolver_settings as p; list(yaml.safe_load_all(r(p({})))); print('resolver manifest: valid YAML')"
+          python -c "import yaml; from styxctl.reresolve import render_reresolve_manifest as r, parse_reresolve_settings as p; list(yaml.safe_load_all(r(p({})))); print('reresolve manifest: valid YAML')"
 
       - name: Verify deploy dns + mesh plans render (no cluster)
         run: |
@@ -65,6 +69,14 @@ jobs:
           grep -q "privileged: true" /tmp/resolver.txt                      # needs host /etc + chattr
           grep -q "chattr +i" /tmp/resolver.txt                             # makes resolv.conf immutable
           grep -q "nameserver 127.0.0.1" /tmp/resolver.txt                  # forces node DNS to the local resolver
+          # WG endpoint re-resolution DaemonSet (nodes follow DuckDNS repoints)
+          styxctl deploy reresolve plan | tee /tmp/reresolve.txt
+          grep -q "name: styx-reresolve" /tmp/reresolve.txt                 # runs as a pod (DaemonSet)
+          grep -q "path: /etc/wireguard" /tmp/reresolve.txt                 # reads the host WG confs
+          grep -q "wg set" /tmp/reresolve.txt                               # re-points the endpoint when the IP changes
+          styxctl client reresolve-unit | tee /tmp/cl-reresolve.txt         # Linux client companion (systemd timer)
+          grep -q "OnUnitActiveSec" /tmp/cl-reresolve.txt
+          grep -q "wg set" /tmp/cl-reresolve.txt
           rm -f styx.yaml
 
       - name: Build wheel

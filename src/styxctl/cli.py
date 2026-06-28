@@ -28,6 +28,12 @@ from .install import (
 )
 from .install_report import render_install_text, save_install_report
 from .cluster_dns import deploy_resolver, render_resolver_report_text, uninstall_resolver
+from .reresolve import (
+    deploy_reresolve,
+    render_client_reresolve_unit,
+    render_reresolve_report_text,
+    uninstall_reresolve,
+)
 from .dns_publish import deploy_dns, render_dns_report_text, uninstall_dns
 from .cluster_status import run_doctor, run_status
 from .wireguard_mesh import (
@@ -99,6 +105,7 @@ uninstall_apply_app = typer.Typer(help="Apply uninstall plan without confirmatio
 deploy_app = typer.Typer(help="Deploy Styx cluster workloads (MVP3).", no_args_is_help=True)
 deploy_dns_app = typer.Typer(help="Publish cluster DNS to DuckDNS from inside k3s.", no_args_is_help=True)
 deploy_resolver_app = typer.Typer(help="Node-local DNS resolver + forced /etc/resolv.conf (pod-based).", no_args_is_help=True)
+deploy_reresolve_app = typer.Typer(help="WireGuard endpoint re-resolution DaemonSet (follow DuckDNS repoints).", no_args_is_help=True)
 mesh_app = typer.Typer(help="Build and inspect the Styx WireGuard backbone mesh.", no_args_is_help=True)
 mesh_pistyx_app = typer.Typer(help="Inspect and move the movable pistyx egress.", no_args_is_help=True)
 client_app = typer.Typer(help="Generate roadwarrior client configs (connect to a chosen site).", no_args_is_help=True)
@@ -796,6 +803,30 @@ def deploy_resolver_delete() -> None:
     raise typer.Exit(code=exit_code)
 
 
+@deploy_reresolve_app.command("plan")
+def deploy_reresolve_plan() -> None:
+    """Render the WG endpoint re-resolution DaemonSet (no cluster access needed)."""
+    report, exit_code = deploy_reresolve(dry_run=True, config_path=None)
+    console.print(render_reresolve_report_text(report), markup=False, soft_wrap=True)
+    raise typer.Exit(code=exit_code)
+
+
+@deploy_reresolve_app.command("apply")
+def deploy_reresolve_apply() -> None:
+    """Deploy the WG endpoint re-resolver so nodes follow DuckDNS repoints. Run on the init-server."""
+    report, exit_code = deploy_reresolve(dry_run=False, config_path=None)
+    console.print(render_reresolve_report_text(report), markup=False, soft_wrap=True)
+    raise typer.Exit(code=exit_code)
+
+
+@deploy_reresolve_app.command("delete")
+def deploy_reresolve_delete() -> None:
+    """Uninstall the WG endpoint re-resolution DaemonSet."""
+    report, exit_code = uninstall_reresolve()
+    console.print(render_reresolve_report_text(report), markup=False, soft_wrap=True)
+    raise typer.Exit(code=exit_code)
+
+
 def _render_cluster_health(health: dict[str, object]) -> None:
     table = Table(title="Styx Cluster Status")
     table.add_column("Node")
@@ -941,6 +972,14 @@ def client_config_cmd(
     raise typer.Exit(code=code)
 
 
+@client_app.command("reresolve-unit")
+def client_reresolve_unit_cmd(
+    interface: str = typer.Option("wg-styx", "--interface", help="the client's WG interface name (its .conf basename)"),
+) -> None:
+    """Print a systemd .service+.timer a Linux client installs to follow pistyx repoints automatically."""
+    typer.echo(render_client_reresolve_unit(interface))
+
+
 def _future_app(label: str, milestone: str) -> typer.Typer:
     future = typer.Typer(help=f"Future {label} commands ({milestone}).", no_args_is_help=True)
 
@@ -977,6 +1016,7 @@ app.add_typer(install_app, name="install")
 app.add_typer(uninstall_app, name="uninstall")
 deploy_app.add_typer(deploy_dns_app, name="dns")
 deploy_app.add_typer(deploy_resolver_app, name="resolver")
+deploy_app.add_typer(deploy_reresolve_app, name="reresolve")
 app.add_typer(deploy_app, name="deploy")
 mesh_app.add_typer(mesh_pistyx_app, name="pistyx")
 app.add_typer(mesh_app, name="mesh")
