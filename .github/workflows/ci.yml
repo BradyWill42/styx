@@ -35,6 +35,11 @@ jobs:
           python -c "import yaml; from styxctl.cluster_dns import render_resolver_manifest as r, parse_resolver_settings as p; list(yaml.safe_load_all(r(p({})))); print('resolver manifest: valid YAML')"
           python -c "import yaml; from styxctl.reresolve import render_reresolve_manifest as r, parse_reresolve_settings as p; list(yaml.safe_load_all(r(p({})))); print('reresolve manifest: valid YAML')"
 
+      - name: Unit tests (pure logic — no cluster, no pithor)
+        run: |
+          python -m pip install pytest
+          pytest -q
+
       - name: Verify deploy dns + mesh plans render (no cluster)
         run: |
           cp .github/fixtures/styx.test.yaml styx.yaml   # fixture carries roles (no runner labels in render-tests)
