@@ -889,7 +889,14 @@ def client_config(
     target = f"pinned site {site}" if site else "pistyx (auto-fastest)"
     report["message"] = f"client {name}: dials {endpoint}:{eg_port} via {target}"
     if not render_only:
-        report["actions"].append("register this client on the leaders (`styxctl client register`) before it can connect")
+        report["public_key"] = _public_key(client_private) or ""
+        report["actions"].append(
+            f"client public key: {report['public_key']}"
+        )
+        report["actions"].append(
+            "to register: add this client (the public key above + its ipv4/ipv6) under `clients:` in "
+            "styx.yaml, then run `styxctl mesh up` — that renders it onto every leader's PoP"
+        )
     return report, 0
 
 
@@ -915,7 +922,7 @@ def pistyx_info(config_path: str | Path | None = None) -> tuple[dict[str, Any], 
             f"endpoint:  {hostname}:{port}",
             f"overlay:   {PISTYX_IPV4}/32, {PISTYX_IPV6}/128 (reserved)",
             f"mtu:       {mtu}",
-            f"holder:    {holder_name}  (move with `styxctl mesh pistyx move <node>`, Phase 2)",
+            f"holder:    {holder_name}  (to move: set pistyx.current_host, re-run `mesh up` + `deploy dns`; auto-move = the fastest-site loop, not yet built)",
         ],
     }
     return report, 0

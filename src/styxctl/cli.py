@@ -966,7 +966,9 @@ def client_config_cmd(
     """Generate a roadwarrior config that dials pistyx (auto-fastest) or a pinned --site."""
     report, code = client_config(name, site=site or None, index=index, render_only=render_only)
     if report.get("config"):
-        typer.echo(report["config"])
+        typer.echo(report["config"])                       # the .conf -> stdout (pipe to a file)
+        for action in report.get("actions", []):
+            typer.echo(f"# {action}", err=True)            # pubkey + registration steps -> stderr
     else:
         console.print(render_mesh_report_text(report), markup=False, soft_wrap=True)
     raise typer.Exit(code=code)

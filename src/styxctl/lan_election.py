@@ -130,7 +130,8 @@ def parse_root_avail_kb(df_text: str) -> int | None:
         if not line.startswith("/"):
             continue
         parts = line.split()
-        if len(parts) >= 4 and parts[5] == "/":
+        # df row: Filesystem 1K-blocks Used Available Use% Mounted-on (6 cols) — need parts[5].
+        if len(parts) >= 6 and parts[5] == "/":
             try:
                 return int(parts[3]) * 1024
             except ValueError:
