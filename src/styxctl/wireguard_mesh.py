@@ -190,8 +190,8 @@ def render_pistyx_pop(
     """Render a leader's pistyx PoP interface — the client entry point clients hit.
 
     Every site's leader binds this SAME interface: the SHARED pistyx private key + that site's
-    pistyx gateway address (10.0.<site>.1 / fd00:cafe:0:<site>::1), with one [Peer] per mobile client. A
-    DuckDNS repoint of pistyx.duckdns.org therefore moves a client to whichever leader becomes
+    pistyx service address as a host route, with one [Peer] per mobile client. A DuckDNS
+    repoint of pistyx.duckdns.org therefore moves a client to whichever leader becomes
     active with zero client reconfig. The leader LOCAL-NATs the client range out its OWN WAN
     (local breakout, handled out-of-band by ensure_egress_nat) — styx never carries client traffic.
     """
@@ -201,9 +201,9 @@ def render_pistyx_pop(
     lines = ["[Interface]", f"PrivateKey = {private_key}"]
     addr: list[str] = []
     if want_v4 and gateway_v4:
-        addr.append(f"{gateway_v4}/24")
+        addr.append(f"{gateway_v4}/32")
     if want_v6 and gateway_v6:
-        addr.append(f"{gateway_v6}/64")
+        addr.append(f"{gateway_v6}/128")
     if addr:
         lines.append(f"Address = {', '.join(addr)}")
     lines.append(f"ListenPort = {listen_port}")

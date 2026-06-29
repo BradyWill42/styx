@@ -103,11 +103,11 @@ def assert_holder(workdir: Path, holder: str) -> None:
         "StyxSite1=site 1 via pegasus:47821",
         "StyxSite2=site 2 via hydra:47822",
         "--- pegasus [StyxSite1] ---",
-        "Address = 10.0.1.10/24, fd00:cafe:0:1::a/64",
+        "Address = 10.0.1.1/24, fd00:cafe:0:1::1/64",
         "--- pegasus [StyxSite2] ---",
-        "Address = 10.0.2.10/24, fd00:cafe:0:2::a/64",
+        "Address = 10.0.2.1/24, fd00:cafe:0:2::1/64",
         "--- hydra [StyxSite1] ---",
-        "Address = 10.0.1.12/24, fd00:cafe:0:1::c/64",
+        "Address = 10.0.1.3/24, fd00:cafe:0:1::3/64",
     ]
     for needle in expected_site_overlays:
         if needle not in mesh:
@@ -134,7 +134,7 @@ def render_checks() -> None:
         client = run_styxctl(workdir, "client", "config", "hosted-smoke", "--render-only")
         expected = [
             "Endpoint = pistyx.duckdns.org:47801",
-            "Address = 10.0.1.2/32, fd00:cafe:0:1::2/128",
+            "Address = 10.0.1.64/32, fd00:cafe:0:1::40/128",
             "AllowedIPs = 0.0.0.0/0, ::/0",
             "PersistentKeepalive = 25",
         ]
@@ -148,7 +148,7 @@ def render_checks() -> None:
         moved_client = run_styxctl(workdir, "client", "config", "hosted-smoke", "--render-only")
         if "Endpoint = pistyx.duckdns.org:47801" not in moved_client:
             raise AssertionError("client endpoint should remain the floating pistyx name after a move")
-        if "Address = 10.0.2.2/32, fd00:cafe:0:2::2/128" not in moved_client:
+        if "Address = 10.0.2.64/32, fd00:cafe:0:2::40/128" not in moved_client:
             raise AssertionError("client address should move into the holder site's range")
 
     print("pistyx render/move checks passed")

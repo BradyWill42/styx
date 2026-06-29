@@ -9,12 +9,12 @@ from typing import Any
 DEFAULT_NETWORK: dict[str, str] = {
     "ipv4_supernet": "10.0.0.0/14",
     "ipv6_supernet": "fd00:cafe::/48",
-    "mesh_ipv4": "10.0.0.0/16",
+    "mesh_ipv4": "10.0.0.0/24",
     "site_ipv4": "10.0.0.0/16",
     "infra_ipv4": "10.1.0.0/16",
     "pod_ipv4": "10.2.0.0/16",
     "service_ipv4": "10.3.0.0/16",
-    "mesh_ipv6": "fd00:cafe:0::/48",
+    "mesh_ipv6": "fd00:cafe:0::/64",
     "site_ipv6": "fd00:cafe:0::/48",
     "infra_ipv6": "fd00:cafe:1::/56",
     "pod_ipv6": "fd00:cafe:2::/56",
@@ -22,8 +22,8 @@ DEFAULT_NETWORK: dict[str, str] = {
     # Roadwarrior is just the conventional mobile site index.
     "roadwarrior_ipv4": "10.0.250.0/24",
     "roadwarrior_ipv6": "fd00:cafe:0:250::/64",
-    "pistyx_ipv4": "10.0.250.1/32",
-    "pistyx_ipv6": "fd00:cafe:0:250::1/128",
+    "pistyx_ipv4": "10.0.250.254/32",
+    "pistyx_ipv6": "fd00:cafe:0:250::fe/128",
 }
 
 MESH_IPV4_NETWORK = ipaddress.ip_network(DEFAULT_NETWORK["mesh_ipv4"], strict=False)
@@ -34,15 +34,14 @@ ROADWARRIOR_IPV4_NETWORK = ipaddress.ip_network(DEFAULT_NETWORK["roadwarrior_ipv
 ROADWARRIOR_IPV6_NETWORK = ipaddress.ip_network(DEFAULT_NETWORK["roadwarrior_ipv6"], strict=False)
 
 ROADWARRIOR_SITE_INDEX = 250
-PISTYX_HOST_SUFFIX = 1
-SITE_CLIENT_OFFSET = 2
-SITE_NODE_OFFSET = 10
+PISTYX_HOST_SUFFIX = 254
+SITE_CLIENT_OFFSET = 64
 ROADWARRIOR_CLIENT_OFFSET = SITE_CLIENT_OFFSET
 
 # Backward-compatible constants for the mobile site. Per-LAN pistyx addresses are derived with
 # pistyx_ipv4_for_site() / pistyx_ipv6_for_site().
-PISTYX_IPV4 = str(ipaddress.ip_interface(DEFAULT_NETWORK["pistyx_ipv4"]).ip)   # 10.0.250.1
-PISTYX_IPV6 = str(ipaddress.ip_interface(DEFAULT_NETWORK["pistyx_ipv6"]).ip)   # fd00:cafe:0:250::1
+PISTYX_IPV4 = str(ipaddress.ip_interface(DEFAULT_NETWORK["pistyx_ipv4"]).ip)   # 10.0.250.254
+PISTYX_IPV6 = str(ipaddress.ip_interface(DEFAULT_NETWORK["pistyx_ipv6"]).ip)   # fd00:cafe:0:250::fe
 
 
 def mesh_ipv4_for_node(index: int) -> str:
@@ -122,12 +121,15 @@ def client_ipv6_for_site(index: int, *, site_index: int) -> str:
 def node_host_suffix_for_index(index: int) -> int:
     """Stable site-scope suffix for a Pi node.
 
-    The first addresses in each site remain reserved for the floating pistyx gateway and
-    client slots. Pi identities start at .10 and keep that suffix in every site subnet.
+    A Pi's site suffix is the same as its Styx backbone suffix:
+    10.0.0.3, 10.0.1.3, and 10.0.2.3 are the same Pi in different scopes.
     """
     if not isinstance(index, int) or index < 0:
         raise ValueError("node index must be zero or greater")
-    return _validate_host_suffix(SITE_NODE_OFFSET + index)
+    host_suffix = index + 1
+    if host_suffix >= SITE_CLIENT_OFFSET:
+        raise ValueError("site Pi host suffix space is exhausted before the client band")
+    return _validate_host_suffix(host_suffix)
 
 
 def node_ipv4_for_site(index: int, *, site_index: int) -> str:
