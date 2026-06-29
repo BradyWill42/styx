@@ -77,12 +77,15 @@ flowchart TB
         MESH["Backbone mesh\nhub-and-spoke"]
         SITEWG["Per-site Pi overlays"]
         DNS["Per-site DuckDNS publishers"]
+        PODS["Resolver + reresolver pods"]
         HEALTH["status / doctor"]
+        PISTYX["pistyx probe\nfastest-site recommendation"]
+        CLIENT["Client config + registration"]
     end
 
     subgraph future["MVP4+ - Deferred"]
-        PISTYX["pistyx quickest-site loop"]
-        CLIENT["Client automation"]
+        STYXHUB["Movable styx hub"]
+        AUTOLOOP["Automatic pistyx move loop"]
         SIEM["SIEM integration"]
     end
 
@@ -95,11 +98,14 @@ flowchart TB
     K3S --> WG
     WG --> MESH
     K3S --> DNS
+    K3S --> PODS
     K3S --> HEALTH
     CLI --> RPT
     MESH --> SITEWG
     DNS --> PISTYX
     SITEWG --> CLIENT
+    PISTYX --> AUTOLOOP
+    SITEWG --> STYXHUB
     CLIENT --> SIEM
 ```
 
@@ -135,7 +141,7 @@ All development happens on [`main`](https://github.com/BradyWill42/styx/tree/mai
 - MVP1 sysprep and safe remediation
 - MVP2 local install, cluster install, LAN leader election, and uninstall
 - bootstrap discovery by public IP detection, explicit DuckDNS hostname resolution, and LAN scanning
-- MVP3 `deploy dns`, top-level `status` / `doctor`, and `mesh plan` / `mesh up`
+- MVP3 `deploy all`, top-level `status` / `doctor`, `mesh plan` / `mesh up`, client registration, and pistyx probing
 - CI scripts that generate `styx.yaml` from live runner labels for the primary integration gate
 
 Current bootstrap rule of thumb:
@@ -143,7 +149,7 @@ Current bootstrap rule of thumb:
 - Remote peer discovery uses explicit node `hostname` values. `styxctl` only resolves DNS; it does not need a DuckDNS token for discovery.
 - Co-located peer discovery uses the shared public IP plus a LAN scan on gateway SSH port `47810`.
 - Only the site leader/entrypoint needs inbound WAN port forwards for a shared-WAN site.
-- The DuckDNS token is only used later by `styxctl deploy dns apply`, where it becomes a Kubernetes Secret.
+- The DuckDNS token is only used later by `styxctl deploy dns apply` or `styxctl deploy all apply`, where it becomes a Kubernetes Secret.
 
 ---
 
@@ -216,7 +222,12 @@ styxctl mesh up
 
 styxctl deploy dns plan
 export DUCKDNS_TOKEN=...
-styxctl deploy dns apply
+styxctl deploy all apply
+
+# record this once under pistyx.public_key in styx.yaml before issuing clients
+styxctl mesh pistyx pubkey-local
+styxctl client config brady-laptop --register > brady-laptop.conf
+styxctl mesh up
 
 styxctl status
 styxctl doctor
@@ -233,7 +244,7 @@ styxctl doctor
 | WireGuard tools | No | Required for install/mesh |
 | `curl` + CA certificates | No | Required for install, IP detection, DuckDNS updater |
 | Passwordless/key-based SSH to configured nodes | No | Required for cluster install/status/mesh/uninstall |
-| `kubectl` on init-server | No | Required for `deploy dns`, `status`, and `doctor` |
+| `kubectl` on init-server | No | Required for `deploy all`, `status`, and `doctor` |
 | `styx.yaml` | Optional | Required |
 
 ---
@@ -244,8 +255,8 @@ styxctl doctor
 |-----------|--------|-------|
 | **MVP1** | Shipped | Read-only inventory, reserved port scan, safe remediation |
 | **MVP2** | Shipped | k3s install, `Styx` WireGuard interface, gateway SSH, multi-node cluster join, uninstall |
-| **MVP3** | In progress | `mesh plan/up`, `deploy dns plan/apply`, top-level `status` / `doctor`; remaining `gateway`, `sysprep reset` / `nuke` deferred |
-| **MVP4** | Planned | Remote sysprep (`check all` / `check node`), automated client registration, SIEM |
+| **MVP3** | In progress | `mesh plan/up`, `deploy all`, top-level `status` / `doctor`, `client config --register`, `mesh pistyx probe`; remaining `gateway`, `sysprep reset` / `nuke` deferred |
+| **MVP4** | Planned | Remote sysprep (`check all` / `check node`), automatic pistyx repoint loop, SIEM |
 
 Placeholder commands still print a clear "not implemented" message and make no changes.
 
@@ -472,7 +483,7 @@ Remote steps SSH as each node's Linux user (defaults to the node `name`). `styxc
 
 ## MVP3: Mesh, DNS, status, and doctor
 
-MVP3 is in progress. The backbone mesh, per-site Pi overlays, DuckDNS publisher, and cluster status/doctor surfaces exist today.
+MVP3 is in progress. The backbone mesh, per-site Pi overlays, DuckDNS/resolver/reresolver pod services, cluster status/doctor surfaces, client registration, and the fastest-site pistyx probe exist today.
 
 ### Backbone mesh and site overlays
 
@@ -500,9 +511,12 @@ The same roster also renders a `StyxSite<N>` interface for every physical site o
 styxctl deploy dns plan
 export DUCKDNS_TOKEN=...
 styxctl deploy dns apply
+styxctl deploy all apply
 ```
 
 `deploy dns` creates one updater Deployment per site, pinned to that site's leader. Each publisher updates the DuckDNS subdomains derived from node `hostname` values, using the site's public IPv4 and IPv6. The token is read from `$DUCKDNS_TOKEN` at apply time and stored in the cluster as a Secret; it is never written to `styx.yaml`.
+
+`deploy all apply` applies the DuckDNS publisher, node-local DNS resolver, resolv.conf enforcer, and WireGuard endpoint re-resolver together.
 
 ### Cluster status and doctor
 
@@ -511,7 +525,19 @@ styxctl status
 styxctl doctor
 ```
 
-These top-level commands combine k3s node health with Styx workload state. Today that workload state is the DuckDNS publisher in the `styx-system` namespace. Missing optional workloads are reported as hints; node-level cluster issues make `doctor` exit non-zero.
+These top-level commands combine k3s node health with Styx workload state in the `styx-system` namespace: DuckDNS publishers, DNS resolver, resolv.conf enforcer, and WireGuard endpoint re-resolver. Missing optional workloads are reported as hints; node-level cluster issues make `doctor` exit non-zero.
+
+### Roadwarrior clients and pistyx probe
+
+```bash
+styxctl client config brady-laptop --register > brady-laptop.conf
+styxctl mesh up
+styxctl mesh pistyx probe <client-public-ip>
+```
+
+`client config --register` needs `pistyx.public_key` recorded in `styx.yaml`; `styxctl mesh pistyx pubkey-local` prints it on a node after the stable pistyx key exists. The command generates a client profile and writes the client's public key plus stable host suffix into `styx.yaml` under `clients:`. Generated clients start at suffix `.64`; the suffix is reused across site scopes, so `10.0.1.64` and `10.0.2.64` are the same client identity at different sites. Run `mesh up` afterward so every site's pistyx PoP accepts the new peer.
+
+`mesh pistyx probe` SSHes to each site's leader, pings the client's public IP, ranks reachable sites by RTT, and recommends which leader should hold `pistyx.current_host`. It is a live recommendation command; the fully automatic repoint loop remains deferred.
 
 ---
 
@@ -603,8 +629,8 @@ Only ports `47800-47850` are managed by `styxctl`. Critical production ports `47
 
 | Port | Protocol | Purpose |
 |------|----------|---------|
-| 47800 | UDP | Styx production WireGuard gateway |
-| 47801 | TCP | Styx gateway health API |
+| 47800 | UDP | Styx backbone WireGuard mesh |
+| 47801 | UDP | pistyx roadwarrior WireGuard egress |
 | 47802 | UDP | Styx director API / configured-node LAN leader election |
 | 47803 | TCP | Styx status dashboard/API |
 | 47804 | TCP | Styx node agent API |
@@ -620,10 +646,10 @@ Only ports `47800-47850` are managed by `styxctl`. Critical production ports `47
 | 47830-47839 | any | Development/debug |
 | 47840-47850 | any | Reserved future |
 
-Planned WireGuard endpoint style for production clients:
+WireGuard endpoint style for production clients:
 
 ```ini
-Endpoint = pistyx.duckdns.org:47800
+Endpoint = pistyx.duckdns.org:47801
 ```
 
 ---
@@ -634,11 +660,12 @@ Styx is designed for gateway nodes that may already run critical services. `styx
 
 | Command class | Mutates host/cluster? | Scope |
 |---------------|-----------------------|-------|
-| `sysprep check`, `ports check`, `ports list`, `config show`, `config validate`, `install plan`, `install status`, `install doctor`, `uninstall plan`, `deploy dns plan`, `mesh plan`, `status`, `doctor`, `report`, `version`, `completion` | No host mutation | Read-only inspection, planning, rendering, reports, DNS/SSH/kubectl queries |
+| `sysprep check`, `ports check`, `ports list`, `config show`, `config validate`, `install plan`, `install status`, `install doctor`, `uninstall plan`, `deploy * plan`, `mesh plan`, `mesh pistyx probe`, `client config` without `--register`, `status`, `doctor`, `report`, `version`, `completion` | No host mutation | Read-only inspection, planning, rendering, reports, DNS/SSH/kubectl queries |
 | `sysprep safe`, `ports clear` | Yes | Only pre-identified safe targets |
 | `install apply`, `install local`, `install cluster` | Yes | Packages, k3s, `Styx` WireGuard, gateway SSH, Styx firewall allowances |
-| `deploy dns apply` | Yes | Kubernetes namespace, Secret, and per-site DuckDNS Deployments |
+| `deploy * apply`, `deploy all delete` | Yes | Kubernetes namespace, Secret, per-site DuckDNS Deployments, resolver/enforcer/reresolver DaemonSets |
 | `mesh up`, `mesh pubkey-local`, `mesh apply-local` | Yes | `Styx` WireGuard key/config material and hub forwarding |
+| `client config --register` | Local config file only | Writes `clients:` in `styx.yaml` and `styx.yaml.bak`; does not touch host networking |
 | `uninstall apply`, `uninstall local`, `uninstall cluster` | Yes | Styx-managed k3s, WireGuard, SSH drop-in, firewall rules, and leftover artifacts |
 | `sysprep reset`, `sysprep nuke`, `gateway soon`, `siem soon` | Not implemented | Placeholder only |
 
@@ -723,13 +750,26 @@ styxctl mesh <TAB>
 | `mesh up` | Collect public keys, apply peer configs, and enable hub forwarding |
 | `mesh pubkey-local` | Ensure local WireGuard keypair exists and print public key |
 | `mesh apply-local` | Apply this node's config from a roster generated by `mesh up` |
+| `mesh pistyx show` | Show current pistyx holder, endpoint, and site-scoped service IP |
+| `mesh pistyx probe <client-ip>` | Probe client RTT from each site leader and recommend the fastest holder |
 
-### Deploy DNS
+### Deploy
 
 | Command | Description |
 |---------|-------------|
 | `deploy dns plan` | Render DuckDNS publisher manifests without applying them |
 | `deploy dns apply` | Deploy per-site DuckDNS publishers; reads `$DUCKDNS_TOKEN` |
+| `deploy resolver plan/apply` | Render or deploy node-local DNS resolver and optional resolv.conf enforcer |
+| `deploy reresolve plan/apply` | Render or deploy the WireGuard endpoint re-resolver DaemonSet |
+| `deploy all plan/apply/delete` | Manage the full Styx pod-service bundle |
+
+### Clients
+
+| Command | Description |
+|---------|-------------|
+| `client config <name>` | Render a roadwarrior profile that dials pistyx or a pinned `--site` |
+| `client config <name> --register` | Render a profile and persist the client peer into `styx.yaml` |
+| `client reresolve-unit` | Print a Linux systemd timer/service that follows pistyx endpoint repoints |
 
 ### Uninstall
 
@@ -857,16 +897,16 @@ styxctl install doctor cluster
 
 Ensure every node has completed `install apply local` before `install apply cluster`.
 
-### DuckDNS publisher absent
+### Styx pod service absent
 
 ```bash
-styxctl deploy dns plan
+styxctl deploy all plan
 export DUCKDNS_TOKEN=...
-styxctl deploy dns apply
+styxctl deploy all apply
 styxctl status
 ```
 
-`deploy dns plan` needs no token. `deploy dns apply` must run where `kubectl` can apply to the cluster, normally the init-server.
+`deploy all plan` needs no token. `deploy all apply` must run where `kubectl` can apply to the cluster, normally the init-server. DuckDNS publishing reads `$DUCKDNS_TOKEN`; resolver and reresolver manifests do not use it.
 
 ### Mesh plan renders, but mesh up fails
 
@@ -1032,8 +1072,8 @@ Re-label a runner and the next integration run regenerates `styx.yaml` automatic
 ## Known issues and deferred work
 
 - **Movable `styx` hub deferred:** `mesh plan/up` builds the hub-and-spoke backbone and per-site Pi overlays today. Leader-to-styx uplinks and movable `styx` hub behavior are not built yet.
-- **`pistyx` loop deferred:** DuckDNS has no GeoDNS. Fastest-site behavior needs client-measured routing or a server-side single-record repoint loop.
-- **Client automation deferred:** `client config` renders usable roadwarrior profiles today; automatic registration and fastest-site selection are still deferred.
+- **Automatic `pistyx` loop deferred:** DuckDNS has no GeoDNS. `mesh pistyx probe <client-ip>` can rank sites and recommend a holder today, but automatically editing `pistyx.current_host` and republishing DNS is still deferred.
+- **Client profile application remains manual:** `client config --register` persists peers into `styx.yaml`; operators still install the emitted `.conf` on the client and run `mesh up` to distribute the peer to leaders.
 - **Runtime verification is E2E-only:** per-push CI can render and sanity-check; live k3s behavior only runs in the manual cluster E2E workflow.
 - **Workflow verification gotcha:** after watching a GitHub run, verify the conclusion with `gh run view <id> --json conclusion`; wrapper commands can hide a failed `gh run watch`.
 

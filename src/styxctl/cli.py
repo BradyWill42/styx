@@ -44,7 +44,9 @@ from .wireguard_mesh import (
     mesh_plan,
     mesh_up,
     pistyx_info,
+    pistyx_probe,
     render_mesh_report_text,
+    render_pistyx_probe_text,
     stage_pistyx_key,
 )
 from .uninstall import (
@@ -888,9 +890,17 @@ def _render_cluster_health(health: dict[str, object]) -> None:
     kubectl_nodes = health.get("kubectl_nodes") or []
     if kubectl_nodes:
         console.print(f"kubectl nodes: {', '.join(kubectl_nodes)}")
-    duckdns = (health.get("workloads") or {}).get("duckdns", {})
-    state = "running" if duckdns.get("present") else "absent"
-    console.print(f"DuckDNS publisher: {state} ({duckdns.get('detail', '-')})")
+    workloads = health.get("workloads") or {}
+    console.print("Pod services:")
+    for key, label in (
+        ("duckdns", "DuckDNS publisher"),
+        ("resolver", "DNS resolver"),
+        ("enforcer", "resolv.conf enforcer"),
+        ("reresolve", "WG reresolver"),
+    ):
+        w = workloads.get(key, {})
+        state = "running" if w.get("present") else "absent"
+        console.print(f"  - {label}: {state} ({w.get('detail', '-')})")
     if health.get("issues"):
         console.print("[red]Issues:[/red]")
         for issue in health["issues"]:
@@ -976,6 +986,20 @@ def mesh_pistyx_show_cmd() -> None:
     raise typer.Exit(code=code)
 
 
+@mesh_pistyx_app.command("probe")
+def mesh_pistyx_probe_cmd(
+    client_ip: str = typer.Argument(..., help="the roadwarrior's public IP to RTT-probe from each site"),
+) -> None:
+    """RTT-probe a client from every site's leader and recommend the fastest pistyx holder.
+
+    Live (SSH); meaningful with >=2 sites online. Applying the move is the existing repoint:
+    set pistyx.current_host, then `styxctl mesh up` && `styxctl deploy dns apply`.
+    """
+    report, code = pistyx_probe(client_ip, config_path=None)
+    console.print(render_pistyx_probe_text(report), markup=False, soft_wrap=True)
+    raise typer.Exit(code=code)
+
+
 @mesh_pistyx_app.command("pubkey-local")
 def mesh_pistyx_pubkey_local_cmd() -> None:
     """Ensure the STABLE pistyx key exists locally and print its public key."""
@@ -1002,13 +1026,18 @@ def mesh_stage_pistyx_key_cmd(
 def client_config_cmd(
     name: str = typer.Argument(..., help="client name (e.g. brady-laptop)"),
     site: str = typer.Option("", "--site", help="pin a specific site by node name (default: pistyx, auto-fastest)"),
-    index: int = typer.Option(0, "--index", help="client slot; sets the roadwarrior IP offset"),
+    index: int | None = typer.Option(
+        None, "--index", help="client slot; omitted with --register allocates the next free suffix"
+    ),
     render_only: bool = typer.Option(
         False, "--render-only", help="render the structure with placeholder keys (no wg)"
     ),
+    register: bool = typer.Option(
+        False, "--register", help="persist this client into styx.yaml's clients block"
+    ),
 ) -> None:
     """Generate a roadwarrior config that dials pistyx (auto-fastest) or a pinned --site."""
-    report, code = client_config(name, site=site or None, index=index, render_only=render_only)
+    report, code = client_config(name, site=site or None, index=index, render_only=render_only, register=register)
     if report.get("config"):
         typer.echo(report["config"])                       # the .conf -> stdout (pipe to a file)
         for action in report.get("actions", []):

@@ -27,10 +27,14 @@ jobs:
           styxctl deploy dns --help
           styxctl deploy resolver --help
           styxctl deploy reresolve --help
+          styxctl deploy all --help
           styxctl status --help
           styxctl doctor --help
           styxctl mesh --help
+          styxctl mesh pistyx --help
+          styxctl mesh pistyx probe --help
           styxctl client --help
+          styxctl client config --help
           # rendered k8s manifests must parse as YAML (block-scalar shell scripts are easy to mis-indent)
           python -c "import yaml; from styxctl.cluster_dns import render_resolver_manifest as r, parse_resolver_settings as p; list(yaml.safe_load_all(r(p({})))); print('resolver manifest: valid YAML')"
           python -c "import yaml; from styxctl.reresolve import render_reresolve_manifest as r, parse_reresolve_settings as p; list(yaml.safe_load_all(r(p({})))); print('reresolve manifest: valid YAML')"
