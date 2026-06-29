@@ -1060,7 +1060,7 @@ Each runner checks:
 - configured node/pistyx DuckDNS names resolve through the system resolver
 - the node-local DNS resolver answers directly on `127.0.0.1:53`
 
-Run it from GitHub Actions as **MVP3 connectivity** after `mesh up` and `deploy all apply` have converged. The push-triggered `Styx runner integration` now has its own Stage 3 path: it rebuilds the WireGuard mesh before running cross-site IP and system-DNS checks, while the standalone manual workflow additionally expects the node-local resolver to be up.
+Run it from GitHub Actions as **MVP3 connectivity** after `mesh up` and `deploy all apply` have converged. The push-triggered `Styx runner integration` now has its own Stage 3 path: it rebuilds the WireGuard mesh before running site-interface, DNS, and cross-site IP checks. In the runner integration, a single visible public-IP site records the cross-site portion as skipped; the standalone manual workflow keeps cross-site and node-local resolver checks strict.
 
 ### Secrets
 

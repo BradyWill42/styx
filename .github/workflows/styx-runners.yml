@@ -285,6 +285,7 @@ jobs:
         env:
           STYX_RUNNER_NAME: ${{ matrix.runner }}
           STYX_REQUIRE_LOCAL_RESOLVER: "0"
+          STYX_REQUIRE_CROSS_SITE: "0"
         run: python3 .github/scripts/mvp3-connectivity.py
 
       - name: Print stage 3 report

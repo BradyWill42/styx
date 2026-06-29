@@ -150,6 +150,12 @@ def main() -> int:
         "no",
         "skip",
     }
+    require_cross_site = os.environ.get("STYX_REQUIRE_CROSS_SITE", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "skip",
+    }
 
     from styxctl.bootstrap_config import load_operational_config
     from styxctl.inventory import collect_inventory
@@ -178,8 +184,10 @@ def main() -> int:
     pass_check(checks, "local_node", f"{local_node.name} site={local_site}")
     if len(site_indexes) >= 2:
         pass_check(checks, "site_count", f"{len(site_indexes)} sites: {', '.join(map(str, site_indexes))}")
-    else:
+    elif require_cross_site:
         fail_check(checks, "site_count", f"cross-site test requires at least 2 sites, found {site_indexes}")
+    else:
+        skip_check(checks, "site_count", f"cross-site test requires at least 2 sites, found {site_indexes}")
 
     ok, detail = _run_ip(["link", "show", "dev", "Styx"])
     if ok:
