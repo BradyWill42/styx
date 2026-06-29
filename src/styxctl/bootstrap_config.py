@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .gateway import parse_gateway_ports
 from .inventory import SystemInventory, collect_inventory
@@ -19,11 +19,15 @@ from .network_detect import (
 )
 from .network_plan import assign_node_mesh_ips
 from .nodes import (
+    ClusterNode,
     identify_local_node,
     node_dns_name,
+    node_ssh_user,
     parse_nodes,
     sites_by_public_ip,
 )
+
+SshRunner = Callable[[str, str], tuple[bool, str]]
 
 
 def load_operational_config(
@@ -38,6 +42,41 @@ def load_operational_config(
     candidate = Path(path) if path is not None else find_config()
     raw = load_config(candidate)
     return enrich_operational_config(resolve_config(raw), inventory)
+
+
+def _map_lan_ips_by_identity(
+    nodes: list[ClusterNode],
+    local_node: ClusterNode | None,
+    scanned_ips: list[str],
+    *,
+    port: int,
+    runner: SshRunner | None = None,
+) -> dict[str, str]:
+    """Map LAN scan hits to node names by asking each candidate for `hostname -s`."""
+    if not scanned_ips:
+        return {}
+    if runner is None:
+        from .k3s_cluster import _run_ssh_command
+
+        def runner(target: str, command: str) -> tuple[bool, str]:
+            return _run_ssh_command(target, command, port=port, timeout=15.0)
+
+    mapping: dict[str, str] = {}
+    unclaimed = list(scanned_ips)
+    for node in nodes:
+        if local_node is not None and node.name == local_node.name:
+            continue
+        user = node_ssh_user(node)
+        for ip in list(unclaimed):
+            ok, detail = runner(f"{user}@{ip}", "hostname -s")
+            if not ok or not detail.strip():
+                continue
+            got = detail.strip().splitlines()[-1].strip().lower()
+            if got == node.name.lower():
+                mapping[node.name] = ip
+                unclaimed.remove(ip)
+                break
+    return mapping
 
 
 def enrich_operational_config(
@@ -123,8 +162,11 @@ def enrich_operational_config(
             if isinstance(item, dict) and item.get("name") == local_node.name:
                 local_lan = item.get("lan_ip")
                 break
-        # Prefer IPs from the LAN scan (no SSH needed). Sort for determinism.
+        # Prefer identity-mapped IPs from the LAN scan; fall back to positional assignment only
+        # when identity probing is unavailable.
         peer_candidates = sorted(ip for ip in lan_peers if ip != local_lan)
+        identity_lan_ips = _map_lan_ips_by_identity(site_nodes, local_node, peer_candidates, port=gateway.ssh)
+        fallback_candidates = [ip for ip in peer_candidates if ip not in set(identity_lan_ips.values())]
         candidate_idx = 0
         for node in site_nodes:
             if node.name == local_node.name:
@@ -132,8 +174,12 @@ def enrich_operational_config(
             for item in nodes_raw:
                 if not isinstance(item, dict) or item.get("name") != node.name:
                     continue
-                if not item.get("lan_ip") and candidate_idx < len(peer_candidates):
-                    item["lan_ip"] = peer_candidates[candidate_idx]
+                if item.get("lan_ip"):
+                    break
+                if node.name in identity_lan_ips:
+                    item["lan_ip"] = identity_lan_ips[node.name]
+                elif candidate_idx < len(fallback_candidates):
+                    item["lan_ip"] = fallback_candidates[candidate_idx]
                     candidate_idx += 1
                 break
 
