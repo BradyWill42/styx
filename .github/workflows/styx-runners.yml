@@ -104,8 +104,9 @@ jobs:
           name: styx-config
           path: .
 
-      - name: Install styxctl
+      - name: Install prerequisites
         run: |
+          sudo apt-get install -y sshpass
           python3 -m pip install --upgrade pip --break-system-packages
           python3 -m pip install -e . --break-system-packages
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -247,6 +248,8 @@ jobs:
           fi
 
       - name: Stage 3 prep - bring up mesh
+        env:
+          SSHPASS: ${{ secrets.PIPASS }}
         run: |
           styxctl mesh plan
           styxctl mesh up

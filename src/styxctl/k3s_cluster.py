@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 import ipaddress
 import json
+import os
 import shutil
 import subprocess
 from typing import Any, Callable
@@ -439,18 +440,23 @@ def _run_ssh_command(
 ) -> RunResult:
     if shutil.which("ssh") is None:
         return False, "ssh command not found"
+    use_sshpass = bool(os.environ.get("SSHPASS")) and shutil.which("sshpass") is not None
     command = [
         "ssh",
         "-p",
         str(port),
         "-o",
-        "BatchMode=yes",
-        "-o",
         "ConnectTimeout=10",
     ]
+    if use_sshpass:
+        command.extend(["-o", "PreferredAuthentications=password", "-o", "BatchMode=no"])
+    else:
+        command.extend(["-o", "BatchMode=yes"])
     if jump:
         command.extend(["-J", f"{jump}:{port}"])
     command.extend([target, remote_command])
+    if use_sshpass:
+        command = ["sshpass", "-e", *command]
     try:
         completed = subprocess.run(
             command,
