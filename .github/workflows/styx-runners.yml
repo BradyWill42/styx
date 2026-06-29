@@ -221,21 +221,30 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Use config generated from runner labels
+        uses: actions/download-artifact@v8
+        with:
+          name: styx-config
+          path: .
+
       - name: Install styxctl
         run: |
           python3 -m pip install --upgrade pip --break-system-packages
           python3 -m pip install -e . --break-system-packages
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Use live Styx config
+      - name: Use Stage 3 Styx config
         run: |
           set -euo pipefail
-          if [ ! -s /etc/styx/styx.yaml ]; then
-            echo "::error::Stage 3 requires /etc/styx/styx.yaml on the init-server so remote-site hostnames are known"
+          if [ -s /etc/styx/styx.yaml ]; then
+            cp /etc/styx/styx.yaml styx.yaml
+            echo "Using /etc/styx/styx.yaml for Stage 3 mesh bring-up"
+          elif [ -s styx.yaml ]; then
+            echo "Using CI-generated styx.yaml for Stage 3 mesh bring-up"
+          else
+            echo "::error::Stage 3 requires /etc/styx/styx.yaml or the generated styx-config artifact"
             exit 1
           fi
-          cp /etc/styx/styx.yaml styx.yaml
-          echo "Using /etc/styx/styx.yaml for Stage 3 mesh bring-up"
 
       - name: Stage 3 prep - bring up mesh
         run: |
@@ -256,6 +265,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+
+      - name: Use config generated from runner labels
+        uses: actions/download-artifact@v8
+        with:
+          name: styx-config
+          path: .
 
       - name: Install styxctl
         run: |
