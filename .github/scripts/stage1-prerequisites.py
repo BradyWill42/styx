@@ -25,7 +25,7 @@ from runner_lib import (
 
 def main() -> int:
     name = runner_name()
-    print(f"=== Stage 1 — prerequisites: {name} ===")
+    print(f"=== Stage 1 - prerequisites: {name} ===")
     config_path = prepare_styx_yaml(REPO_ROOT)
 
     checks: list[dict[str, object]] = []

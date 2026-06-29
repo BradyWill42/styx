@@ -26,7 +26,7 @@ from runner_lib import (
 
 def main() -> int:
     name = runner_name()
-    print(f"=== Stage 2 — connectivity: {name} ===")
+    print(f"=== Stage 2 - connectivity: {name} ===")
     config_path = prepare_styx_yaml(REPO_ROOT)
     checks: list[dict[str, object]] = []
 
@@ -102,7 +102,7 @@ def main() -> int:
         fail_check(
             checks,
             "gateway_listen_local",
-            f"port {gateway.ssh} not listening — run stage 1 first",
+            f"port {gateway.ssh} not listening - run stage 1 first",
         )
 
     for peer in nodes:
@@ -117,7 +117,7 @@ def main() -> int:
             skip_check(
                 checks,
                 f"ssh_{peer.name}",
-                "colocated peer not on the LAN this run (no stage-1 leg) — skipped",
+                "colocated peer not on the LAN this run (no stage-1 leg) - skipped",
             )
             continue
 

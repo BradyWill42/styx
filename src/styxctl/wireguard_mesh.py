@@ -600,7 +600,7 @@ def apply_local(
     private = _read_private_key(interface)
     if private is None:
         report["status"] = "ERROR"
-        report["message"] = f"no PrivateKey in {_conf_path(interface)} — run install or `mesh pubkey-local` first"
+        report["message"] = f"no PrivateKey in {_conf_path(interface)} - run install or `mesh pubkey-local` first"
         return report, 1
 
     route_v4, route_v6 = roster.get("route_v4"), roster.get("route_v6")
@@ -854,7 +854,7 @@ def mesh_up(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]
             report["message"] = f"could not collect public key from {node.name}: {detail}"
             return report, 1
         pubkeys[node.name] = key
-        report["actions"].append(f"pubkey {node.name}: {key[:12]}…")
+        report["actions"].append(f"pubkey {node.name}: {key[:12]}...")
 
     for member in members:
         member.public_key = pubkeys.get(member.name)
@@ -979,7 +979,7 @@ def mesh_up(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]
 
 
 def render_mesh_report_text(report: dict[str, Any]) -> str:
-    lines = [f"=== styx mesh — {report.get('status', 'OK')} ==="]
+    lines = [f"=== styx mesh - {report.get('status', 'OK')} ==="]
     if report.get("message"):
         lines.append(report["message"])
     if report.get("hub"):
@@ -1244,7 +1244,7 @@ def render_client_config(
     lines.append("")
     lines += [
         "[Peer]",
-        "# pistyx (floating entry — routed to whichever site is fastest)",
+        "# pistyx (floating entry - routed to whichever site is fastest)",
         f"PublicKey = {pistyx_pubkey}",
         f"Endpoint = {endpoint}:{port}",
         f"AllowedIPs = {', '.join(allowed)}",
@@ -1453,7 +1453,7 @@ def client_config(
         if not pistyx_pubkey:
             return {
                 "status": "ERROR",
-                "message": "no pistyx public key — set pistyx.public_key in styx.yaml "
+                "message": "no pistyx public key - set pistyx.public_key in styx.yaml "
                 "(`styxctl mesh pistyx pubkey-local` on a node prints it) before issuing clients",
             }, 1
         client_public = _public_key(client_private) or ""
@@ -1593,10 +1593,10 @@ def pistyx_probe(client_ip: str, *, config_path: str | Path | None = None) -> tu
 
     if target_site is None:
         report["status"] = "ERROR"
-        report["message"] = f"no site could reach {client_ip} — cannot recommend a pistyx holder"
+        report["message"] = f"no site could reach {client_ip} - cannot recommend a pistyx holder"
         return report, 1
     if holder is not None and target_leader is not None and target_leader.name == holder.name:
-        report["message"] = f"pistyx stays on {holder.name} (site {target_site}) — already the fastest reachable site"
+        report["message"] = f"pistyx stays on {holder.name} (site {target_site}) - already the fastest reachable site"
     else:
         report["message"] = (
             f"pistyx should move to {report['recommended_holder']} (site {target_site}); to apply: set "
@@ -1772,7 +1772,7 @@ def pistyx_negotiate(
 
 
 def render_pistyx_probe_text(report: dict[str, Any]) -> str:
-    lines = [f"=== pistyx probe — {report.get('status', 'OK')} ==="]
+    lines = [f"=== pistyx probe - {report.get('status', 'OK')} ==="]
     if report.get("client_ip"):
         lines.append(f"client: {report['client_ip']}")
     if report.get("current_holder"):
@@ -1789,7 +1789,7 @@ def render_pistyx_probe_text(report: dict[str, Any]) -> str:
 
 def render_pistyx_negotiate_text(report: dict[str, Any]) -> str:
     mode = report.get("mode", "plan")
-    lines = [f"=== pistyx negotiate ({mode}) — {report.get('status', 'OK')} ==="]
+    lines = [f"=== pistyx negotiate ({mode}) - {report.get('status', 'OK')} ==="]
     if report.get("current_holder"):
         lines.append(f"current holder: {report['current_holder']} (site {report.get('current_site')})")
     for client in report.get("clients") or report.get("active_clients") or []:
