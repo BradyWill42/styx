@@ -2,8 +2,9 @@
 # account). Mesh overlay IPs assign automatically. The local node's public_ipv4/public_ipv6
 # are auto-detected (curl -4/-6 ifconfig.me); remote peers are found by resolving each node's
 # `hostname` (its DuckDNS name) — no SSH or port-forward needed just to discover one. Colocated
-# peers (same WAN) are found by a LAN scan and reached over their lan_ip. Each site LAN-elects
-# its leader (port-forward face + DuckDNS publisher + styx uplink). Port 22 is admin SSH only —
+# peers (same WAN/public IP) are found by a LAN scan and reached over their lan_ip. In Styx, a
+# site is a place with a distinct public IP; nodes sharing one public IP are one site. Each site
+# LAN-elects its leader (port-forward face + DuckDNS publisher + styx uplink). Port 22 is admin SSH only —
 # styxctl uses 47810.
 #
 # PREREQUISITE: each remote node runs a DuckDNS updater keeping its `hostname` current.

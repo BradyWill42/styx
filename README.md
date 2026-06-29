@@ -113,6 +113,9 @@ flowchart TB
 
 Exactly one node may be `init-server`. "Site leader" is a separate overlay role: the leader is the port-forward face for a LAN/site, the DuckDNS publisher target for that site, and the future site uplink.
 
+In Styx terminology, a **site** is a place/WAN boundary with a distinct public IP. Multiple nodes
+behind the same `public_ipv4` are one site; nodes behind different public IPs are different sites.
+
 Each node can use:
 
 - `public_ipv4` / `public_ipv6` for WAN bootstrap and DNS publishing

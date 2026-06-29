@@ -177,34 +177,48 @@ def _explicit_site_index(node: Any) -> int | None:
 def _site_index_for_node(nodes: list[Any], node: Any | None) -> int:
     """Return the site's third-octet index for a node.
 
-    Explicit `site_index` wins. Without it, colocated nodes sharing public_ipv4 get the same
-    1-based site index in first-seen order. As a last fallback, node order becomes site order.
+    A site is a place/WAN boundary: nodes with the same public_ipv4 share one site. An explicit
+    `site_index` on any node in that public-IP group labels the whole site. Without an explicit
+    label, distinct public IPs get 1-based site indexes in first-seen order. As a last fallback,
+    node order becomes site order.
     """
     if node is None:
         from .network_plan import ROADWARRIOR_SITE_INDEX
 
         return ROADWARRIOR_SITE_INDEX
 
-    explicit = _explicit_site_index(node)
-    if explicit is not None:
-        return explicit
-
-    site_by_public_ip: dict[str, int] = {}
-    fallback_by_name: dict[str, int] = {}
-    next_site = 1
-    for idx, candidate in enumerate(nodes):
-        explicit_candidate = _explicit_site_index(candidate)
-        if explicit_candidate is not None:
-            fallback_by_name[candidate.name] = explicit_candidate
-            continue
+    def site_key(candidate: Any, idx: int) -> str:
         public_ip = getattr(candidate, "public_ipv4", None)
         if isinstance(public_ip, str) and public_ip.strip():
-            if public_ip not in site_by_public_ip:
-                site_by_public_ip[public_ip] = next_site
-                next_site += 1
-            fallback_by_name[candidate.name] = site_by_public_ip[public_ip]
-        else:
-            fallback_by_name[candidate.name] = idx + 1
+            return f"public:{public_ip.strip()}"
+        return f"node:{getattr(candidate, 'name', idx)}"
+
+    key_order: list[str] = []
+    explicit_by_key: dict[str, int] = {}
+
+    for idx, candidate in enumerate(nodes):
+        key = site_key(candidate, idx)
+        if key not in key_order:
+            key_order.append(key)
+        explicit_candidate = _explicit_site_index(candidate)
+        if explicit_candidate is not None and key not in explicit_by_key:
+            explicit_by_key[key] = explicit_candidate
+
+    used_indexes = set(explicit_by_key.values())
+    site_by_key = dict(explicit_by_key)
+    next_site = 1
+    for key in key_order:
+        if key in site_by_key:
+            continue
+        while next_site in used_indexes:
+            next_site += 1
+        site_by_key[key] = next_site
+        used_indexes.add(next_site)
+        next_site += 1
+
+    fallback_by_name: dict[str, int] = {}
+    for idx, candidate in enumerate(nodes):
+        fallback_by_name[candidate.name] = site_by_key[site_key(candidate, idx)]
     return fallback_by_name.get(node.name, 1)
 
 

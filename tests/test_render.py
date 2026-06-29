@@ -2,11 +2,13 @@
 
 from styxctl.wireguard_mesh import (
     MeshMember,
+    _site_index_for_node,
     pistyx_clients,
     render_client_config,
     render_local_config,
     render_pistyx_pop,
 )
+from styxctl.nodes import parse_nodes
 
 
 def test_pistyx_pop_is_a_server_not_a_default_route():
@@ -104,3 +106,31 @@ def test_pistyx_clients_rehomes_suffix_into_site_scope():
     assert clients[0]["host_suffix"] == 7
     assert clients[0]["ipv4"] == "10.0.2.7"
     assert clients[0]["ipv6"] == "fd00:cafe:0:2::7"
+
+
+def test_site_index_is_public_ip_site_not_individual_node():
+    nodes = parse_nodes({
+        "nodes": [
+            {"name": "pegasus", "public_ipv4": "203.0.113.10", "site_index": 7},
+            {"name": "atlas", "public_ipv4": "203.0.113.10"},
+            {"name": "hydra", "public_ipv4": "203.0.113.20"},
+        ]
+    })
+    by_name = {node.name: node for node in nodes}
+    assert _site_index_for_node(nodes, by_name["pegasus"]) == 7
+    assert _site_index_for_node(nodes, by_name["atlas"]) == 7
+    assert _site_index_for_node(nodes, by_name["hydra"]) == 1
+
+
+def test_site_index_groups_distinct_public_ips_in_first_seen_order():
+    nodes = parse_nodes({
+        "nodes": [
+            {"name": "pegasus", "public_ipv4": "203.0.113.10"},
+            {"name": "atlas", "public_ipv4": "203.0.113.10"},
+            {"name": "hydra", "public_ipv4": "203.0.113.20"},
+        ]
+    })
+    by_name = {node.name: node for node in nodes}
+    assert _site_index_for_node(nodes, by_name["pegasus"]) == 1
+    assert _site_index_for_node(nodes, by_name["atlas"]) == 1
+    assert _site_index_for_node(nodes, by_name["hydra"]) == 2
