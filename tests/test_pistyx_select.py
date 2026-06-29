@@ -3,7 +3,9 @@
 from styxctl.pistyx_select import (
     DEFAULT_HYSTERESIS_MS,
     parse_ping_rtt,
+    rank_sites_by_consensus,
     rank_sites_by_rtt,
+    select_consensus_site,
     select_fastest_site,
 )
 
@@ -52,3 +54,33 @@ def test_select_stays_within_hysteresis():
 
 def test_select_moves_when_beaten_beyond_hysteresis():
     assert select_fastest_site({1: 80.0, 2: 12.0}, current_site=1, hysteresis_ms=DEFAULT_HYSTERESIS_MS) == 2
+
+
+def test_consensus_rank_favors_reachability_then_average_rtt():
+    ranked = rank_sites_by_consensus({
+        "phone": {1: 20.0, 2: 8.0, 3: None},
+        "laptop": {1: 40.0, 2: None, 3: 2.0},
+    })
+    assert ranked == [
+        {"site": 1, "reachable": 2, "avg_rtt_ms": 30.0},
+        {"site": 3, "reachable": 1, "avg_rtt_ms": 2.0},
+        {"site": 2, "reachable": 1, "avg_rtt_ms": 8.0},
+    ]
+
+
+def test_consensus_sticks_with_current_site_inside_hysteresis():
+    samples = {"phone": {1: 25.0, 2: 18.0}}
+    assert select_consensus_site(samples, current_site=1, hysteresis_ms=15.0) == 1
+
+
+def test_consensus_moves_when_average_beats_hysteresis():
+    samples = {"phone": {1: 70.0, 2: 18.0}}
+    assert select_consensus_site(samples, current_site=1, hysteresis_ms=15.0) == 2
+
+
+def test_consensus_moves_to_site_that_reaches_more_active_clients():
+    samples = {
+        "phone": {1: 10.0, 2: 40.0},
+        "laptop": {1: None, 2: 80.0},
+    }
+    assert select_consensus_site(samples, current_site=1, hysteresis_ms=15.0) == 2

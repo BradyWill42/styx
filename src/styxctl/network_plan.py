@@ -19,7 +19,7 @@ DEFAULT_NETWORK: dict[str, str] = {
     "infra_ipv6": "fd00:cafe:1::/56",
     "pod_ipv6": "fd00:cafe:2::/56",
     "service_ipv6": "fd00:cafe:3::/112",
-    # Roadwarrior is just the conventional mobile site index.
+    # Site 250 is the conventional mobile-client site index.
     "roadwarrior_ipv4": "10.0.250.0/24",
     "roadwarrior_ipv6": "fd00:cafe:0:250::/64",
     "pistyx_ipv4": "10.0.250.254/32",
@@ -170,12 +170,12 @@ def assign_node_mesh_ips(config: dict[str, Any]) -> None:
 
 
 def roadwarrior_ipv4_for_index(index: int, *, site_index: int = ROADWARRIOR_SITE_INDEX) -> str:
-    """Client IPv4 for a slot in a site scope; defaults to the mobile roadwarrior site."""
+    """Client IPv4 for a slot in a site scope; defaults to the mobile-client site."""
     return client_ipv4_for_site(index, site_index=site_index)
 
 
 def roadwarrior_ipv6_for_index(index: int, *, site_index: int = ROADWARRIOR_SITE_INDEX) -> str:
-    """Client IPv6 for a slot in a site scope; defaults to the mobile roadwarrior site."""
+    """Client IPv6 for a slot in a site scope; defaults to the mobile-client site."""
     return client_ipv6_for_site(index, site_index=site_index)
 
 

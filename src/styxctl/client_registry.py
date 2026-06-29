@@ -1,4 +1,4 @@
-"""Automatic client registration - persist a roadwarrior into styx.yaml's `clients:` block.
+"""Automatic client registration - persist a client into styx.yaml's `clients:` block.
 
 A client is only accepted by a leader's pistyx PoP once it is a registered peer. The manual flow
 is "add the client under `clients:` then `styxctl mesh up`"; this module automates the first half

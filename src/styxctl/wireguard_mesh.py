@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import base64
 import json
+import shlex
 import shutil
 import subprocess
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -670,6 +672,17 @@ def apply_local(
     if isinstance(pop, dict) and pop.get("is_leader"):
         pop_ok, pop_detail = apply_pistyx_pop(pop)
         report["actions"].append(pop_detail)
+    else:
+        egress_interface = roster.get("pistyx_interface")
+        if isinstance(egress_interface, str) and egress_interface:
+            down_ok, down_detail = _run_mutating(
+                ["bash", "-c", f"wg-quick down {egress_interface} 2>/dev/null || true"],
+                use_sudo=True,
+                sudo_available=True,
+            )
+            report["actions"].append(
+                f"pistyx PoP down/no-op: {down_detail}" if down_ok else f"pistyx PoP down failed: {down_detail}"
+            )
 
     role = "hub" if local_name == init_name else "spoke"
     report["message"] = f"{local_name} mesh applied ({role})"
@@ -928,6 +941,7 @@ def mesh_up(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]
             "interface": interface,
             "port": port,
             "site_overlays": site_overlays,
+            "pistyx_interface": eg_interface,
             "pistyx_pop": pistyx_pop_block_for(node),
         }
         b64 = base64.b64encode(json.dumps(roster).encode()).decode()
@@ -1203,7 +1217,7 @@ def render_client_config(
     address_v6: str | None,
     mtu: int,
 ) -> str:
-    """Render a roadwarrior client config: one [Peer] = pistyx (the SHARED entry identity), full-tunnel.
+    """Render a client config: one [Peer] = pistyx (the SHARED entry identity), full-tunnel.
 
     The client dials `endpoint` — `pistyx.duckdns.org` for auto-fastest, or a specific site's name to
     pin it — and routes EVERYTHING (0.0.0.0/0, ::/0) there. Whichever leader the name resolves to
@@ -1220,7 +1234,7 @@ def render_client_config(
         allowed.append("::/0")
 
     lines = [
-        f"# styx roadwarrior: {client_name} -> {endpoint} (pistyx)",
+        f"# styx client: {client_name} -> {endpoint} (pistyx)",
         "[Interface]",
         f"PrivateKey = {client_private_key}",
     ]
@@ -1263,7 +1277,7 @@ def _host_suffix_from_client(item: dict[str, Any], fallback_index: int) -> int:
 
 
 def pistyx_clients(config: dict[str, Any], *, site_index: int | None = None) -> list[dict[str, Any]]:
-    """Parse the optional `clients:` block — roadwarriors registered as peers on every leader's PoP."""
+    """Parse the optional `clients:` block - clients registered as peers on every leader's PoP."""
     raw = config.get("clients")
     clients: list[dict[str, Any]] = []
     if isinstance(raw, list):
@@ -1294,6 +1308,71 @@ def pistyx_clients(config: dict[str, Any], *, site_index: int | None = None) -> 
     return clients
 
 
+def _endpoint_host(endpoint: str) -> str | None:
+    endpoint = endpoint.strip()
+    if not endpoint or endpoint == "(none)":
+        return None
+    if endpoint.startswith("["):
+        end = endpoint.find("]")
+        return endpoint[1:end] if end > 1 else None
+    if ":" not in endpoint:
+        return endpoint
+    return endpoint.rsplit(":", 1)[0] or None
+
+
+def active_pistyx_clients_from_dump(
+    dump: str,
+    registered_clients: list[dict[str, Any]],
+    *,
+    now: int | None = None,
+    active_within: int = 180,
+) -> list[dict[str, Any]]:
+    """Parse ``wg show StyxEgress dump`` and return recently handshaken registered clients.
+
+    The current holder learns the client's public endpoint only after the first WireGuard
+    handshake. That endpoint IP is what every site leader probes during negotiation.
+    """
+    by_key = {
+        str(client.get("public_key", "")).strip(): client
+        for client in registered_clients
+        if str(client.get("public_key", "")).strip()
+    }
+    now = int(time.time()) if now is None else now
+    active: list[dict[str, Any]] = []
+    for raw in dump.splitlines():
+        fields = raw.rstrip("\n").split("\t")
+        if len(fields) < 8:
+            continue
+        public_key = fields[0].strip()
+        client = by_key.get(public_key)
+        if client is None:
+            continue
+        endpoint = fields[2].strip()
+        endpoint_ip = _endpoint_host(endpoint)
+        if endpoint_ip is None:
+            continue
+        try:
+            latest = int(fields[4])
+        except (TypeError, ValueError):
+            continue
+        if latest <= 0:
+            continue
+        if active_within > 0 and now - latest > active_within:
+            continue
+        active.append(
+            {
+                "name": client.get("name") or public_key[:12],
+                "public_key": public_key,
+                "host_suffix": client.get("host_suffix"),
+                "endpoint": endpoint,
+                "endpoint_ip": endpoint_ip,
+                "latest_handshake": latest,
+                "seconds_since_handshake": max(0, now - latest),
+            }
+        )
+    return sorted(active, key=lambda item: (str(item["name"]), str(item["public_key"])))
+
+
 def _pistyx_pubkey(config: dict[str, Any]) -> str | None:
     """The SHARED pistyx public key from the `pistyx:` block (operator records it after `mesh up`)."""
     pistyx = config.get("pistyx")
@@ -1313,7 +1392,7 @@ def client_config(
     render_only: bool = False,
     register: bool = False,
 ) -> tuple[dict[str, Any], int]:
-    """Generate a roadwarrior client config that dials pistyx (auto-fastest) or a pinned `site`.
+    """Generate a client config that dials pistyx (auto-fastest) or a pinned `site`.
 
     The client peers the SHARED pistyx identity; whichever leader the name resolves to accepts it and
     breaks out locally. With ``register=True`` the client is also persisted into styx.yaml's
@@ -1452,7 +1531,7 @@ def pistyx_info(config_path: str | Path | None = None) -> tuple[dict[str, Any], 
 def pistyx_probe(client_ip: str, *, config_path: str | Path | None = None) -> tuple[dict[str, Any], int]:
     """RTT-probe a client's IP from every site's leader and recommend the fastest pistyx holder.
 
-    This is the decision half of the fastest-site loop: a roadwarrior's public IP is pinged from
+    This is the decision half of the fastest-site loop: a client's public IP is pinged from
     each site's entrypoint over the backbone; the lowest-latency site should hold pistyx. The
     ranking/selection math is pure (:mod:`pistyx_select`, unit-tested with hysteresis so a
     marginal win never flaps the DuckDNS record). LIVE (SSH) — meaningful only with >=2 sites
@@ -1468,7 +1547,7 @@ def pistyx_probe(client_ip: str, *, config_path: str | Path | None = None) -> tu
     from .pistyx_select import parse_ping_rtt, rank_sites_by_rtt, select_fastest_site
 
     if not isinstance(client_ip, str) or not client_ip.strip():
-        return {"status": "ERROR", "message": "a client IP (the roadwarrior's public address) is required"}, 1
+        return {"status": "ERROR", "message": "a client IP (the client's public address) is required"}, 1
     client_ip = client_ip.strip()
 
     inventory = collect_inventory()
@@ -1527,6 +1606,171 @@ def pistyx_probe(client_ip: str, *, config_path: str | Path | None = None) -> tu
     return report, 0
 
 
+def pistyx_negotiate(
+    *,
+    config_path: str | Path | None = None,
+    apply: bool = False,
+    active_within: int = 180,
+    hysteresis_ms: float | None = None,
+) -> tuple[dict[str, Any], int]:
+    """Negotiate the best pistyx holder for currently connected clients.
+
+    The current holder discovers connected clients from ``wg show StyxEgress dump``. Every site
+    leader probes each active client's public endpoint IP. The consensus selector picks the holder
+    for the single floating ``pistyx`` DNS name. With ``apply=True``, this writes
+    ``pistyx.current_host``, runs ``mesh up``, and republishes DuckDNS.
+    """
+    from .bootstrap_config import load_operational_config
+    from .config import find_config
+    from .install import _election_context
+    from .inventory import collect_inventory
+    from .k3s_cluster import _run_ssh_command, _ssh_target
+    from .lan_election import resolve_lan_leadership
+    from .nodes import identify_local_node, parse_nodes, pistyx_holder
+    from .pistyx_repoint import write_pistyx_current_host
+    from .pistyx_select import rank_sites_by_consensus, select_consensus_site, parse_ping_rtt
+
+    candidate = Path(config_path) if config_path is not None else find_config()
+    if candidate is None:
+        return {"status": "ERROR", "message": "no styx.yaml found"}, 1
+
+    inventory = collect_inventory()
+    config = load_operational_config(candidate, inventory=inventory)
+    effective, election = resolve_lan_leadership(config, inventory)
+    nodes = parse_nodes(effective)
+    if not nodes:
+        return {"status": "ERROR", "message": "no nodes in config"}, 1
+    local_node = identify_local_node(nodes, inventory, effective)
+    election_lan_ips, election_leader = _election_context(election)
+
+    holder = pistyx_holder(effective, nodes)
+    if holder is None:
+        return {"status": "ERROR", "message": "no pistyx holder found"}, 1
+    current_site = _site_index_for_node(nodes, holder)
+    eg_interface, _eg_port, _eg_mtu, _eg_hostname = _egress_settings(effective)
+
+    registered = pistyx_clients(effective)
+    report: dict[str, Any] = {
+        "status": "OK",
+        "mode": "apply" if apply else "plan",
+        "current_holder": holder.name,
+        "current_site": current_site,
+        "active_within": active_within,
+        "actions": [],
+    }
+    if not registered:
+        report["message"] = "no registered clients in styx.yaml; nothing to negotiate"
+        return report, 0
+
+    conn = _ssh_target(
+        holder, None, effective, inventory=inventory, local_node=local_node,
+        election_lan_ips=election_lan_ips, election_leader=election_leader,
+    )
+    ok, detail = _run_ssh_command(
+        conn.target, f"sudo wg show {shlex.quote(eg_interface)} dump 2>/dev/null",
+        port=conn.port, jump=conn.jump,
+    )
+    if not ok:
+        return {"status": "ERROR", "message": f"could not read active clients from {holder.name}: {detail}"}, 1
+
+    active = active_pistyx_clients_from_dump(detail, registered, active_within=active_within)
+    report["active_clients"] = active
+    if not active:
+        report["message"] = f"no clients handshook with {eg_interface} in the last {active_within}s"
+        return report, 0
+
+    leaders: dict[int, Any] = {}
+    client_samples: dict[str, dict[int, float | None]] = {}
+    client_reports: list[dict[str, Any]] = []
+    for client in active:
+        samples: dict[int, float | None] = {}
+        site_rows: list[dict[str, Any]] = []
+        endpoint_ip = str(client["endpoint_ip"])
+        for site_index in _site_indexes_for_nodes(nodes):
+            leader = _site_entrypoint_for_index(nodes, site_index, election_leader=election_leader)
+            leaders[site_index] = leader
+            if leader is None:
+                samples[site_index] = None
+                site_rows.append({"site": site_index, "leader": None, "rtt_ms": None})
+                continue
+            leader_conn = _ssh_target(
+                leader, None, effective, inventory=inventory, local_node=local_node,
+                election_lan_ips=election_lan_ips, election_leader=election_leader,
+            )
+            probe_ok, probe_detail = _run_ssh_command(
+                leader_conn.target,
+                f"ping -c 3 -w 5 {shlex.quote(endpoint_ip)}",
+                port=leader_conn.port,
+                jump=leader_conn.jump,
+            )
+            rtt = parse_ping_rtt(probe_detail) if probe_ok else None
+            samples[site_index] = rtt
+            site_rows.append({"site": site_index, "leader": leader.name, "rtt_ms": rtt})
+        client_key = str(client["name"])
+        client_samples[client_key] = samples
+        client_reports.append({**client, "sites": site_rows})
+
+    chosen = select_consensus_site(
+        client_samples,
+        current_site=current_site,
+        hysteresis_ms=15.0 if hysteresis_ms is None else hysteresis_ms,
+    )
+    ranked = rank_sites_by_consensus(client_samples)
+    target_leader = leaders.get(chosen) if chosen is not None else None
+    report["clients"] = client_reports
+    report["consensus"] = ranked
+    report["recommended_site"] = chosen
+    report["recommended_holder"] = target_leader.name if target_leader else None
+
+    if chosen is None or target_leader is None:
+        report["status"] = "ERROR"
+        report["message"] = "no site could reach any active client; keeping current pistyx holder"
+        return report, 1
+    if target_leader.name == holder.name:
+        report["message"] = f"pistyx stays on {holder.name} (site {current_site})"
+        return report, 0
+
+    report["message"] = (
+        f"pistyx should move from {holder.name} (site {current_site}) to "
+        f"{target_leader.name} (site {chosen})"
+    )
+    if not apply:
+        report["actions"].append(
+            f"plan only: set pistyx.current_host: {target_leader.name}, then run mesh up + deploy dns apply"
+        )
+        return report, 0
+
+    write_report, write_code = write_pistyx_current_host(target_leader.name, config_path=candidate)
+    report["actions"].append(write_report.get("message", "updated pistyx.current_host"))
+    if write_code != 0:
+        report["status"] = "ERROR"
+        report["message"] = write_report.get("message", "failed to update pistyx.current_host")
+        return report, write_code
+
+    mesh_report, mesh_code = mesh_up(config_path=candidate)
+    report["mesh_up"] = {"status": mesh_report.get("status"), "message": mesh_report.get("message")}
+    report["actions"].append(mesh_report.get("message", "mesh up completed"))
+    if mesh_code != 0:
+        report["status"] = "ERROR"
+        report["message"] = mesh_report.get("message", "mesh up failed after pistyx repoint")
+        return report, mesh_code
+
+    from .dns_publish import deploy_dns
+
+    dns_report, dns_code = deploy_dns(dry_run=False, config_path=candidate)
+    report["deploy_dns"] = {"status": dns_report.get("status"), "message": dns_report.get("message")}
+    report["actions"].append(dns_report.get("message", "deploy dns completed"))
+    if dns_code != 0:
+        report["status"] = "ERROR"
+        report["message"] = dns_report.get("message", "deploy dns failed after pistyx repoint")
+        return report, dns_code
+
+    report["message"] = (
+        f"pistyx moved to {target_leader.name} (site {chosen}); clients will follow after DNS/reresolve"
+    )
+    return report, 0
+
+
 def render_pistyx_probe_text(report: dict[str, Any]) -> str:
     lines = [f"=== pistyx probe — {report.get('status', 'OK')} ==="]
     if report.get("client_ip"):
@@ -1540,4 +1784,36 @@ def render_pistyx_probe_text(report: dict[str, Any]) -> str:
         lines.append(f"  site {site.get('site')} via {leader}: {rtt_text}")
     if report.get("message"):
         lines.append(report["message"])
+    return "\n".join(lines) + "\n"
+
+
+def render_pistyx_negotiate_text(report: dict[str, Any]) -> str:
+    mode = report.get("mode", "plan")
+    lines = [f"=== pistyx negotiate ({mode}) — {report.get('status', 'OK')} ==="]
+    if report.get("current_holder"):
+        lines.append(f"current holder: {report['current_holder']} (site {report.get('current_site')})")
+    for client in report.get("clients") or report.get("active_clients") or []:
+        lines.append(
+            f"client {client.get('name')}: endpoint {client.get('endpoint_ip')} "
+            f"(last handshake {client.get('seconds_since_handshake')}s ago)"
+        )
+        for site in client.get("sites", []):
+            rtt = site.get("rtt_ms")
+            rtt_text = f"{rtt:.1f} ms" if isinstance(rtt, (int, float)) else "unreachable"
+            leader = site.get("leader") or "<no leader>"
+            lines.append(f"  site {site.get('site')} via {leader}: {rtt_text}")
+    if report.get("consensus"):
+        lines.append("consensus:")
+        for row in report["consensus"]:
+            lines.append(
+                f"  site {row['site']}: {row['reachable']} client(s), avg {row['avg_rtt_ms']:.1f} ms"
+            )
+    if report.get("recommended_holder"):
+        lines.append(
+            f"recommended holder: {report['recommended_holder']} (site {report.get('recommended_site')})"
+        )
+    if report.get("message"):
+        lines.append(str(report["message"]))
+    for action in report.get("actions", []):
+        lines.append(f"  - {action}")
     return "\n".join(lines) + "\n"

@@ -33,6 +33,7 @@ jobs:
           styxctl mesh --help
           styxctl mesh pistyx --help
           styxctl mesh pistyx probe --help
+          styxctl mesh pistyx negotiate --help
           styxctl client --help
           styxctl client config --help
           # rendered k8s manifests must parse as YAML (block-scalar shell scripts are easy to mis-indent)
@@ -66,7 +67,7 @@ jobs:
           grep -q "StyxEgress" /tmp/mesh-plan.txt                          # separate client-entry interface
           grep -q "ListenPort = 47801" /tmp/mesh-plan.txt                  # PoP listens for clients
           grep -q "Address = 10.0.1.254/32" /tmp/mesh-plan.txt             # PoP binds a host route; site WG owns /24
-          # Roadwarrior client dials pistyx (the floating entry), egress is the leader's LOCAL internet
+          # Client dials pistyx (the floating entry), egress is the leader's LOCAL internet
           styxctl client config testclient --render-only | tee /tmp/client.txt
           grep -q "Endpoint = pistyx.duckdns.org:47801" /tmp/client.txt    # dials the floating pistyx name
           grep -q "Address = 10.0.1.64/32" /tmp/client.txt                 # client suffix stays stable inside holder site

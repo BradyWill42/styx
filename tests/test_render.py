@@ -4,6 +4,7 @@ from styxctl.wireguard_mesh import (
     MeshMember,
     SiteMember,
     _site_index_for_node,
+    active_pistyx_clients_from_dump,
     mesh_plan,
     pistyx_clients,
     render_client_config,
@@ -186,6 +187,33 @@ def test_pistyx_clients_rehomes_suffix_into_site_scope():
     assert clients[0]["host_suffix"] == 70
     assert clients[0]["ipv4"] == "10.0.2.70"
     assert clients[0]["ipv6"] == "fd00:cafe:0:2::46"
+
+
+def test_active_pistyx_clients_from_wg_dump_filters_registered_recent_peers():
+    clients = [{"name": "phone", "public_key": "PHONEPUB", "host_suffix": 64}]
+    dump = "\n".join([
+        "StyxEgress\tpriv\tpub\t47801\toff",
+        "PHONEPUB\t(none)\t198.51.100.10:54321\t10.0.1.64/32\t1000\t10\t20\t25",
+        "OTHERPUB\t(none)\t198.51.100.20:54321\t10.0.1.65/32\t1000\t10\t20\t25",
+        "PHONEPUB\t(none)\t203.0.113.1:54321\t10.0.1.64/32\t1\t10\t20\t25",
+    ])
+    active = active_pistyx_clients_from_dump(dump, clients, now=1010, active_within=180)
+    assert active == [{
+        "name": "phone",
+        "public_key": "PHONEPUB",
+        "host_suffix": 64,
+        "endpoint": "198.51.100.10:54321",
+        "endpoint_ip": "198.51.100.10",
+        "latest_handshake": 1000,
+        "seconds_since_handshake": 10,
+    }]
+
+
+def test_active_pistyx_clients_from_wg_dump_extracts_ipv6_endpoint():
+    clients = [{"name": "phone", "public_key": "PHONEPUB", "host_suffix": 64}]
+    dump = "PHONEPUB\t(none)\t[2001:db8::10]:54321\tfd00:cafe:0:1::40/128\t1000\t10\t20\t25"
+    active = active_pistyx_clients_from_dump(dump, clients, now=1001, active_within=180)
+    assert active[0]["endpoint_ip"] == "2001:db8::10"
 
 
 def test_site_index_is_public_ip_site_not_individual_node():

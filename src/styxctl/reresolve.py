@@ -12,7 +12,7 @@ WG interface present on a node (``Styx`` everywhere, ``StyxEgress`` on leaders) 
 partition (the local kubelet keeps it running), so it's there exactly when an endpoint goes stale.
 
 Client side: ``styxctl client config`` emits a companion systemd ``.service`` + ``.timer`` (see
-``render_client_reresolve_unit``) for Linux roadwarriors; the mobile WireGuard apps already
+``render_client_reresolve_unit``) for Linux clients; the mobile WireGuard apps already
 re-resolve on handshake failure / network change.
 
 Deploy with ``styxctl deploy reresolve apply``; remove with ``styxctl deploy reresolve delete``.

@@ -44,8 +44,10 @@ from .wireguard_mesh import (
     mesh_plan,
     mesh_up,
     pistyx_info,
+    pistyx_negotiate,
     pistyx_probe,
     render_mesh_report_text,
+    render_pistyx_negotiate_text,
     render_pistyx_probe_text,
     stage_pistyx_key,
 )
@@ -111,7 +113,7 @@ deploy_reresolve_app = typer.Typer(help="WireGuard endpoint re-resolution Daemon
 deploy_all_app = typer.Typer(help="Deploy/remove ALL Styx pod services at once (dns + resolver + reresolve).", no_args_is_help=True)
 mesh_app = typer.Typer(help="Build and inspect the Styx WireGuard backbone mesh.", no_args_is_help=True)
 mesh_pistyx_app = typer.Typer(help="Inspect and move the movable pistyx egress.", no_args_is_help=True)
-client_app = typer.Typer(help="Generate roadwarrior client configs (connect to a chosen site).", no_args_is_help=True)
+client_app = typer.Typer(help="Generate client configs (connect to a chosen site).", no_args_is_help=True)
 
 
 @app.callback()
@@ -988,7 +990,7 @@ def mesh_pistyx_show_cmd() -> None:
 
 @mesh_pistyx_app.command("probe")
 def mesh_pistyx_probe_cmd(
-    client_ip: str = typer.Argument(..., help="the roadwarrior's public IP to RTT-probe from each site"),
+    client_ip: str = typer.Argument(..., help="the client's public IP to RTT-probe from each site"),
 ) -> None:
     """RTT-probe a client from every site's leader and recommend the fastest pistyx holder.
 
@@ -998,6 +1000,34 @@ def mesh_pistyx_probe_cmd(
     report, code = pistyx_probe(client_ip, config_path=None)
     console.print(render_pistyx_probe_text(report), markup=False, soft_wrap=True)
     raise typer.Exit(code=code)
+
+
+@mesh_pistyx_app.command("negotiate")
+def mesh_pistyx_negotiate_cmd(
+    apply: bool = typer.Option(False, "--apply", help="apply the selected move: update config, mesh up, deploy dns"),
+    watch: bool = typer.Option(False, "--watch", help="run continuously; useful as the backend loop"),
+    interval: int = typer.Option(60, "--interval", min=10, help="seconds between watch iterations"),
+    active_within: int = typer.Option(180, "--active-within", min=1, help="client handshakes newer than this are active"),
+    hysteresis_ms: float = typer.Option(15.0, "--hysteresis-ms", min=0.0, help="RTT margin required before moving"),
+) -> None:
+    """Negotiate pistyx placement from active client handshakes.
+
+    The current holder observes connected client endpoint IPs, every site leader probes them,
+    and the consensus winner becomes the recommended holder. Without --apply this is a plan.
+    """
+    import time
+
+    while True:
+        report, code = pistyx_negotiate(
+            config_path=None,
+            apply=apply,
+            active_within=active_within,
+            hysteresis_ms=hysteresis_ms,
+        )
+        console.print(render_pistyx_negotiate_text(report), markup=False, soft_wrap=True)
+        if not watch:
+            raise typer.Exit(code=code)
+        time.sleep(interval)
 
 
 @mesh_pistyx_app.command("pubkey-local")
@@ -1036,7 +1066,7 @@ def client_config_cmd(
         False, "--register", help="persist this client into styx.yaml's clients block"
     ),
 ) -> None:
-    """Generate a roadwarrior config that dials pistyx (auto-fastest) or a pinned --site."""
+    """Generate a client config that dials pistyx (auto-fastest) or a pinned --site."""
     report, code = client_config(name, site=site or None, index=index, render_only=render_only, register=register)
     if report.get("config"):
         typer.echo(report["config"])                       # the .conf -> stdout (pipe to a file)
