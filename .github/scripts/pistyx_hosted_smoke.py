@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import sys
@@ -38,13 +39,18 @@ SITE_HOSTNAMES = {
 
 
 def run_styxctl(workdir: Path, *args: str) -> str:
+    command = [STYXCTL, *args] if shutil.which(STYXCTL) else [sys.executable, "-m", "styxctl.cli", *args]
+    env = os.environ.copy()
+    src_path = str(ROOT / "src")
+    env["PYTHONPATH"] = src_path if not env.get("PYTHONPATH") else f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
     completed = subprocess.run(
-        [STYXCTL, *args],
+        command,
         cwd=workdir,
         check=False,
         capture_output=True,
         text=True,
         timeout=120,
+        env=env,
     )
     if completed.returncode != 0:
         sys.stderr.write(completed.stdout)
@@ -115,7 +121,7 @@ def render_checks() -> None:
         client = run_styxctl(workdir, "client", "config", "hosted-smoke", "--render-only")
         expected = [
             "Endpoint = pistyx.duckdns.org:47801",
-            "Address = 10.0.250.2/32, fd00:cafe:0:250::2/128",
+            "Address = 10.0.1.2/32, fd00:cafe:0:1::2/128",
             "AllowedIPs = 0.0.0.0/0, ::/0",
             "PersistentKeepalive = 25",
         ]
@@ -129,6 +135,8 @@ def render_checks() -> None:
         moved_client = run_styxctl(workdir, "client", "config", "hosted-smoke", "--render-only")
         if "Endpoint = pistyx.duckdns.org:47801" not in moved_client:
             raise AssertionError("client endpoint should remain the floating pistyx name after a move")
+        if "Address = 10.0.2.2/32, fd00:cafe:0:2::2/128" not in moved_client:
+            raise AssertionError("client address should move into the holder site's range")
 
     print("pistyx render/move checks passed")
 

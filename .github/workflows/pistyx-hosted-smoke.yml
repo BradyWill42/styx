@@ -71,8 +71,8 @@ jobs:
           sudo apt-get install -y wireguard-tools iproute2 iputils-ping
           sudo install -d -m 700 /etc/wireguard
 
-          address="${PISTYX_CI_CLIENT_ADDRESS:-10.0.250.254/32}"
-          target="${PISTYX_PING_TARGET:-10.0.250.1}"
+          address="${PISTYX_CI_CLIENT_ADDRESS:-10.0.1.254/32}"
+          target="${PISTYX_PING_TARGET:-10.0.1.1}"
           ping_target="${target%%/*}"
           allowed="${target}"
           case "${allowed}" in

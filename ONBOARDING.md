@@ -34,7 +34,7 @@ The **backbone** mesh above is built. Still **designed, not built**: the per-sit
 - **Styx backbone WG `10.0.0.0/24` (+ IPv6)** — every k3s Pi is a member; this is the cluster network. The styx *server* role is movable between sites by client speed (the dynamic part).
 - **Per-site ranges** — each site (a LAN) has its own v4/v6 range; a Pi is on **two** WG nets (styx backbone + its site). Intended carve: site *k* = `10.0.k.0/24`, **leader at `.1`**, **site 0 = styx** (the connector). *(Currently `assign_node_mesh_ips` is FLAT — the carve isn't built.)*
 - **Leaders** — each site LAN-elects a leader (`lan_election.py`); it's the port-forward face + DuckDNS publisher + styx uplink. **NAT**: only the port-forwarded leader is reachable cross-site, so inter-site peering is leader↔styx; regular Pis route via their leader. (Same reason SSH uses ProxyJump.)
-- **Clients** (`roadwarrior 10.0.250.0/24`) — connect to **edge sites**, homed to the site they enter; never to styx (`10.0.0.0`) directly.
+- **Clients** — roadwarriors are mobile site members. The site index changes the third octet (`10.0.<site>.0/24`), while the last octet is the stable device identity, so `10.0.1.7` and `10.0.2.7` are the same client in two site scopes. The conventional mobile site is `10.0.250.0/24`.
 - **Exactly one init-server total** (k3s `--cluster-init` bootstrapper, at the styx site). `server` (HA) optional, ~one per site. "Site leader" is an *overlay* role, orthogonal to k3s init-server/server/agent.
 
 ## 5. CI / verification

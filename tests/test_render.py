@@ -12,18 +12,18 @@ from styxctl.wireguard_mesh import (
 def test_pistyx_pop_is_a_server_not_a_default_route():
     out = render_pistyx_pop(
         "<priv>",
-        [{"name": "laptop", "public_key": "PUBKEY", "ipv4": "10.0.250.2", "ipv6": None}],
+        [{"name": "laptop", "public_key": "PUBKEY", "ipv4": "10.0.1.2", "ipv6": None}],
         listen_port=47801,
         mtu=1420,
-        gateway_v4="10.0.250.1",
-        gateway_v6="fd00:cafe:0:250::1",
+        gateway_v4="10.0.1.1",
+        gateway_v6="fd00:cafe:0:1::1",
         stack_mode="dual-stack",
     )
-    assert "Address = 10.0.250.1/24" in out          # owns the client band
+    assert "Address = 10.0.1.1/24" in out            # owns the holder site's client band
     assert "ListenPort = 47801" in out
     assert "MTU = 1420" in out
     assert "PublicKey = PUBKEY" in out
-    assert "AllowedIPs = 10.0.250.2/32" in out         # routed by the client's /32
+    assert "AllowedIPs = 10.0.1.2/32" in out           # routed by the client's /32
     # The PoP must NEVER carry a default route — that was the severing bug.
     assert "0.0.0.0/0" not in out
 
@@ -31,7 +31,7 @@ def test_pistyx_pop_is_a_server_not_a_default_route():
 def test_pistyx_pop_with_no_clients_has_no_peers():
     out = render_pistyx_pop(
         "<priv>", [], listen_port=47801, mtu=1420,
-        gateway_v4="10.0.250.1", gateway_v6="fd00:cafe:0:250::1",
+        gateway_v4="10.0.1.1", gateway_v6="fd00:cafe:0:1::1",
     )
     assert "[Interface]" in out
     assert "[Peer]" not in out
@@ -41,7 +41,7 @@ def test_client_config_full_tunnels_to_pistyx():
     out = render_client_config(
         "laptop", "<priv>",
         pistyx_pubkey="PISTYXPUB", endpoint="pistyx.duckdns.org", port=47801,
-        address_v4="10.0.250.2", address_v6="fd00:cafe:0:250::2", mtu=1420,
+        address_v4="10.0.1.2", address_v6="fd00:cafe:0:1::2", mtu=1420,
     )
     assert "Endpoint = pistyx.duckdns.org:47801" in out
     assert "AllowedIPs = 0.0.0.0/0, ::/0" in out
@@ -52,7 +52,7 @@ def test_client_config_full_tunnels_to_pistyx():
 def test_client_config_ipv4_only_prunes_v6():
     out = render_client_config(
         "laptop", "<priv>", pistyx_pubkey="P", endpoint="pistyx.duckdns.org", port=47801,
-        address_v4="10.0.250.2", address_v6=None, mtu=1420,
+        address_v4="10.0.1.2", address_v6=None, mtu=1420,
     )
     assert "0.0.0.0/0" in out
     assert "::/0" not in out
@@ -95,3 +95,12 @@ def test_pistyx_clients_parses_and_skips_incomplete():
     clients = pistyx_clients(cfg)
     assert len(clients) == 1
     assert clients[0]["name"] == "good"
+    assert clients[0]["host_suffix"] == 2
+
+
+def test_pistyx_clients_rehomes_suffix_into_site_scope():
+    cfg = {"clients": [{"name": "good", "public_key": "K", "ipv4": "10.0.250.7"}]}
+    clients = pistyx_clients(cfg, site_index=2)
+    assert clients[0]["host_suffix"] == 7
+    assert clients[0]["ipv4"] == "10.0.2.7"
+    assert clients[0]["ipv6"] == "fd00:cafe:0:2::7"

@@ -4,8 +4,12 @@ from styxctl.network_plan import (
     PISTYX_IPV4,
     PISTYX_IPV6,
     allocate_roadwarrior_ips,
+    client_ipv4_for_site,
     mesh_ipv4_for_node,
     mesh_ipv6_for_node,
+    pistyx_ipv4_for_site,
+    site_ipv4_for_host,
+    site_ipv4_network,
     roadwarrior_ipv4_for_index,
 )
 
@@ -13,6 +17,16 @@ from styxctl.network_plan import (
 def test_pistyx_reserved_addresses():
     assert PISTYX_IPV4 == "10.0.250.1"
     assert "250" in PISTYX_IPV6 and PISTYX_IPV6.endswith("::1")
+    assert pistyx_ipv4_for_site(1) == "10.0.1.1"
+    assert pistyx_ipv4_for_site(2) == "10.0.2.1"
+
+
+def test_site_scoped_identity_keeps_host_suffix():
+    assert site_ipv4_network(1) == "10.0.1.0/24"
+    assert site_ipv4_for_host(1, 7) == "10.0.1.7"
+    assert site_ipv4_for_host(2, 7) == "10.0.2.7"
+    assert client_ipv4_for_site(0, site_index=1) == "10.0.1.2"
+    assert client_ipv4_for_site(0, site_index=2) == "10.0.2.2"
 
 
 def test_mesh_ipv4_is_index_plus_one():
@@ -32,6 +46,8 @@ def test_allocator_skips_issued_and_reserved():
     assert v4 == "10.0.250.3"
     fresh, _ = allocate_roadwarrior_ips(set(), set(), stack_mode="ipv4-only")
     assert fresh != PISTYX_IPV4
+    site_v4, _ = allocate_roadwarrior_ips({"10.0.1.2"}, set(), stack_mode="ipv4-only", site_index=1)
+    assert site_v4 == "10.0.1.3"
 
 
 def test_allocator_prunes_by_stack_mode():

@@ -576,7 +576,8 @@ Built-in defaults:
 | Infra CIDR (v4 / v6) | `10.1.0.0/16` / `fd00:cafe:1::/56` |
 | Pod CIDR (v4 / v6) | `10.2.0.0/16` / `fd00:cafe:2::/56` |
 | Service CIDR (v4 / v6) | `10.3.0.0/16` / `fd00:cafe:3::/112` |
-| Roadwarrior CIDR (v4 / v6) | `10.0.250.0/24` / `fd00:cafe:0:250::/64` |
+| Site CIDR pattern (v4 / v6) | `10.0.<site>.0/24` / `fd00:cafe:0:<site>::/64` |
+| Mobile roadwarrior site (v4 / v6) | `10.0.250.0/24` / `fd00:cafe:0:250::/64` |
 
 Config validation status:
 
@@ -1003,8 +1004,8 @@ This is the only workflow that exercises runtime cluster behavior. It runs:
 | `RUNNER_API_TOKEN` | discover job lists runners | fine-grained PAT, `Administration: read`; `GITHUB_TOKEN` cannot list runners |
 | `PISTYX_CI_CLIENT_PRIVATE_KEY` | optional hosted-runner WireGuard smoke client key | its public key must be registered under `clients:` before `mesh up` |
 | `PISTYX_PUBLIC_KEY` | optional shared pistyx public key | printed by `styxctl mesh pistyx pubkey-local` on a node |
-| `PISTYX_CI_CLIENT_ADDRESS` | optional hosted-runner client address | defaults to `10.0.250.254/32` |
-| `PISTYX_PING_TARGET` | optional pistyx overlay ping target | defaults to `10.0.250.1` |
+| `PISTYX_CI_CLIENT_ADDRESS` | optional hosted-runner client address | defaults to `10.0.1.254/32` |
+| `PISTYX_PING_TARGET` | optional pistyx overlay ping target | defaults to `10.0.1.1` |
 
 ### Runner labels
 

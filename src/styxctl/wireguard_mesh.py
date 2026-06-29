@@ -103,8 +103,8 @@ def render_pistyx_pop(
 ) -> str:
     """Render a leader's pistyx PoP interface — the client entry point clients hit.
 
-    Every site's leader binds this SAME interface: the SHARED pistyx private key + the shared
-    gateway address (10.0.250.1 / fd00:cafe:0:250::1), with one [Peer] per roadwarrior client. A
+    Every site's leader binds this SAME interface: the SHARED pistyx private key + that site's
+    pistyx gateway address (10.0.<site>.1 / fd00:cafe:0:<site>::1), with one [Peer] per mobile client. A
     DuckDNS repoint of pistyx.duckdns.org therefore moves a client to whichever leader becomes
     active with zero client reconfig. The leader LOCAL-NATs the client range out its OWN WAN
     (local breakout, handled out-of-band by ensure_egress_nat) — styx never carries client traffic.
@@ -167,6 +167,63 @@ def _wg_settings(config: dict[str, Any]) -> tuple[str, int]:
     interface = wg.get("interface", "Styx")
     port = wg.get("port", 47800)
     return (interface if isinstance(interface, str) else "Styx"), (port if isinstance(port, int) else 47800)
+
+
+def _explicit_site_index(node: Any) -> int | None:
+    site_index = getattr(node, "site_index", None)
+    return site_index if isinstance(site_index, int) and 0 <= site_index <= 255 else None
+
+
+def _site_index_for_node(nodes: list[Any], node: Any | None) -> int:
+    """Return the site's third-octet index for a node.
+
+    Explicit `site_index` wins. Without it, colocated nodes sharing public_ipv4 get the same
+    1-based site index in first-seen order. As a last fallback, node order becomes site order.
+    """
+    if node is None:
+        from .network_plan import ROADWARRIOR_SITE_INDEX
+
+        return ROADWARRIOR_SITE_INDEX
+
+    explicit = _explicit_site_index(node)
+    if explicit is not None:
+        return explicit
+
+    site_by_public_ip: dict[str, int] = {}
+    fallback_by_name: dict[str, int] = {}
+    next_site = 1
+    for idx, candidate in enumerate(nodes):
+        explicit_candidate = _explicit_site_index(candidate)
+        if explicit_candidate is not None:
+            fallback_by_name[candidate.name] = explicit_candidate
+            continue
+        public_ip = getattr(candidate, "public_ipv4", None)
+        if isinstance(public_ip, str) and public_ip.strip():
+            if public_ip not in site_by_public_ip:
+                site_by_public_ip[public_ip] = next_site
+                next_site += 1
+            fallback_by_name[candidate.name] = site_by_public_ip[public_ip]
+        else:
+            fallback_by_name[candidate.name] = idx + 1
+    return fallback_by_name.get(node.name, 1)
+
+
+def _site_scope_for_node(nodes: list[Any], node: Any | None) -> dict[str, str | int]:
+    from .network_plan import (
+        pistyx_ipv4_for_site,
+        pistyx_ipv6_for_site,
+        site_ipv4_network,
+        site_ipv6_network,
+    )
+
+    site_index = _site_index_for_node(nodes, node)
+    return {
+        "site_index": site_index,
+        "gateway_v4": pistyx_ipv4_for_site(site_index),
+        "gateway_v6": pistyx_ipv6_for_site(site_index),
+        "network_v4": site_ipv4_network(site_index),
+        "network_v6": site_ipv6_network(site_index),
+    }
 
 
 # --------------------------------------------------------------------------- local key helpers
@@ -359,23 +416,27 @@ def mesh_plan(config_path: str | Path | None = None) -> tuple[dict[str, Any], in
     }
 
     # pistyx PoP preview: the client entry interface each leader runs (shared identity + clients).
-    from .network_plan import PISTYX_IPV4, PISTYX_IPV6, cluster_stack_mode
+    from .network_plan import cluster_stack_mode
     from .nodes import pistyx_holder
 
     eg_interface, eg_port, eg_mtu, eg_hostname = _egress_settings(config)
     stack = cluster_stack_mode(config)
     holder = pistyx_holder(config, nodes)
     holder_name = holder.name if holder else None
-    clients = pistyx_clients(config)
+    holder_scope = _site_scope_for_node(nodes, holder)
+    clients = pistyx_clients(config, site_index=int(holder_scope["site_index"]))
     report["pistyx"] = holder_name
     report["pistyx_hostname"] = eg_hostname
+    report["pistyx_site_index"] = holder_scope["site_index"]
     report["egress_interface"] = eg_interface
     report["egress_configs"] = (
         {
             holder_name: render_pistyx_pop(
                 "<privkey:pistyx>", clients,
                 listen_port=eg_port, mtu=eg_mtu,
-                gateway_v4=PISTYX_IPV4, gateway_v6=PISTYX_IPV6, stack_mode=stack,
+                gateway_v4=str(holder_scope["gateway_v4"]),
+                gateway_v6=str(holder_scope["gateway_v6"]),
+                stack_mode=stack,
             )
         }
         if holder_name
@@ -461,14 +522,15 @@ def mesh_up(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]
     # 1b. pistyx PoP: ensure the SHARED pistyx key locally + pre-stage it on every node, so any node
     # can run the PoP after a DuckDNS repoint. The PoP itself is brought up on the leader (the
     # current pistyx holder), which local-NATs client traffic out its OWN WAN — no backhaul.
-    from .network_plan import PISTYX_IPV4, PISTYX_IPV6, cluster_stack_mode
+    from .network_plan import cluster_stack_mode
     from .nodes import pistyx_holder
 
     eg_interface, eg_port, eg_mtu, eg_hostname = _egress_settings(effective)
     stack = cluster_stack_mode(effective)
     holder_node = pistyx_holder(effective, nodes)
     holder_name = holder_node.name if holder_node else None
-    clients = pistyx_clients(effective)
+    holder_scope = _site_scope_for_node(nodes, holder_node)
+    clients = pistyx_clients(effective, site_index=int(holder_scope["site_index"]))
 
     pk_ok, pistyx_pub = ensure_pistyx_identity()
     if not pk_ok:
@@ -496,8 +558,10 @@ def mesh_up(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]
             "port": eg_port,
             "mtu": eg_mtu,
             "stack_mode": stack,
-            "gateway_v4": PISTYX_IPV4,
-            "gateway_v6": PISTYX_IPV6,
+            "gateway_v4": holder_scope["gateway_v4"],
+            "gateway_v6": holder_scope["gateway_v6"],
+            "network_v4": holder_scope["network_v4"],
+            "network_v6": holder_scope["network_v6"],
             "clients": clients,
         }
 
@@ -541,6 +605,7 @@ def mesh_up(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]
     report["hub"] = init_name
     report["spokes"] = [m.name for m in members if m.name != init_name]
     report["pistyx"] = holder_name
+    report["pistyx_site_index"] = holder_scope["site_index"]
     report["message"] = (
         f"Styx mesh up: hub {init_name}, {len(members) - 1} spoke(s); pistyx egress on {holder_name}"
     )
@@ -558,7 +623,12 @@ def render_mesh_report_text(report: dict[str, Any]) -> str:
     if report.get("route"):
         lines.append(f"spoke route (AllowedIPs): {', '.join(report['route'])}")
     if report.get("pistyx"):
-        lines.append(f"pistyx (egress gateway): {report['pistyx']}  [interface {report.get('egress_interface', 'StyxEgress')}]")
+        site = report.get("pistyx_site_index")
+        site_suffix = f", site {site}" if site is not None else ""
+        lines.append(
+            f"pistyx (egress gateway): {report['pistyx']}  "
+            f"[interface {report.get('egress_interface', 'StyxEgress')}{site_suffix}]"
+        )
     for action in report.get("actions", []):
         lines.append(f"  - {action}")
     for name, cfg in (report.get("configs") or {}).items():
@@ -668,10 +738,15 @@ def _detect_wan_interface() -> str | None:
     return out or None
 
 
-def ensure_egress_nat(stack_mode: str = "dual-stack") -> tuple[bool, str]:
+def ensure_egress_nat(
+    stack_mode: str = "dual-stack",
+    *,
+    source_v4: str = "10.0.250.0/24",
+    source_v6: str = "fd00:cafe:0:250::/64",
+) -> tuple[bool, str]:
     """On a pistyx leader: persist forwarding + idempotent v4/v6 MASQUERADE of the client band out
-    the leader's OWN WAN — local breakout. Scope is the roadwarrior band only (10.0.250.0/24 +
-    fd00:cafe:0:250::/64); styx never backhauls, so each site egresses its own clients locally.
+    the leader's OWN WAN. Scope is the holder site's client band; styx never backhauls, so each
+    site egresses its own clients locally.
     """
     from .remediation import _run_mutating
 
@@ -696,9 +771,9 @@ def ensure_egress_nat(stack_mode: str = "dual-stack") -> tuple[bool, str]:
 
     rules = []
     if stack_mode in {"dual-stack", "ipv4-only"}:
-        rules.append(("iptables", "10.0.250.0/24"))
+        rules.append(("iptables", source_v4))
     if stack_mode in {"dual-stack", "ipv6-only"}:
-        rules.append(("ip6tables", "fd00:cafe:0:250::/64"))
+        rules.append(("ip6tables", source_v6))
     actions = [f"wan={wan}"]
     for tool, src in rules:
         check = f"{tool} -t nat -C POSTROUTING -s {src} -o {wan} -j MASQUERADE"
@@ -713,7 +788,7 @@ def ensure_egress_nat(stack_mode: str = "dual-stack") -> tuple[bool, str]:
 def apply_pistyx_pop(pop: dict[str, Any]) -> RunResult:
     """Bring up THIS leader's pistyx PoP: the SHARED pistyx identity + client peers + local breakout.
 
-    Safe by construction: the PoP interface owns only the client band (Address 10.0.250.1/24) and
+    Safe by construction: the PoP interface owns only the holder site's client band and
     installs NO default route of its own, so bringing it up never disturbs the leader's own
     connectivity. Clients full-tunnel here; the leader local-NATs the client band out its OWN WAN
     (ensure_egress_nat). Brought up with `wg-quick` (never syncconf) so routes/Address install.
@@ -740,7 +815,11 @@ def apply_pistyx_pop(pop: dict[str, Any]) -> RunResult:
     ok, detail = _write_conf(interface, content)
     if not ok:
         return False, detail
-    nat_ok, nat_detail = ensure_egress_nat(stack_mode)
+    nat_ok, nat_detail = ensure_egress_nat(
+        stack_mode,
+        source_v4=str(pop.get("network_v4", "10.0.250.0/24")),
+        source_v6=str(pop.get("network_v6", "fd00:cafe:0:250::/64")),
+    )
     if not nat_ok:
         return False, f"local breakout NAT: {nat_detail}"
     up_ok, up_detail = _run_mutating(
@@ -798,7 +877,29 @@ def render_client_config(
     return "\n".join(lines) + "\n"
 
 
-def pistyx_clients(config: dict[str, Any]) -> list[dict[str, Any]]:
+def _host_suffix_from_client(item: dict[str, Any], fallback_index: int) -> int:
+    raw_suffix = item.get("host_suffix")
+    if isinstance(raw_suffix, int) and 1 <= raw_suffix <= 254:
+        return raw_suffix
+    raw_slot = item.get("slot")
+    if isinstance(raw_slot, int) and raw_slot >= 0:
+        from .network_plan import SITE_CLIENT_OFFSET
+
+        return SITE_CLIENT_OFFSET + raw_slot
+    raw_ipv4 = item.get("ipv4")
+    if isinstance(raw_ipv4, str):
+        try:
+            suffix = int(raw_ipv4.strip().split(".")[-1])
+        except (ValueError, IndexError):
+            suffix = 0
+        if 1 <= suffix <= 254:
+            return suffix
+    from .network_plan import SITE_CLIENT_OFFSET
+
+    return SITE_CLIENT_OFFSET + fallback_index
+
+
+def pistyx_clients(config: dict[str, Any], *, site_index: int | None = None) -> list[dict[str, Any]]:
     """Parse the optional `clients:` block — roadwarriors registered as peers on every leader's PoP."""
     raw = config.get("clients")
     clients: list[dict[str, Any]] = []
@@ -810,8 +911,22 @@ def pistyx_clients(config: dict[str, Any]) -> list[dict[str, Any]]:
             pub = item.get("public_key")
             if not isinstance(name, str) or not isinstance(pub, str) or not pub.strip():
                 continue
+            host_suffix = _host_suffix_from_client(item, len(clients))
+            ipv4 = item.get("ipv4")
+            ipv6 = item.get("ipv6")
+            if site_index is not None:
+                from .network_plan import site_ipv4_for_host, site_ipv6_for_host
+
+                ipv4 = site_ipv4_for_host(site_index, host_suffix)
+                ipv6 = site_ipv6_for_host(site_index, host_suffix)
             clients.append(
-                {"name": name, "public_key": pub.strip(), "ipv4": item.get("ipv4"), "ipv6": item.get("ipv6")}
+                {
+                    "name": name,
+                    "public_key": pub.strip(),
+                    "host_suffix": host_suffix,
+                    "ipv4": ipv4,
+                    "ipv6": ipv6,
+                }
             )
     return clients
 
@@ -841,26 +956,30 @@ def client_config(
     """
     from .config import find_config, load_config, resolve_config
     from .network_plan import cluster_stack_mode, roadwarrior_ipv4_for_index, roadwarrior_ipv6_for_index
-    from .nodes import parse_nodes
+    from .nodes import parse_nodes, pistyx_holder
 
     candidate = Path(config_path) if config_path is not None else find_config()
     if candidate is None:
         return {"status": "ERROR", "message": "no styx.yaml found"}, 1
     config = resolve_config(load_config(candidate))
     _eg_iface, eg_port, mtu, eg_hostname = _egress_settings(config)
+    nodes = parse_nodes(config)
 
     endpoint = eg_hostname
+    target_node = pistyx_holder(config, nodes)
     if site:
-        node = next((n for n in parse_nodes(config) if n.name == site), None)
+        node = next((n for n in nodes if n.name == site), None)
         if node is None or not (node.hostname or node.public_ipv4):
             return {"status": "ERROR", "message": f"site {site!r} not found or has no DuckDNS hostname"}, 1
         endpoint = node.hostname or node.public_ipv4
+        target_node = node
+    target_site_index = _site_index_for_node(nodes, target_node)
 
     stack_mode = cluster_stack_mode(config)
     want_v4 = stack_mode in {"dual-stack", "ipv4-only"}
     want_v6 = stack_mode in {"dual-stack", "ipv6-only"}
-    address_v4 = roadwarrior_ipv4_for_index(index) if want_v4 else None
-    address_v6 = roadwarrior_ipv6_for_index(index) if want_v6 else None
+    address_v4 = roadwarrior_ipv4_for_index(index, site_index=target_site_index) if want_v4 else None
+    address_v6 = roadwarrior_ipv6_for_index(index, site_index=target_site_index) if want_v6 else None
 
     report: dict[str, Any] = {"status": "OK", "actions": []}
     if render_only:
@@ -885,6 +1004,7 @@ def client_config(
         address_v4=address_v4, address_v6=address_v6, mtu=mtu,
     )
     report["client"] = name
+    report["site_index"] = target_site_index
     report["config"] = content
     target = f"pinned site {site}" if site else "pistyx (auto-fastest)"
     report["message"] = f"client {name}: dials {endpoint}:{eg_port} via {target}"
@@ -903,7 +1023,6 @@ def client_config(
 def pistyx_info(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]:
     """Render-only: the current pistyx holder, reserved overlay IP, and egress settings."""
     from .config import find_config, load_config, resolve_config
-    from .network_plan import PISTYX_IPV4, PISTYX_IPV6
     from .nodes import parse_nodes, pistyx_holder
 
     candidate = Path(config_path) if config_path is not None else find_config()
@@ -914,13 +1033,15 @@ def pistyx_info(config_path: str | Path | None = None) -> tuple[dict[str, Any], 
     holder = pistyx_holder(config, nodes)
     interface, port, mtu, hostname = _egress_settings(config)
     holder_name = holder.name if holder else "<none>"
+    holder_scope = _site_scope_for_node(nodes, holder)
     report = {
         "status": "OK",
         "message": f"pistyx egress: holder {holder_name} via {hostname}:{port}",
         "actions": [
             f"interface: {interface} (separate from the mesh; wg-quick up, not syncconf)",
             f"endpoint:  {hostname}:{port}",
-            f"overlay:   {PISTYX_IPV4}/32, {PISTYX_IPV6}/128 (reserved)",
+            f"site:      {holder_scope['site_index']} (third octet / IPv6 site segment)",
+            f"overlay:   {holder_scope['gateway_v4']}/32, {holder_scope['gateway_v6']}/128 (site-scoped)",
             f"mtu:       {mtu}",
             f"holder:    {holder_name}  (to move: set pistyx.current_host, re-run `mesh up` + `deploy dns`; auto-move = the fastest-site loop, not yet built)",
         ],

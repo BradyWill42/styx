@@ -56,10 +56,11 @@ jobs:
           grep -q "pistyx (egress gateway): pegasus" /tmp/mesh-plan.txt   # the leader runs the pistyx PoP
           grep -q "StyxEgress" /tmp/mesh-plan.txt                          # separate client-entry interface
           grep -q "ListenPort = 47801" /tmp/mesh-plan.txt                  # PoP listens for clients
-          grep -q "Address = 10.0.250.1/24" /tmp/mesh-plan.txt             # PoP binds the shared pistyx gateway addr
+          grep -q "Address = 10.0.1.1/24" /tmp/mesh-plan.txt               # PoP binds the holder site's pistyx addr
           # Roadwarrior client dials pistyx (the floating entry), egress is the leader's LOCAL internet
           styxctl client config testclient --render-only | tee /tmp/client.txt
           grep -q "Endpoint = pistyx.duckdns.org:47801" /tmp/client.txt    # dials the floating pistyx name
+          grep -q "Address = 10.0.1.2/32" /tmp/client.txt                  # client suffix stays stable inside holder site
           grep -q "AllowedIPs = 0.0.0.0/0, ::/0" /tmp/client.txt           # full-tunnel to the PoP
           grep -q "MTU = 1420" /tmp/client.txt
           styxctl mesh pistyx show | tee /tmp/pistyx.txt

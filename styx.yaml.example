@@ -75,11 +75,13 @@ egress:
 #   public_key: "<shared pistyx WG public key — `styxctl mesh pistyx pubkey-local` prints it>"
 
 # clients: roadwarriors registered as peers on every leader's pistyx PoP (so a repoint reconnects
-# them transparently). `styxctl client config` allocates from 10.0.250.0/24 (.2+); add here to persist.
+# them transparently). The third octet follows the site they enter, while the final octet is the
+# stable device identity; 10.0.1.7 and 10.0.2.7 are the same client seen from two site scopes.
+# Add issued clients here to persist the suffix.
 # clients:
 #   - name: brady-laptop
 #     public_key: "<client WG public key>"
-#     ipv4: 10.0.250.2
+#     host_suffix: 2
 
 # Cluster DNS (all pod-based). `styxctl deploy resolver apply` deploys a node-local CoreDNS cache
 # (DaemonSet on 127.0.0.1:53) plus a privileged enforcer DaemonSet that points each node's

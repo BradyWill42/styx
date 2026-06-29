@@ -44,6 +44,7 @@ class ClusterNode:
     public_ipv4: str | None = None
     public_ipv6: str | None = None
     lan_ip: str | None = None
+    site_index: int | None = None
     site_entrypoint: bool = False
     ssh_user: str | None = None
 
@@ -117,9 +118,11 @@ def parse_nodes(config: dict[str, Any]) -> list[ClusterNode]:
         public_ipv4 = item.get("public_ipv4")
         public_ipv6 = item.get("public_ipv6")
         lan_ip = item.get("lan_ip")
+        site_index_raw = item.get("site_index")
         site_entrypoint = item.get("site_entrypoint", False)
         user_field = item.get("ssh_user") or item.get("user")
         name_stripped = name.strip()
+        site_index = site_index_raw if isinstance(site_index_raw, int) else None
         nodes.append(
             ClusterNode(
                 name=name_stripped,
@@ -130,6 +133,7 @@ def parse_nodes(config: dict[str, Any]) -> list[ClusterNode]:
                 public_ipv4=public_ipv4.strip() if isinstance(public_ipv4, str) and public_ipv4.strip() else None,
                 public_ipv6=public_ipv6.strip() if isinstance(public_ipv6, str) and public_ipv6.strip() else None,
                 lan_ip=lan_ip.strip() if isinstance(lan_ip, str) and lan_ip.strip() else None,
+                site_index=site_index if site_index is not None and 0 <= site_index <= 255 else None,
                 site_entrypoint=bool(site_entrypoint) if isinstance(site_entrypoint, bool) else False,
                 ssh_user=user_field.strip() if isinstance(user_field, str) and user_field.strip() else name_stripped,
             )
