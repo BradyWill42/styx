@@ -108,7 +108,17 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Uninstall previous state
-        run: python3 -m styxctl.cli uninstall apply local || true
+        run: |
+          set +e
+          timeout --kill-after=15s 240s python3 -m styxctl.cli uninstall apply local
+          code=$?
+          set -e
+          if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
+            echo "::warning::best-effort uninstall timed out on ${{ matrix.runner }}; continuing to Stage 1"
+          elif [ "$code" -ne 0 ]; then
+            echo "::notice::best-effort uninstall exited $code on ${{ matrix.runner }}; continuing to Stage 1"
+          fi
+          exit 0
 
   prerequisites:
     name: "Stage 1 — ${{ matrix.runner }}"
