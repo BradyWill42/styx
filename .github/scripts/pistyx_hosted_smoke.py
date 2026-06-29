@@ -99,6 +99,19 @@ def assert_holder(workdir: Path, holder: str) -> None:
         raise AssertionError(f"expected mesh plan to place pistyx on {holder!r}:\n{mesh}")
     if f"--- {holder} [StyxEgress] ---" not in mesh:
         raise AssertionError(f"expected {holder!r} to render the StyxEgress PoP:\n{mesh}")
+    expected_site_overlays = [
+        "StyxSite1=site 1 via pegasus:47821",
+        "StyxSite2=site 2 via hydra:47822",
+        "--- pegasus [StyxSite1] ---",
+        "Address = 10.0.1.10/24, fd00:cafe:0:1::a/64",
+        "--- pegasus [StyxSite2] ---",
+        "Address = 10.0.2.10/24, fd00:cafe:0:2::a/64",
+        "--- hydra [StyxSite1] ---",
+        "Address = 10.0.1.12/24, fd00:cafe:0:1::c/64",
+    ]
+    for needle in expected_site_overlays:
+        if needle not in mesh:
+            raise AssertionError(f"missing site overlay marker {needle!r}:\n{mesh}")
 
     dns = run_styxctl(workdir, "deploy", "dns", "plan")
     domains = deployment_domains(dns)

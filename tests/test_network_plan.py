@@ -7,6 +7,9 @@ from styxctl.network_plan import (
     client_ipv4_for_site,
     mesh_ipv4_for_node,
     mesh_ipv6_for_node,
+    node_host_suffix_for_index,
+    node_ipv4_for_site,
+    node_ipv6_for_site,
     pistyx_ipv4_for_site,
     site_ipv4_for_host,
     site_ipv4_network,
@@ -33,6 +36,14 @@ def test_mesh_ipv4_is_index_plus_one():
     assert mesh_ipv4_for_node(0) == "10.0.0.1"
     assert mesh_ipv4_for_node(3) == "10.0.0.4"
     assert mesh_ipv6_for_node(0).startswith("fd00:cafe")
+
+
+def test_pi_site_identity_uses_stable_reserved_suffix():
+    assert node_host_suffix_for_index(0) == 10
+    assert node_ipv4_for_site(0, site_index=1) == "10.0.1.10"
+    assert node_ipv4_for_site(0, site_index=2) == "10.0.2.10"
+    assert node_ipv4_for_site(3, site_index=1) == "10.0.1.13"
+    assert node_ipv6_for_site(3, site_index=2) == "fd00:cafe:0:2::d"
 
 
 def test_roadwarrior_clients_start_after_pistyx():

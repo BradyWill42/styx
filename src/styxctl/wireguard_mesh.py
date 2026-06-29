@@ -23,6 +23,9 @@ from pathlib import Path
 from typing import Any
 
 KEEPALIVE_SECONDS = 25
+SITE_INTERFACE_PREFIX = "StyxSite"
+SITE_WG_PORT_BASE = 47820
+SITE_WG_PORT_END = 47850
 RunResult = tuple[bool, str]
 
 
@@ -34,6 +37,18 @@ class MeshMember:
     ipv6: str | None
     public_key: str | None = None   # filled by `mesh up`; placeholder in `mesh plan`
     endpoint: str | None = None      # hub's reachable host as seen by a spoke (host only)
+
+
+@dataclass(slots=True)
+class SiteMember:
+    name: str
+    role: str
+    site_index: int
+    host_suffix: int
+    ipv4: str | None
+    ipv6: str | None
+    public_key: str | None = None
+    endpoint: str | None = None      # site entrypoint host as seen by this node
 
 
 # --------------------------------------------------------------------------- render (pure)
@@ -85,6 +100,77 @@ def render_local_config(
         lines += ["[Peer]", f"# {init.name} (hub)", f"PublicKey = {init.public_key}"]
         if init.endpoint:
             lines.append(f"Endpoint = {init.endpoint}:{listen_port}")
+        lines.append(f"AllowedIPs = {', '.join(route)}")
+        lines.append(f"PersistentKeepalive = {KEEPALIVE_SECONDS}")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def render_site_config(
+    local_name: str,
+    private_key: str,
+    members: list[SiteMember],
+    entrypoint_name: str,
+    *,
+    listen_port: int,
+    network_v4: str | None,
+    network_v6: str | None,
+    stack_mode: str = "dual-stack",
+) -> str:
+    """Render one physical-site overlay.
+
+    Every Pi gets a config for every site. The site's entrypoint routes individual Pi
+    addresses; all other Pis route that site subnet to the entrypoint. This keeps
+    10.0.N.X stable for a Pi even when it is not currently at site N.
+    """
+    by_name = {m.name: m for m in members}
+    local = by_name[local_name]
+    entrypoint = by_name.get(entrypoint_name)
+    want_v4 = stack_mode in {"dual-stack", "ipv4-only"}
+    want_v6 = stack_mode in {"dual-stack", "ipv6-only"}
+
+    lines = ["[Interface]", f"PrivateKey = {private_key}"]
+    addr: list[str] = []
+    if want_v4 and local.ipv4:
+        addr.append(f"{local.ipv4}/24")
+    if want_v6 and local.ipv6:
+        addr.append(f"{local.ipv6}/64")
+    if addr:
+        lines.append(f"Address = {', '.join(addr)}")
+    lines.append(f"ListenPort = {listen_port}")
+    lines.append("")
+
+    if local_name == entrypoint_name:
+        for member in members:
+            if member.name == entrypoint_name:
+                continue
+            allowed = []
+            if want_v4 and member.ipv4:
+                allowed.append(f"{member.ipv4}/32")
+            if want_v6 and member.ipv6:
+                allowed.append(f"{member.ipv6}/128")
+            if not allowed:
+                continue
+            lines += [
+                "[Peer]",
+                f"# {member.name} ({member.role})",
+                f"PublicKey = {member.public_key}",
+                f"AllowedIPs = {', '.join(allowed)}",
+                "",
+            ]
+    elif entrypoint is not None:
+        route = []
+        if want_v4 and network_v4:
+            route.append(network_v4)
+        if want_v6 and network_v6:
+            route.append(network_v6)
+        lines += [
+            "[Peer]",
+            f"# {entrypoint.name} (site {entrypoint.site_index} entrypoint)",
+            f"PublicKey = {entrypoint.public_key}",
+        ]
+        if entrypoint.endpoint:
+            lines.append(f"Endpoint = {entrypoint.endpoint}:{listen_port}")
         lines.append(f"AllowedIPs = {', '.join(route)}")
         lines.append(f"PersistentKeepalive = {KEEPALIVE_SECONDS}")
         lines.append("")
@@ -240,6 +326,165 @@ def _site_scope_for_node(nodes: list[Any], node: Any | None) -> dict[str, str | 
     }
 
 
+def _site_indexes_for_nodes(nodes: list[Any]) -> list[int]:
+    indexes: list[int] = []
+    for node in nodes:
+        site_index = _site_index_for_node(nodes, node)
+        if site_index not in indexes:
+            indexes.append(site_index)
+    return indexes
+
+
+def _site_nodes_by_index(nodes: list[Any]) -> dict[int, list[Any]]:
+    grouped: dict[int, list[Any]] = {}
+    for node in nodes:
+        grouped.setdefault(_site_index_for_node(nodes, node), []).append(node)
+    return grouped
+
+
+def _site_entrypoint_for_index(
+    nodes: list[Any],
+    site_index: int,
+    *,
+    election_leader: str | None = None,
+) -> Any | None:
+    site_nodes = _site_nodes_by_index(nodes).get(site_index, [])
+    if not site_nodes:
+        return None
+    if election_leader:
+        elected = next((node for node in site_nodes if node.name == election_leader), None)
+        if elected is not None:
+            return elected
+    explicit = [node for node in site_nodes if getattr(node, "site_entrypoint", False)]
+    if len(explicit) == 1:
+        return explicit[0]
+    init = [node for node in site_nodes if getattr(node, "role", "") == "init-server"]
+    if len(init) == 1:
+        return init[0]
+    return site_nodes[0]
+
+
+def _site_interface(site_index: int) -> str:
+    return f"{SITE_INTERFACE_PREFIX}{site_index}"
+
+
+def _site_overlay_port(site_index: int, ordinal: int) -> int:
+    site_port = SITE_WG_PORT_BASE + site_index
+    if SITE_WG_PORT_BASE <= site_port <= SITE_WG_PORT_END:
+        return site_port
+    return min(SITE_WG_PORT_BASE + ordinal, SITE_WG_PORT_END)
+
+
+def _site_members_for_index(
+    nodes: list[Any],
+    site_index: int,
+    pubkeys: dict[str, str] | None = None,
+    *,
+    entrypoint_name: str | None = None,
+    entrypoint_endpoint: str | None = None,
+    stack_mode: str = "dual-stack",
+) -> list[SiteMember]:
+    from .network_plan import node_host_suffix_for_index, node_ipv4_for_site, node_ipv6_for_site
+
+    want_v4 = stack_mode in {"dual-stack", "ipv4-only"}
+    want_v6 = stack_mode in {"dual-stack", "ipv6-only"}
+    members: list[SiteMember] = []
+    for index, node in enumerate(nodes):
+        suffix = node_host_suffix_for_index(index)
+        members.append(
+            SiteMember(
+                name=node.name,
+                role=node.role,
+                site_index=site_index,
+                host_suffix=suffix,
+                ipv4=node_ipv4_for_site(index, site_index=site_index) if want_v4 else None,
+                ipv6=node_ipv6_for_site(index, site_index=site_index) if want_v6 else None,
+                public_key=(pubkeys or {}).get(node.name, f"<pubkey:{node.name}>"),
+                endpoint=entrypoint_endpoint if node.name == entrypoint_name else None,
+            )
+        )
+    return members
+
+
+def _site_endpoint(
+    entrypoint: Any,
+    dialer: Any,
+    *,
+    election_lan_ips: dict[str, str] | None,
+    inventory: Any,
+    local_node: Any | None,
+) -> str | None:
+    from .nodes import node_effective_lan_ip
+
+    colocated = bool(
+        getattr(entrypoint, "public_ipv4", None)
+        and getattr(dialer, "public_ipv4", None)
+        and entrypoint.public_ipv4 == dialer.public_ipv4
+    )
+    if colocated:
+        lan = node_effective_lan_ip(
+            entrypoint,
+            election_lan_ips=election_lan_ips,
+            inventory=inventory,
+            local_node=local_node,
+        )
+        if lan:
+            return lan
+    return getattr(entrypoint, "hostname", None) or getattr(entrypoint, "public_ipv4", None) or entrypoint.name
+
+
+def _site_overlay_blocks(
+    nodes: list[Any],
+    *,
+    pubkeys: dict[str, str] | None,
+    stack_mode: str,
+    dialer: Any | None = None,
+    election_lan_ips: dict[str, str] | None = None,
+    election_leader: str | None = None,
+    inventory: Any = None,
+    local_node: Any | None = None,
+) -> list[dict[str, Any]]:
+    from .network_plan import site_ipv4_network, site_ipv6_network
+
+    blocks: list[dict[str, Any]] = []
+    for ordinal, site_index in enumerate(_site_indexes_for_nodes(nodes)):
+        entrypoint = _site_entrypoint_for_index(nodes, site_index, election_leader=election_leader)
+        if entrypoint is None:
+            continue
+        endpoint = None
+        if dialer is None:
+            endpoint = getattr(entrypoint, "hostname", None) or getattr(entrypoint, "public_ipv4", None) or entrypoint.name
+        elif dialer.name != entrypoint.name:
+            endpoint = _site_endpoint(
+                entrypoint,
+                dialer,
+                election_lan_ips=election_lan_ips,
+                inventory=inventory,
+                local_node=local_node,
+            )
+        members = _site_members_for_index(
+            nodes,
+            site_index,
+            pubkeys,
+            entrypoint_name=entrypoint.name,
+            entrypoint_endpoint=endpoint,
+            stack_mode=stack_mode,
+        )
+        blocks.append(
+            {
+                "site_index": site_index,
+                "interface": _site_interface(site_index),
+                "port": _site_overlay_port(site_index, ordinal),
+                "entrypoint": entrypoint.name,
+                "network_v4": site_ipv4_network(site_index),
+                "network_v6": site_ipv6_network(site_index),
+                "stack_mode": stack_mode,
+                "members": [asdict(member) for member in members],
+            }
+        )
+    return blocks
+
+
 # --------------------------------------------------------------------------- local key helpers
 
 def _conf_path(interface: str) -> Path:
@@ -377,6 +622,49 @@ def apply_local(
     )
     report["actions"].append(sdetail if synced else f"reload failed: {sdetail}")
 
+    site_ok = True
+    for overlay in roster.get("site_overlays", []):
+        if not isinstance(overlay, dict):
+            continue
+        site_interface = overlay.get("interface")
+        entrypoint = overlay.get("entrypoint")
+        if not isinstance(site_interface, str) or not isinstance(entrypoint, str):
+            report["status"] = "ERROR"
+            report["message"] = "site overlay missing interface/entrypoint"
+            return report, 1
+        site_members = [SiteMember(**m) for m in overlay.get("members", [])]
+        if local_name not in {m.name for m in site_members}:
+            report["status"] = "ERROR"
+            report["message"] = f"local node {local_name!r} not in site overlay {site_interface}"
+            return report, 1
+        site_content = render_site_config(
+            local_name,
+            private,
+            site_members,
+            entrypoint,
+            listen_port=int(overlay.get("port", SITE_WG_PORT_BASE)),
+            network_v4=overlay.get("network_v4"),
+            network_v6=overlay.get("network_v6"),
+            stack_mode=overlay.get("stack_mode", "dual-stack"),
+        )
+        ok, detail = _write_conf(site_interface, site_content)
+        report["actions"].append(detail)
+        if not ok:
+            report["status"] = "ERROR"
+            report["message"] = detail
+            return report, 1
+        reloaded, rdetail = _run_mutating(
+            [
+                "bash",
+                "-c",
+                f"wg-quick strip {site_interface} | wg syncconf {site_interface} /dev/stdin || wg-quick up {site_interface}",
+            ],
+            use_sudo=True,
+            sudo_available=True,
+        )
+        report["actions"].append(rdetail if reloaded else f"{site_interface} reload failed: {rdetail}")
+        site_ok = site_ok and reloaded
+
     pop = roster.get("pistyx_pop")
     pop_ok = True
     if isinstance(pop, dict) and pop.get("is_leader"):
@@ -385,7 +673,7 @@ def apply_local(
 
     role = "hub" if local_name == init_name else "spoke"
     report["message"] = f"{local_name} mesh applied ({role})"
-    return report, (0 if (synced and pop_ok) else 1)
+    return report, (0 if (synced and site_ok and pop_ok) else 1)
 
 
 # --------------------------------------------------------------------------- plan (preview)
@@ -407,6 +695,9 @@ def mesh_plan(config_path: str | Path | None = None) -> tuple[dict[str, Any], in
     nodes = parse_nodes(config)
     init_node = init_server_node(nodes)
     init_host = (init_node.hostname or init_node.public_ipv4 or init_node.name) if init_node else "<init-endpoint>"
+    from .network_plan import cluster_stack_mode
+
+    stack = cluster_stack_mode(config)
 
     # Placeholder keys + a single representative hub endpoint for preview.
     for member in members:
@@ -414,12 +705,36 @@ def mesh_plan(config_path: str | Path | None = None) -> tuple[dict[str, Any], in
         if member.name == init_name:
             member.endpoint = init_host
 
+    site_blocks = _site_overlay_blocks(nodes, pubkeys=None, stack_mode=stack)
+    site_configs: dict[str, dict[str, str]] = {node.name: {} for node in nodes}
+    for block in site_blocks:
+        site_members = [SiteMember(**m) for m in block["members"]]
+        for node in nodes:
+            site_configs[node.name][block["interface"]] = render_site_config(
+                node.name,
+                f"<privkey:{node.name}>",
+                site_members,
+                block["entrypoint"],
+                listen_port=int(block["port"]),
+                network_v4=block["network_v4"],
+                network_v6=block["network_v6"],
+                stack_mode=stack,
+            )
+
     report: dict[str, Any] = {
         "status": "OK",
         "interface": interface,
         "hub": init_name,
         "spokes": [m.name for m in members if m.name != init_name],
         "route": [r for r in (route_v4, route_v6) if r],
+        "site_overlays": [
+            {
+                key: block[key]
+                for key in ("site_index", "interface", "port", "entrypoint", "network_v4", "network_v6")
+            }
+            for block in site_blocks
+        ],
+        "site_configs": {name: configs for name, configs in site_configs.items() if configs},
         "configs": {
             m.name: render_local_config(
                 m.name, f"<privkey:{m.name}>", members, init_name,
@@ -430,11 +745,9 @@ def mesh_plan(config_path: str | Path | None = None) -> tuple[dict[str, Any], in
     }
 
     # pistyx PoP preview: the client entry interface each leader runs (shared identity + clients).
-    from .network_plan import cluster_stack_mode
     from .nodes import pistyx_holder
 
     eg_interface, eg_port, eg_mtu, eg_hostname = _egress_settings(config)
-    stack = cluster_stack_mode(config)
     holder = pistyx_holder(config, nodes)
     holder_name = holder.name if holder else None
     holder_scope = _site_scope_for_node(nodes, holder)
@@ -545,6 +858,15 @@ def mesh_up(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]
     holder_name = holder_node.name if holder_node else None
     holder_scope = _site_scope_for_node(nodes, holder_node)
     clients = pistyx_clients(effective, site_index=int(holder_scope["site_index"]))
+    site_entrypoints = {
+        block["entrypoint"]
+        for block in _site_overlay_blocks(
+            nodes,
+            pubkeys=pubkeys,
+            stack_mode=stack,
+            election_leader=election_leader,
+        )
+    }
 
     pk_ok, pistyx_pub = ensure_pistyx_identity()
     if not pk_ok:
@@ -588,6 +910,16 @@ def mesh_up(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]
         roster_members = [
             {**asdict(m), "endpoint": (hub_host if m.name == init_name else None)} for m in members
         ]
+        site_overlays = _site_overlay_blocks(
+            nodes,
+            pubkeys=pubkeys,
+            stack_mode=stack,
+            dialer=node,
+            election_lan_ips=election_lan_ips,
+            election_leader=election_leader,
+            inventory=inventory,
+            local_node=local_node,
+        )
         roster = {
             "members": roster_members,
             "init_name": init_name,
@@ -595,6 +927,7 @@ def mesh_up(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]
             "route_v6": route_v6,
             "interface": interface,
             "port": port,
+            "site_overlays": site_overlays,
             "pistyx_pop": pistyx_pop_block_for(node),
         }
         b64 = base64.b64encode(json.dumps(roster).encode()).decode()
@@ -610,11 +943,16 @@ def mesh_up(config_path: str | Path | None = None) -> tuple[dict[str, Any], int]
             report["message"] = f"mesh apply-local failed on {node.name}: {detail}"
             return report, 1
 
-    # 3. Enable forwarding on the hub so it routes between spokes.
-    conn = ssh(init)
+    # 3. Enable forwarding anywhere traffic is routed between peers.
     fwd = "sudo sysctl -w net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1"
-    ok, detail = _run_ssh_command(conn.target, fwd, port=conn.port, jump=conn.jump)
-    report["actions"].append(f"hub ip_forward: {'ok' if ok else detail}")
+    forward_names = {init.name, *site_entrypoints}
+    for node in sorted((n for n in nodes if n.name in forward_names), key=lambda item: item.name):
+        conn = ssh(node)
+        ok, detail = _run_ssh_command(conn.target, fwd, port=conn.port, jump=conn.jump)
+        label = "hub/site" if node.name == init.name and node.name in site_entrypoints else (
+            "hub" if node.name == init.name else "site"
+        )
+        report["actions"].append(f"{label} ip_forward {node.name}: {'ok' if ok else detail}")
 
     report["hub"] = init_name
     report["spokes"] = [m.name for m in members if m.name != init_name]
@@ -636,6 +974,12 @@ def render_mesh_report_text(report: dict[str, Any]) -> str:
         lines.append(f"spokes: {', '.join(report['spokes'])}")
     if report.get("route"):
         lines.append(f"spoke route (AllowedIPs): {', '.join(report['route'])}")
+    if report.get("site_overlays"):
+        rendered = [
+            f"{item['interface']}=site {item['site_index']} via {item['entrypoint']}:{item['port']}"
+            for item in report["site_overlays"]
+        ]
+        lines.append(f"site overlays: {', '.join(rendered)}")
     if report.get("pistyx"):
         site = report.get("pistyx_site_index")
         site_suffix = f", site {site}" if site is not None else ""
@@ -649,6 +993,11 @@ def render_mesh_report_text(report: dict[str, Any]) -> str:
         lines.append("")
         lines.append(f"--- {name} [mesh] ---")
         lines.append(cfg.rstrip())
+    for name, configs in (report.get("site_configs") or {}).items():
+        for interface, cfg in configs.items():
+            lines.append("")
+            lines.append(f"--- {name} [{interface}] ---")
+            lines.append(cfg.rstrip())
     for name, cfg in (report.get("egress_configs") or {}).items():
         lines.append("")
         lines.append(f"--- {name} [StyxEgress] ---")

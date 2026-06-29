@@ -41,12 +41,12 @@
 Styx is a homelab and small-site platform that combines:
 
 - **k3s** for lightweight Kubernetes orchestration across gateway nodes
-- **Dual-stack WireGuard** (`Styx` interface on UDP `47800`) for the current backbone mesh, separate from any existing `wg0` tunnel
+- **Dual-stack WireGuard** (`Styx` plus per-site `StyxSite<N>` interfaces) for the backbone mesh and site-scoped Pi identities, separate from any existing `wg0` tunnel
 - **Reserved service ports** (`47800-47850`) for gateway APIs, agents, diagnostics, SSH, k3s API, metrics, and future services
 - **Declarative cluster config** in `styx.yaml`: nodes, roles, hostnames, site topology, DNS publishing, and client profile defaults
 - **Site-aware routing** for multiple Pis on one LAN behind one router, using LAN leader election and ProxyJump when needed
 
-`styxctl` is the operator-facing tool that drives each phase. It collects inventory, remediates only what is provably safe, installs k3s with the built-in Styx IP plan, brings up the hub-and-spoke WireGuard backbone, and writes human-readable plus machine-readable reports along the way.
+`styxctl` is the operator-facing tool that drives each phase. It collects inventory, remediates only what is provably safe, installs k3s with the built-in Styx IP plan, brings up the hub-and-spoke WireGuard backbone plus per-site Pi overlays, and writes human-readable plus machine-readable reports along the way.
 
 ---
 
@@ -75,12 +75,12 @@ flowchart TB
 
     subgraph mvp3["MVP3 - In progress"]
         MESH["Backbone mesh\nhub-and-spoke"]
+        SITEWG["Per-site Pi overlays"]
         DNS["Per-site DuckDNS publishers"]
         HEALTH["status / doctor"]
     end
 
     subgraph future["MVP4+ - Deferred"]
-        SITEWG["Per-site WG nets"]
         PISTYX["pistyx quickest-site loop"]
         CLIENT["Client automation"]
         SIEM["SIEM integration"]
@@ -472,9 +472,9 @@ Remote steps SSH as each node's Linux user (defaults to the node `name`). `styxc
 
 ## MVP3: Mesh, DNS, status, and doctor
 
-MVP3 is in progress. The backbone mesh, DuckDNS publisher, and cluster status/doctor surfaces exist today.
+MVP3 is in progress. The backbone mesh, per-site Pi overlays, DuckDNS publisher, and cluster status/doctor surfaces exist today.
 
-### Backbone mesh
+### Backbone mesh and site overlays
 
 ```bash
 styxctl mesh plan
@@ -490,7 +490,9 @@ The current mesh is hub-and-spoke:
 - each node keeps its own private key
 - `mesh up` collects only public keys over gateway SSH, then asks each node to render its own `[Peer]` blocks with `mesh apply-local`
 
-`mesh plan` is safe and render-only. `mesh up`, `mesh pubkey-local`, and `mesh apply-local` can write or reload the local `Styx` WireGuard config.
+The same roster also renders a `StyxSite<N>` interface for every physical site on every Pi. The site index is the third octet (`10.0.N.0/24`), and each Pi keeps a stable host suffix from the reserved `.10+` band across all sites. For example, the first configured Pi is `10.0.1.10` in site 1 and `10.0.2.10` in site 2. The site's entrypoint routes the site subnet to the other Pi identities, which keeps a Pi easy to move between WAN sites without changing its logical site addresses.
+
+`mesh plan` is safe and render-only. `mesh up`, `mesh pubkey-local`, and `mesh apply-local` can write or reload the local `Styx` and `StyxSite<N>` WireGuard configs.
 
 ### Per-site DuckDNS publishers
 
@@ -580,6 +582,9 @@ Built-in defaults:
 | Pod CIDR (v4 / v6) | `10.2.0.0/16` / `fd00:cafe:2::/56` |
 | Service CIDR (v4 / v6) | `10.3.0.0/16` / `fd00:cafe:3::/112` |
 | Site CIDR pattern (v4 / v6) | `10.0.<site>.0/24` / `fd00:cafe:0:<site>::/64` |
+| Pistyx gateway suffix | `.1` in each site |
+| Client suffixes | `.2+` in each site |
+| Pi site identity suffixes | `.10+` in each site, stable across sites |
 | Mobile roadwarrior site (v4 / v6) | `10.0.250.0/24` / `fd00:cafe:0:250::/64` |
 
 Config validation status:
@@ -1026,7 +1031,7 @@ Re-label a runner and the next integration run regenerates `styx.yaml` automatic
 
 ## Known issues and deferred work
 
-- **Backbone done, site overlay deferred:** `mesh plan/up` builds the current hub-and-spoke backbone. Per-site `/24` carving, the second per-site WireGuard net, leader-to-styx uplinks, and movable `styx` hub behavior are not built yet.
+- **Movable `styx` hub deferred:** `mesh plan/up` builds the hub-and-spoke backbone and per-site Pi overlays today. Leader-to-styx uplinks and movable `styx` hub behavior are not built yet.
 - **`pistyx` loop deferred:** DuckDNS has no GeoDNS. Fastest-site behavior needs client-measured routing or a server-side single-record repoint loop.
 - **Client automation deferred:** `client config` renders usable roadwarrior profiles today; automatic registration and fastest-site selection are still deferred.
 - **Runtime verification is E2E-only:** per-push CI can render and sanity-check; live k3s behavior only runs in the manual cluster E2E workflow.

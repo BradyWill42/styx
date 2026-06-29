@@ -2,11 +2,15 @@
 
 from styxctl.wireguard_mesh import (
     MeshMember,
+    SiteMember,
     _site_index_for_node,
+    mesh_plan,
     pistyx_clients,
     render_client_config,
     render_local_config,
+    render_mesh_report_text,
     render_pistyx_pop,
+    render_site_config,
 )
 from styxctl.nodes import parse_nodes
 
@@ -86,6 +90,82 @@ def test_mesh_hub_has_per_spoke_peer_not_default_route():
     )
     assert "AllowedIPs = 10.0.0.2/32" in out   # routed by the spoke's /32
     assert "PublicKey = SPOKE" in out
+
+
+def test_site_entrypoint_routes_pi_site_identities():
+    members = [
+        SiteMember(
+            name="pegasus", role="init-server", site_index=1, host_suffix=10,
+            ipv4="10.0.1.10", ipv6=None, public_key="PEGASUS",
+        ),
+        SiteMember(
+            name="hydra", role="server", site_index=1, host_suffix=11,
+            ipv4="10.0.1.11", ipv6=None, public_key="HYDRA",
+        ),
+    ]
+    out = render_site_config(
+        "pegasus", "<priv>", members, "pegasus",
+        listen_port=47821, network_v4="10.0.1.0/24", network_v6=None, stack_mode="ipv4-only",
+    )
+    assert "Address = 10.0.1.10/24" in out
+    assert "ListenPort = 47821" in out
+    assert "PublicKey = HYDRA" in out
+    assert "AllowedIPs = 10.0.1.11/32" in out
+
+
+def test_site_remote_pi_routes_site_scope_to_entrypoint():
+    members = [
+        SiteMember(
+            name="pegasus", role="init-server", site_index=1, host_suffix=10,
+            ipv4="10.0.1.10", ipv6=None, public_key="PEGASUS", endpoint="pipegasus.duckdns.org",
+        ),
+        SiteMember(
+            name="hydra", role="server", site_index=1, host_suffix=11,
+            ipv4="10.0.1.11", ipv6=None, public_key="HYDRA",
+        ),
+    ]
+    out = render_site_config(
+        "hydra", "<priv>", members, "pegasus",
+        listen_port=47821, network_v4="10.0.1.0/24", network_v6=None, stack_mode="ipv4-only",
+    )
+    assert "Address = 10.0.1.11/24" in out
+    assert "Endpoint = pipegasus.duckdns.org:47821" in out
+    assert "AllowedIPs = 10.0.1.0/24" in out
+    assert "PersistentKeepalive = 25" in out
+
+
+def test_mesh_plan_renders_all_pi_site_overlays(tmp_path, monkeypatch):
+    (tmp_path / "styx.yaml").write_text(
+        """
+cluster:
+  name: styx
+nodes:
+  - name: pegasus
+    role: init-server
+    hostname: pipegasus.duckdns.org
+    public_ipv4: 203.0.113.10
+  - name: atlas
+    role: agent
+    hostname: piatlas.duckdns.org
+    public_ipv4: 203.0.113.10
+  - name: hydra
+    role: server
+    hostname: pihydra.duckdns.org
+    public_ipv4: 203.0.113.20
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    report, code = mesh_plan()
+    assert code == 0
+    out = render_mesh_report_text(report)
+    assert "site overlays: StyxSite1=site 1 via pegasus:47821, StyxSite2=site 2 via hydra:47822" in out
+    assert "--- pegasus [StyxSite1] ---" in out
+    assert "Address = 10.0.1.10/24" in out
+    assert "--- pegasus [StyxSite2] ---" in out
+    assert "Address = 10.0.2.10/24" in out
+    assert "--- hydra [StyxSite1] ---" in out
+    assert "Address = 10.0.1.12/24" in out
 
 
 def test_pistyx_clients_parses_and_skips_incomplete():

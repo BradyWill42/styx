@@ -36,6 +36,10 @@ nodes:
   # - name: thor
   #   hostname: pithor.duckdns.org
 
+# `styxctl mesh up` renders the backbone `Styx` config plus one `StyxSite<N>` config per
+# physical WAN site on every Pi. Site *N* owns `10.0.N.0/24`; pistyx is `.1`, clients are
+# `.2+`, and Pi identities use a stable `.10+` suffix across all sites.
+
 # pistyx.duckdns.org is a floating cluster name (not a node) — the single movable EGRESS endpoint
 # (see the `egress:`/`pistyx:` blocks below). The per-site endpoints are the river banks; pistyx
 # is the river. Auto-repointing to the "quickest site" is still deferred; the move is manual for now.

@@ -53,6 +53,11 @@ jobs:
           grep -q "AllowedIPs = 10.0.0.0/14" /tmp/mesh-plan.txt  # spokes route the supernet
           grep -q "PersistentKeepalive = 25" /tmp/mesh-plan.txt  # spoke -> hub keepalive
           grep -q "Endpoint = pipegasus.duckdns.org:" /tmp/mesh-plan.txt  # DuckDNS name, never a hardcoded IP
+          grep -q "StyxSite1=site 1 via pegasus:47821" /tmp/mesh-plan.txt # every Pi gets every site overlay
+          grep -q -- "--- pegasus [StyxSite1] ---" /tmp/mesh-plan.txt
+          grep -q "Address = 10.0.1.10/24" /tmp/mesh-plan.txt              # Pi site identity uses stable .10+ band
+          grep -q -- "--- pegasus [StyxSite2] ---" /tmp/mesh-plan.txt
+          grep -q "Address = 10.0.2.10/24" /tmp/mesh-plan.txt              # same Pi suffix in a different site
           grep -q "pistyx (egress gateway): pegasus" /tmp/mesh-plan.txt   # the leader runs the pistyx PoP
           grep -q "StyxEgress" /tmp/mesh-plan.txt                          # separate client-entry interface
           grep -q "ListenPort = 47801" /tmp/mesh-plan.txt                  # PoP listens for clients

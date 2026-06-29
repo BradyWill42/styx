@@ -36,6 +36,7 @@ ROADWARRIOR_IPV6_NETWORK = ipaddress.ip_network(DEFAULT_NETWORK["roadwarrior_ipv
 ROADWARRIOR_SITE_INDEX = 250
 PISTYX_HOST_SUFFIX = 1
 SITE_CLIENT_OFFSET = 2
+SITE_NODE_OFFSET = 10
 ROADWARRIOR_CLIENT_OFFSET = SITE_CLIENT_OFFSET
 
 # Backward-compatible constants for the mobile site. Per-LAN pistyx addresses are derived with
@@ -116,6 +117,27 @@ def client_ipv4_for_site(index: int, *, site_index: int) -> str:
 def client_ipv6_for_site(index: int, *, site_index: int) -> str:
     """Return a client IPv6 in a site scope, preserving suffix across sites."""
     return site_ipv6_for_host(site_index, SITE_CLIENT_OFFSET + index)
+
+
+def node_host_suffix_for_index(index: int) -> int:
+    """Stable site-scope suffix for a Pi node.
+
+    The first addresses in each site remain reserved for the floating pistyx gateway and
+    client slots. Pi identities start at .10 and keep that suffix in every site subnet.
+    """
+    if not isinstance(index, int) or index < 0:
+        raise ValueError("node index must be zero or greater")
+    return _validate_host_suffix(SITE_NODE_OFFSET + index)
+
+
+def node_ipv4_for_site(index: int, *, site_index: int) -> str:
+    """Return a Pi node IPv4 identity in a site scope."""
+    return site_ipv4_for_host(site_index, node_host_suffix_for_index(index))
+
+
+def node_ipv6_for_site(index: int, *, site_index: int) -> str:
+    """Return a Pi node IPv6 identity in a site scope."""
+    return site_ipv6_for_host(site_index, node_host_suffix_for_index(index))
 
 
 def cluster_stack_mode(config: dict[str, Any]) -> str:
