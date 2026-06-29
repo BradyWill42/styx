@@ -118,25 +118,6 @@ def client_ipv6_for_site(index: int, *, site_index: int) -> str:
     return site_ipv6_for_host(site_index, SITE_CLIENT_OFFSET + index)
 
 
-def client_site_suffix(slot: int, *, node_count: int) -> int:
-    """Host-suffix for client `slot` in a site, ABOVE the reserved pi band.
-
-    Every pi reserves its host-suffix in every site (pistyx/init = .1, the next pi = .2, ...), so
-    a client must never land on a pi's reserved identity. With N nodes, client slots map to the
-    first free suffixes at/above SITE_CLIENT_OFFSET that aren't the gateway (.1) or a node suffix.
-    """
-    reserved = {PISTYX_HOST_SUFFIX} | {i + 1 for i in range(max(node_count, 0))}
-    suffix = SITE_CLIENT_OFFSET
-    remaining = slot
-    while suffix <= 254:
-        if suffix not in reserved:
-            if remaining <= 0:
-                return suffix
-            remaining -= 1
-        suffix += 1
-    raise ValueError("no free client host-suffix available in the site")
-
-
 def cluster_stack_mode(config: dict[str, Any]) -> str:
     cluster = config.get("cluster")
     if not isinstance(cluster, dict):

@@ -969,7 +969,7 @@ def client_config(
     breaks out locally. Register the client on the leaders so the handshake is accepted.
     """
     from .config import find_config, load_config, resolve_config
-    from .network_plan import client_site_suffix, cluster_stack_mode, site_ipv4_for_host, site_ipv6_for_host
+    from .network_plan import cluster_stack_mode, roadwarrior_ipv4_for_index, roadwarrior_ipv6_for_index
     from .nodes import parse_nodes, pistyx_holder
 
     candidate = Path(config_path) if config_path is not None else find_config()
@@ -992,11 +992,8 @@ def client_config(
     stack_mode = cluster_stack_mode(config)
     want_v4 = stack_mode in {"dual-stack", "ipv4-only"}
     want_v6 = stack_mode in {"dual-stack", "ipv6-only"}
-    # Reserve every pi's host-suffix in the target site (Pegasus=.1, Hydra=.2, ...) so the client
-    # lands ABOVE the pi band and can never collide with a node's reserved site identity.
-    client_suffix = client_site_suffix(index, node_count=len(nodes))
-    address_v4 = site_ipv4_for_host(target_site_index, client_suffix) if want_v4 else None
-    address_v6 = site_ipv6_for_host(target_site_index, client_suffix) if want_v6 else None
+    address_v4 = roadwarrior_ipv4_for_index(index, site_index=target_site_index) if want_v4 else None
+    address_v6 = roadwarrior_ipv6_for_index(index, site_index=target_site_index) if want_v6 else None
 
     report: dict[str, Any] = {"status": "OK", "actions": []}
     if render_only:
