@@ -269,6 +269,12 @@ def k3s_install_spec(
     ):
         args.extend(["--tls-san", san])
 
+    # Distributed cluster, never node-local: keep the embedded etcd datastore (--cluster-init below)
+    # AND disable k3s's local-path provisioner so PersistentVolumeClaims bind a DISTRIBUTED storage
+    # class (Longhorn / MooseFS), never a node-local volume. Server-role nodes only.
+    if node.role in {"init-server", "server"}:
+        args.extend(["--disable", "local-storage"])
+
     if node.role == "init-server":
         env["INSTALL_K3S_EXEC"] = "server"
         args.append("--cluster-init")

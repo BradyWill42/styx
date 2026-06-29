@@ -39,6 +39,7 @@ from .nodes import (
     identify_local_node,
     init_server_node,
     parse_nodes,
+    server_role_count,
     validate_nodes,
     validate_nodes_warnings,
 )
@@ -1596,6 +1597,19 @@ def run_install_cluster(
                 sysprep_status=gate.sysprep_status,
                 warnings=gate.warnings,
                 blocking=node_errors,
+            )
+        elif server_role_count(nodes) < 2:
+            gate = InstallGateResult(
+                ok=False,
+                message="Refusing a single-server cluster install — Styx requires a DISTRIBUTED "
+                "cluster (>=2 server-role nodes for embedded etcd + distributed storage, never node-local).",
+                config=gate.config,
+                config_path=gate.config_path,
+                config_status_value="INVALID",
+                inventory=gate.inventory,
+                sysprep_status=gate.sysprep_status,
+                warnings=gate.warnings,
+                blocking=["fewer than 2 server-role nodes (init-server + server) — add another server node"],
             )
     cluster_plan = (
         build_cluster_plan(

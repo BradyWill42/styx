@@ -320,6 +320,12 @@ def validate_nodes_warnings(
     if not nodes:
         return warnings
 
+    if server_role_count(nodes) < 2:
+        warnings.append(
+            "fewer than 2 server-role nodes — Styx wants a DISTRIBUTED cluster (multi-server etcd "
+            "+ distributed storage), not a single-node/local install; add another init-server/server node"
+        )
+
     sites = sites_by_public_ip(nodes)
     for public_ip, site_nodes in sites.items():
         if len(site_nodes) < 2:
@@ -386,6 +392,11 @@ def init_server_node(nodes: list[ClusterNode]) -> ClusterNode | None:
         if node.role == "init-server":
             return node
     return None
+
+
+def server_role_count(nodes: list[ClusterNode]) -> int:
+    """Count control-plane (server) nodes — init-server + server. Agents don't carry the datastore."""
+    return sum(1 for node in nodes if node.role in {"init-server", "server"})
 
 
 def pistyx_holder(config: dict[str, Any] | None, nodes: list[ClusterNode]) -> ClusterNode | None:
