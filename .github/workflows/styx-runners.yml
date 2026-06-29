@@ -93,7 +93,7 @@ jobs:
       matrix:
         runner: ${{ fromJson(needs.discover.outputs.runners) }}
     runs-on: [self-hosted, "${{ matrix.runner }}"]
-    timeout-minutes: 5
+    timeout-minutes: 8
 
     steps:
       - uses: actions/checkout@v7
@@ -133,7 +133,7 @@ jobs:
       matrix:
         runner: ${{ fromJson(needs.discover.outputs.runners) }}
     runs-on: [self-hosted, "${{ matrix.runner }}"]
-    timeout-minutes: 5
+    timeout-minutes: 8
 
     steps:
       - uses: actions/checkout@v7
@@ -176,7 +176,7 @@ jobs:
       matrix:
         runner: ${{ fromJson(needs.discover.outputs.runners) }}
     runs-on: [self-hosted, "${{ matrix.runner }}"]
-    timeout-minutes: 5
+    timeout-minutes: 8
 
     steps:
       - uses: actions/checkout@v7
