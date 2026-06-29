@@ -997,8 +997,9 @@ Every pull request and push to `main` runs:
 Manual workflows:
 
 1. **Runner smoke** - quick online-runner ping
-2. **Styx cluster E2E** - destructive install -> join -> mesh -> DNS -> status/doctor -> uninstall
-3. **Pistyx hosted smoke** - GitHub-hosted check for pistyx render moves, public DNS/UDP routeability, and optional WireGuard handshake
+2. **MVP3 connectivity** - non-destructive live mesh check for cross-site `10.0.N.x` reachability and DNS
+3. **Styx cluster E2E** - destructive install -> join -> mesh -> DNS -> status/doctor -> uninstall
+4. **Pistyx hosted smoke** - GitHub-hosted check for pistyx render moves, public DNS/UDP routeability, and optional WireGuard handshake
 
 ### Styx runner integration (primary)
 
@@ -1045,6 +1046,19 @@ This is the only workflow that exercises runtime cluster behavior. It runs:
 5. `deploy dns plan` and `deploy dns apply`
 6. `status` and `doctor`
 7. teardown cluster uninstall (unless skipped)
+
+### MVP3 connectivity (manual, non-destructive)
+
+This workflow assumes the live mesh is already up. It discovers online self-hosted runners, runs one leg per runner, and uses the runner's `/etc/styx/styx.yaml` so it tests the deployed five-device topology rather than a generated render fixture.
+
+Each runner checks:
+
+- `Styx` plus every `StyxSite<N>` interface exists with the expected local `10.0.N.x` identity
+- peers in other physical sites answer on the Styx backbone IP and every site-scoped `10.0.N.x` identity
+- configured node/pistyx DuckDNS names resolve through the system resolver
+- the node-local DNS resolver answers directly on `127.0.0.1:53`
+
+Run it from GitHub Actions as **MVP3 connectivity** after `mesh up` and `deploy all apply` have converged.
 
 ### Secrets
 

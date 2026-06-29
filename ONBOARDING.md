@@ -16,7 +16,7 @@ Command-discovery-first Typer CLI. Status as of **2026-06-26**: MVP1 + MVP2 ship
 - **Per-site DuckDNS publishers** (`styxctl deploy dns`) — one updater Deployment **per site, pinned to that site's leader**, publishing the site's DuckDNS names (derived from node `hostname`s) → the site's **public IPv4+IPv6** (dual-stack). The token is a Secret from `$DUCKDNS_TOKEN`, never in `styx.yaml`.
 - **`styxctl status` / `styxctl doctor`** — cluster node health + Styx pod services (DuckDNS, resolver, enforcer, reresolver), with remediation hints.
 - **Styx backbone WG mesh** (`styxctl mesh plan` / `mesh up`) — **hub-and-spoke**: the init-server is the WG hub; every other k3s node is a spoke that routes the whole supernet (`10.0.0.0/14` + `fd00:cafe::/48`) through it (`PersistentKeepalive=25`). Each node keeps its own private key; `mesh up` (on the init-server) collects only *public* keys over SSH, then has each node render its own `[Peer]` blocks (`mesh apply-local`). The render is **CI-verified** (`mesh plan`); `mesh up` runtime is **E2E-only** (no live cluster per-push). See `wireguard_mesh.py`.
-- **Per-site Pi overlays** (`StyxSite<N>`) — every Pi renders one site WG config per physical WAN site, preserving the Pi's Styx host suffix across all `10.0.N.0/24` site scopes. The site entrypoint routes the other Pi identities for that site.
+- **Per-site Pi overlays** (`StyxSite<N>`) — every Pi renders one site WG config per physical WAN site, preserving the Pi's Styx host suffix across all `10.0.N.0/24` site scopes. The site entrypoint routes the other Pi identities for that site. The manual `MVP3 connectivity` workflow now checks this live from every online runner.
 - **Client registration + pistyx negotiation** — `client config --register` persists client peers into `clients:` and renders matching site-scoped addresses; `mesh pistyx negotiate --watch --apply` observes active handshakes, asks all site leaders to RTT-probe the client endpoint IPs, and moves the floating holder.
 
 ## 2. Designed but deferred (the rest of the overlay)
@@ -29,8 +29,8 @@ second site.
 
 ## 3. Roadmap (ordered)
 
-1. **Dispatch `styx-cluster-e2e`** (with `DUCKDNS_TOKEN` set) → confirm the per-site publisher pods schedule onto the leaders and actually update DuckDNS. *This is the only unproven runtime bit.*
-2. **Bring pithor online as a real remote 2nd site** → unblocks all cross-site mesh work.
+1. **Dispatch `MVP3 connectivity`** against the live five-device mesh → prove cross-site `10.0.N.x` reachability and node-local DNS from every online runner.
+2. **Dispatch `styx-cluster-e2e`** (with `DUCKDNS_TOKEN` set) → confirm the per-site publisher pods schedule onto the leaders and actually update DuckDNS.
 3. **Movable styx hub / richer site routing** (backbone + per-site Pi overlays are done): leader-to-styx uplinks beyond the current routed entrypoints, NAT-aware policy, and styx-as-movable-hub.
 4. **Pistyx negotiation soak** — run `mesh pistyx negotiate --watch --apply` on the init-server/ops path and confirm active clients move to the fastest reachable holder without flapping.
 5. **Client automation follow-through** — `client config --register` records peers today; client-side install/application remains manual.
@@ -49,6 +49,7 @@ second site.
 - **`Styx runner integration`** (self-hosted, the primary gate): `discover` (online runners via `RUNNER_API_TOKEN` → gate: exactly 1 init-server + ≥1 agent online → generate `styx.yaml` from labels → per-machine matrix) → `uninstall` → `stage 1` (prereqs + gateway SSH on 47810) → `stage 2` (SSH connectivity) → `summary`.
 - **`CI`** (GitHub-hosted): package sanity — `styxctl --help`, `deploy dns plan` render, `status/doctor --help`, wheel build.
 - **`Styx cluster E2E`** (manual, destructive): full install + `mesh up` + `deploy dns` + `status` + `doctor` against a live cluster. **The only workflow that exercises runtime cluster behavior** (per-push CI has no live k3s).
+- **`MVP3 connectivity`** (manual, non-destructive): discovers online runners, uses each runner's live `/etc/styx/styx.yaml`, then checks `Styx`/`StyxSite<N>` interfaces, cross-site pings to every peer's site-scoped `10.0.N.x` identities, system DNS, and the node-local `127.0.0.1` resolver.
 - **Verify a run** with `gh run view <id> --json conclusion` — do **not** trust a watch-wrapper exit code (a trailing `echo` masks `gh run watch`'s real status — this bit us once).
 
 ## 6. Secrets (repo → Settings → Actions secrets)
@@ -66,8 +67,8 @@ Each runner carries `self-hosted, Linux, ARM64`, **its own name** (so `runs-on` 
 ## 8. Key files
 
 - `src/styxctl/`: `cli.py`, `config.py`, `nodes.py`, `network_plan.py` (IP plan), `network_detect.py` (DuckDNS resolve + LAN scan), `bootstrap_config.py` (config enrichment), `k3s_cluster.py` (install/connect, SSH + ProxyJump), `install.py`, `dns_publish.py` (per-site publishers), `cluster_status.py` (status/doctor), `wireguard_mesh.py` (backbone + per-site WG overlays, clients, pistyx probe/negotiation), `client_registry.py`, `pistyx_repoint.py`, `pistyx_select.py`, `lan_election.py`.
-- `.github/workflows/`: `styx-runners.yml` (primary), `ci.yml`, `styx-cluster-e2e.yml` (manual), `runner-smoke.yml`.
-- `.github/scripts/`: `generate_styx_config.py` (labels→styx.yaml), `runner_lib.py`, `stage1-prerequisites.py`, `stage2-connectivity.py`.
+- `.github/workflows/`: `styx-runners.yml` (primary), `mvp3-connectivity.yml` (manual live mesh check), `ci.yml`, `styx-cluster-e2e.yml` (manual), `runner-smoke.yml`.
+- `.github/scripts/`: `generate_styx_config.py` (labels→styx.yaml), `runner_lib.py`, `stage1-prerequisites.py`, `stage2-connectivity.py`, `mvp3-connectivity.py`.
 - `styx.yaml.example`: cluster settings + reference nodes (CI regenerates the `nodes:` from labels; the listed nodes are a real-deploy reference only).
 
 ## 9. Known issues / cleanup

@@ -1,0 +1,91 @@
+name: MVP3 connectivity
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: mvp3-connectivity-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  discover:
+    name: Discover online runners
+    runs-on: ubuntu-latest
+    outputs:
+      runners: ${{ steps.list.outputs.runners }}
+    steps:
+      - name: List online targetable runners
+        id: list
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_API_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/actions/runners" > runners.json
+          runners="$(jq -c '[.runners[] | . as $r | select($r.status=="online") | select(([$r.labels[].name] | index($r.name)) != null) | .name] | sort' runners.json)"
+          count="$(printf '%s' "$runners" | jq 'length')"
+          echo "Online targetable runners: $runners"
+          if [ "$count" -lt 2 ]; then
+            echo "::error::MVP3 connectivity needs at least two online runners; found $count"
+            exit 1
+          fi
+          echo "runners=$runners" >> "$GITHUB_OUTPUT"
+
+  mvp3-connectivity:
+    name: "MVP3 connectivity - ${{ matrix.runner }}"
+    needs: discover
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJson(needs.discover.outputs.runners) }}
+    runs-on: [self-hosted, "${{ matrix.runner }}"]
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install styxctl
+        run: |
+          python3 -m pip install --upgrade pip --break-system-packages
+          python3 -m pip install -e . --break-system-packages
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Cross-site IP and DNS connectivity
+        env:
+          STYX_RUNNER_NAME: ${{ matrix.runner }}
+        run: python3 .github/scripts/mvp3-connectivity.py
+
+      - name: Print MVP3 report
+        if: always()
+        run: python3 .github/scripts/print_report.py "${{ matrix.runner }}" mvp3-connectivity
+
+      - name: Upload MVP3 report
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: styx-mvp3-${{ matrix.runner }}
+          path: reports/styx/runner-integration/${{ matrix.runner }}-mvp3-connectivity.json
+          if-no-files-found: warn
+
+  summary:
+    name: MVP3 connectivity summary
+    needs: [discover, mvp3-connectivity]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download MVP3 reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: styx-mvp3-*
+          merge-multiple: true
+          path: reports/styx/runner-integration
+
+      - name: Summarize MVP3 reports
+        run: python3 .github/scripts/summarize_reports.py reports/styx/runner-integration
