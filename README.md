@@ -1058,7 +1058,7 @@ Each runner checks:
 - configured node/pistyx DuckDNS names resolve through the system resolver
 - the node-local DNS resolver answers directly on `127.0.0.1:53`
 
-Run it from GitHub Actions as **MVP3 connectivity** after `mesh up` and `deploy all apply` have converged.
+Run it from GitHub Actions as **MVP3 connectivity** after `mesh up` and `deploy all apply` have converged. Do not treat a run immediately after a push to `main` as meaningful unless the mesh has been rebuilt afterward: the push-triggered `Styx runner integration` workflow intentionally starts by uninstalling previous Styx state.
 
 ### Secrets
 

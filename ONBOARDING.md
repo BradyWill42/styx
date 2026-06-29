@@ -50,6 +50,7 @@ second site.
 - **`CI`** (GitHub-hosted): package sanity — `styxctl --help`, `deploy dns plan` render, `status/doctor --help`, wheel build.
 - **`Styx cluster E2E`** (manual, destructive): full install + `mesh up` + `deploy dns` + `status` + `doctor` against a live cluster. **The only workflow that exercises runtime cluster behavior** (per-push CI has no live k3s).
 - **`MVP3 connectivity`** (manual, non-destructive): discovers online runners, uses each runner's live `/etc/styx/styx.yaml`, then checks `Styx`/`StyxSite<N>` interfaces, cross-site pings to every peer's site-scoped `10.0.N.x` identities, system DNS, and the node-local `127.0.0.1` resolver.
+- **Run-order warning:** a push to `main` triggers `Styx runner integration`, which intentionally uninstalls previous Styx state. Run `MVP3 connectivity` only after the live mesh has been rebuilt with `mesh up` and `deploy all apply`.
 - **Verify a run** with `gh run view <id> --json conclusion` — do **not** trust a watch-wrapper exit code (a trailing `echo` masks `gh run watch`'s real status — this bit us once).
 
 ## 6. Secrets (repo → Settings → Actions secrets)

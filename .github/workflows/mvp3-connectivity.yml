@@ -61,7 +61,7 @@ jobs:
 
       - name: Print MVP3 report
         if: always()
-        run: python3 .github/scripts/print_report.py "${{ matrix.runner }}" mvp3-connectivity
+        run: python3 .github/scripts/print_report.py "${{ matrix.runner }}" mvp3-connectivity || true
 
       - name: Upload MVP3 report
         uses: actions/upload-artifact@v7
