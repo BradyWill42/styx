@@ -294,7 +294,7 @@ def collect_inventory() -> SystemInventory:
         ("ip6_route", ["ip", "-6", "route"], 5.0),
         ("resolvectl_status", ["resolvectl", "status"], 5.0),
         ("timedatectl", ["timedatectl"], 5.0),
-        ("df_h", ["df", "-h"], 8.0),
+        ("df_h", ["df", "-h", "-l"], 8.0),
         ("free_h", ["free", "-h"], 5.0),
         ("lsblk", ["lsblk"], 8.0),
         ("findmnt", ["findmnt"], 8.0),
