@@ -5,6 +5,7 @@ from styxctl.network_plan import (
     PISTYX_IPV6,
     allocate_roadwarrior_ips,
     client_ipv4_for_site,
+    client_site_suffix,
     mesh_ipv4_for_node,
     mesh_ipv6_for_node,
     pistyx_ipv4_for_site,
@@ -57,3 +58,11 @@ def test_allocator_prunes_by_stack_mode():
     assert v4b is None and v6b is not None
     v4c, v6c = allocate_roadwarrior_ips(set(), set(), stack_mode="dual-stack")
     assert v4c is not None and v6c is not None
+
+
+def test_clients_land_above_the_reserved_pi_band():
+    # Every pi reserves its host-suffix in each site; clients begin above the pi band.
+    assert client_site_suffix(0, node_count=4) == 5      # pis reserve .1-.4 -> client .5
+    assert client_site_suffix(1, node_count=4) == 6
+    assert client_site_suffix(0, node_count=1) == 2      # single pi == gateway (.1); client .2
+    assert client_site_suffix(0, node_count=0) == 2      # gateway (.1) still reserved
