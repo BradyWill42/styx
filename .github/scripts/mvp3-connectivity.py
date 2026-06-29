@@ -7,6 +7,7 @@ import socket
 import struct
 import sys
 import time
+import os
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -143,6 +144,12 @@ def main() -> int:
     print(f"=== MVP3 connectivity: {name} ===")
     config_path = prepare_styx_yaml(REPO_ROOT)
     checks: list[dict[str, object]] = []
+    require_local_resolver = os.environ.get("STYX_REQUIRE_LOCAL_RESOLVER", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "skip",
+    }
 
     from styxctl.bootstrap_config import load_operational_config
     from styxctl.inventory import collect_inventory
@@ -231,6 +238,10 @@ def main() -> int:
             pass_check(checks, f"dns_system_{hostname}", f"{label}: {', '.join(records)}")
         else:
             fail_check(checks, f"dns_system_{hostname}", f"{label}: no A record from system resolver")
+
+        if not require_local_resolver:
+            skip_check(checks, f"dns_local_{hostname}", "node-local resolver not required in this workflow")
+            continue
 
         ok, local_result = _query_local_resolver_a(hostname)
         if ok and isinstance(local_result, list) and local_result:

@@ -36,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       runners: ${{ steps.list.outputs.runners }}
+      init_runner: ${{ steps.list.outputs.init_runner }}
     steps:
       - uses: actions/checkout@v7
 
@@ -60,6 +61,7 @@ jobs:
           fi
           # The init-server AND at least one agent must be online (server optional).
           init_online="$(printf '%s' "$targetable" | jq '[.[] | select(([.labels[].name] | index("init-server")) != null)] | length')"
+          init_runner="$(printf '%s' "$targetable" | jq -r '[.[] | select(([.labels[].name] | index("init-server")) != null) | .name] | first // empty')"
           agent_online="$(printf '%s' "$targetable" | jq '[.[] | select(([.labels[].name] | index("agent")) != null)] | length')"
           echo "Online targetable: $runners; init-labeled=$init_labeled init-online=$init_online agent-online=$agent_online"
           if [ "$init_online" -lt 1 ] || [ "$agent_online" -lt 1 ]; then
@@ -67,6 +69,7 @@ jobs:
             exit 1
           fi
           echo "runners=$runners" >> "$GITHUB_OUTPUT"
+          echo "init_runner=$init_runner" >> "$GITHUB_OUTPUT"
 
       - name: Generate styx.yaml from runner labels
         run: |
@@ -208,9 +211,79 @@ jobs:
           path: reports/styx/runner-integration/${{ matrix.runner }}-connectivity.json
           if-no-files-found: warn
 
+  mvp3-mesh:
+    name: "Stage 3 prep - mesh up"
+    needs: [discover, connectivity]
+    if: needs.connectivity.result == 'success'
+    runs-on: [self-hosted, "${{ needs.discover.outputs.init_runner }}"]
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install styxctl
+        run: |
+          python3 -m pip install --upgrade pip --break-system-packages
+          python3 -m pip install -e . --break-system-packages
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Use live Styx config
+        run: |
+          set -euo pipefail
+          if [ ! -s /etc/styx/styx.yaml ]; then
+            echo "::error::Stage 3 requires /etc/styx/styx.yaml on the init-server so remote-site hostnames are known"
+            exit 1
+          fi
+          cp /etc/styx/styx.yaml styx.yaml
+          echo "Using /etc/styx/styx.yaml for Stage 3 mesh bring-up"
+
+      - name: Stage 3 prep - bring up mesh
+        run: |
+          styxctl mesh plan
+          styxctl mesh up
+          sleep 10
+
+  mvp3-connectivity:
+    name: "Stage 3 - ${{ matrix.runner }}"
+    needs: [discover, mvp3-mesh]
+    if: needs.mvp3-mesh.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJson(needs.discover.outputs.runners) }}
+    runs-on: [self-hosted, "${{ matrix.runner }}"]
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install styxctl
+        run: |
+          python3 -m pip install --upgrade pip --break-system-packages
+          python3 -m pip install -e . --break-system-packages
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Stage 3 - cross-site IP and DNS connectivity
+        env:
+          STYX_RUNNER_NAME: ${{ matrix.runner }}
+          STYX_REQUIRE_LOCAL_RESOLVER: "0"
+        run: python3 .github/scripts/mvp3-connectivity.py
+
+      - name: Print stage 3 report
+        if: always()
+        run: python3 .github/scripts/print_report.py "${{ matrix.runner }}" mvp3-connectivity || true
+
+      - name: Upload stage 3 report
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: styx-stage3-${{ matrix.runner }}
+          path: reports/styx/runner-integration/${{ matrix.runner }}-mvp3-connectivity.json
+          if-no-files-found: warn
+
   summary:
     name: Integration summary
-    needs: [discover, prerequisites, connectivity]
+    needs: [discover, prerequisites, connectivity, mvp3-connectivity]
     if: always()
     runs-on: ubuntu-latest
 

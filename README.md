@@ -992,7 +992,7 @@ styx.yaml.example     # Copy to styx.yaml (gitignored); CI regenerates nodes
 Every pull request and push to `main` runs:
 
 1. **CI** (GitHub-hosted) - package sanity, CLI help, `deploy dns plan`, `mesh plan`, wheel build
-2. **Styx runner integration** (self-hosted) - primary live gate with dynamic runner discovery and generated config
+2. **Styx runner integration** (self-hosted) - primary live gate with dynamic runner discovery, generated config, gateway SSH, mesh bring-up, and Stage 3 cross-site IP/DNS checks
 
 Manual workflows:
 
@@ -1020,9 +1020,11 @@ Pipeline:
 | **uninstall** | Best-effort cleanup of prior local Styx state |
 | **1 - prerequisites** | Identity, passwordless sudo, tools, sysprep, gateway SSH on `47810`, local `public_ipv4` |
 | **2 - connectivity** | Config validation and SSH from each online runner to peers on `47810`; LAN identity mapping for colocated peers |
+| **3 prep - mesh up** | Runs on the discovered init-server, uses live `/etc/styx/styx.yaml`, runs `mesh plan` and `mesh up` |
+| **3 - MVP3 connectivity** | Runs on every online runner; checks `Styx`/`StyxSite<N>` interfaces, cross-site `10.0.N.x` pings, and system DNS |
 | **summary** | Aggregates all stage JSON output |
 
-JSON reports are written to `reports/styx/runner-integration/` and uploaded as `styx-stage1-<runner>` / `styx-stage2-<runner>` artifacts.
+JSON reports are written to `reports/styx/runner-integration/` and uploaded as `styx-stage1-<runner>`, `styx-stage2-<runner>`, and `styx-stage3-<runner>` artifacts.
 
 ### CI (GitHub-hosted)
 
@@ -1037,7 +1039,7 @@ Package sanity only. It does not run a live cluster. It verifies:
 
 ### Styx cluster E2E (manual, destructive)
 
-This is the only workflow that exercises runtime cluster behavior. It runs:
+This is the workflow that exercises live k3s/pod deployment behavior. It runs:
 
 1. preflight cluster uninstall (unless skipped)
 2. local install on configured runners
@@ -1058,7 +1060,7 @@ Each runner checks:
 - configured node/pistyx DuckDNS names resolve through the system resolver
 - the node-local DNS resolver answers directly on `127.0.0.1:53`
 
-Run it from GitHub Actions as **MVP3 connectivity** after `mesh up` and `deploy all apply` have converged. Do not treat a run immediately after a push to `main` as meaningful unless the mesh has been rebuilt afterward: the push-triggered `Styx runner integration` workflow intentionally starts by uninstalling previous Styx state.
+Run it from GitHub Actions as **MVP3 connectivity** after `mesh up` and `deploy all apply` have converged. The push-triggered `Styx runner integration` now has its own Stage 3 path: it rebuilds the WireGuard mesh before running cross-site IP and system-DNS checks, while the standalone manual workflow additionally expects the node-local resolver to be up.
 
 ### Secrets
 
@@ -1091,7 +1093,7 @@ Re-label a runner and the next integration run regenerates `styx.yaml` automatic
 - **Movable `styx` hub deferred:** `mesh plan/up` builds the hub-and-spoke backbone and per-site Pi overlays today. Leader-to-styx uplinks and movable `styx` hub behavior are not built yet.
 - **One global `pistyx` name:** `mesh pistyx negotiate --watch --apply` can move the floating holder for the active client set, but DuckDNS cannot route different clients to different sites at the same time.
 - **Client profile application remains manual:** `client config --register` persists peers into `styx.yaml`; operators still install the emitted `.conf` on the client and run `mesh up` to distribute the peer to leaders.
-- **Runtime verification is E2E-only:** per-push CI can render and sanity-check; live k3s behavior only runs in the manual cluster E2E workflow.
+- **Runtime verification split:** per-push runner integration now exercises live WireGuard mesh behavior in Stage 3; live k3s/pod behavior only runs in the manual cluster E2E workflow.
 - **Workflow verification gotcha:** after watching a GitHub run, verify the conclusion with `gh run view <id> --json conclusion`; wrapper commands can hide a failed `gh run watch`.
 
 ---
