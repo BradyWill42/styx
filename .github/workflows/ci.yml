@@ -83,6 +83,10 @@ jobs:
           styxctl client reresolve-unit | tee /tmp/cl-reresolve.txt         # Linux client companion (systemd timer)
           grep -q "OnUnitActiveSec" /tmp/cl-reresolve.txt
           grep -q "wg set" /tmp/cl-reresolve.txt
+          # one-command deploy of ALL pod services renders dns (Deployment) + resolver/reresolve (DaemonSets)
+          styxctl deploy all plan | tee /tmp/all.txt
+          grep -q "kind: Deployment" /tmp/all.txt
+          grep -q "kind: DaemonSet" /tmp/all.txt
           rm -f styx.yaml
 
       - name: Hosted pistyx render/move smoke

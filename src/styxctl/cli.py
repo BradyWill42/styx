@@ -106,6 +106,7 @@ deploy_app = typer.Typer(help="Deploy Styx cluster workloads (MVP3).", no_args_i
 deploy_dns_app = typer.Typer(help="Publish cluster DNS to DuckDNS from inside k3s.", no_args_is_help=True)
 deploy_resolver_app = typer.Typer(help="Node-local DNS resolver + forced /etc/resolv.conf (pod-based).", no_args_is_help=True)
 deploy_reresolve_app = typer.Typer(help="WireGuard endpoint re-resolution DaemonSet (follow DuckDNS repoints).", no_args_is_help=True)
+deploy_all_app = typer.Typer(help="Deploy/remove ALL Styx pod services at once (dns + resolver + reresolve).", no_args_is_help=True)
 mesh_app = typer.Typer(help="Build and inspect the Styx WireGuard backbone mesh.", no_args_is_help=True)
 mesh_pistyx_app = typer.Typer(help="Inspect and move the movable pistyx egress.", no_args_is_help=True)
 client_app = typer.Typer(help="Generate roadwarrior client configs (connect to a chosen site).", no_args_is_help=True)
@@ -827,6 +828,49 @@ def deploy_reresolve_delete() -> None:
     raise typer.Exit(code=exit_code)
 
 
+@deploy_all_app.command("plan")
+def deploy_all_plan() -> None:
+    """Render every Styx pod service at once: DuckDNS publisher + DNS resolver + WG reresolver."""
+    code = 0
+    for (report, c), render in (
+        (deploy_dns(dry_run=True, config_path=None), render_dns_report_text),
+        (deploy_resolver(dry_run=True, config_path=None), render_resolver_report_text),
+        (deploy_reresolve(dry_run=True, config_path=None), render_reresolve_report_text),
+    ):
+        console.print(render(report), markup=False, soft_wrap=True)
+        code = code or c
+    raise typer.Exit(code=code)
+
+
+@deploy_all_app.command("apply")
+def deploy_all_apply() -> None:
+    """Deploy every Styx pod service to the cluster. Run on the init-server; dns reads $DUCKDNS_TOKEN."""
+    code = 0
+    for (report, c), render in (
+        (deploy_dns(dry_run=False, config_path=None), render_dns_report_text),
+        (deploy_resolver(dry_run=False, config_path=None), render_resolver_report_text),
+        (deploy_reresolve(dry_run=False, config_path=None), render_reresolve_report_text),
+    ):
+        console.print(render(report), markup=False, soft_wrap=True)
+        code = code or c
+    raise typer.Exit(code=code)
+
+
+@deploy_all_app.command("delete")
+def deploy_all_delete() -> None:
+    """Uninstall every Styx pod service (each tears down cleanly by its managed-by label)."""
+    code = 0
+    for (report, c), render in (
+        (uninstall_dns(), render_dns_report_text),
+        (uninstall_resolver(), render_resolver_report_text),
+        (uninstall_reresolve(), render_reresolve_report_text),
+    ):
+        report.setdefault("deleting", True)
+        console.print(render(report), markup=False, soft_wrap=True)
+        code = code or c
+    raise typer.Exit(code=code)
+
+
 def _render_cluster_health(health: dict[str, object]) -> None:
     table = Table(title="Styx Cluster Status")
     table.add_column("Node")
@@ -1019,6 +1063,7 @@ app.add_typer(uninstall_app, name="uninstall")
 deploy_app.add_typer(deploy_dns_app, name="dns")
 deploy_app.add_typer(deploy_resolver_app, name="resolver")
 deploy_app.add_typer(deploy_reresolve_app, name="reresolve")
+deploy_app.add_typer(deploy_all_app, name="all")
 app.add_typer(deploy_app, name="deploy")
 mesh_app.add_typer(mesh_pistyx_app, name="pistyx")
 app.add_typer(mesh_app, name="mesh")
