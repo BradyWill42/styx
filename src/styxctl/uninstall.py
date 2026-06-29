@@ -61,6 +61,8 @@ LEFTOVER_ARTIFACT_KEYS = (
     "old_flannel_state",
 )
 PRESERVED_INTERFACES = frozenset({"wg0"})
+STYX_SITE_INTERFACE_PREFIX = "StyxSite"
+DEFAULT_EGRESS_INTERFACE = "StyxEgress"
 STYX_SYSTEM_CONFIG_PATH = Path("/etc/styx/styx.yaml")
 PROTECTED_REMOVAL_PREFIXES = ("/etc/styx/",)
 PROTECTED_REMOVAL_PATHS = frozenset({str(WG0_CONFIG_PATH)})
@@ -277,6 +279,43 @@ def _candidate_styx_wireguard_units(interface: str) -> tuple[str, ...]:
     return (f"wg-quick@{interface}.service", *STYX_WG_CUSTOM_SYSTEMD_UNITS)
 
 
+def _wireguard_step_name(base: str, interface: str, primary_interface: str) -> str:
+    return base if interface == primary_interface else f"{base}:{interface}"
+
+
+def _is_wireguard_step(step: UninstallStep, base: str) -> bool:
+    return step.name == base or step.name.startswith(f"{base}:")
+
+
+def _wireguard_step_interface(step: UninstallStep, primary_interface: str) -> str:
+    return step.name.split(":", 1)[1] if ":" in step.name else primary_interface
+
+
+def _configured_egress_interface(config: dict[str, Any]) -> str:
+    egress = config.get("egress", {})
+    if not isinstance(egress, dict):
+        return DEFAULT_EGRESS_INTERFACE
+    interface = egress.get("interface", DEFAULT_EGRESS_INTERFACE)
+    return interface if isinstance(interface, str) and interface else DEFAULT_EGRESS_INTERFACE
+
+
+def _styx_owned_extra_wireguard_interfaces(
+    config: dict[str, Any],
+    inventory: SystemInventory,
+    *,
+    primary_interface: str,
+) -> list[str]:
+    egress_interface = _configured_egress_interface(config)
+    candidates = set(inventory.interface_names) | set(inventory.wireguard_interfaces)
+    extras: set[str] = set()
+    for name in candidates:
+        if name == primary_interface or name in PRESERVED_INTERFACES:
+            continue
+        if name in {DEFAULT_EGRESS_INTERFACE, egress_interface} or name.startswith(STYX_SITE_INTERFACE_PREFIX):
+            extras.add(name)
+    return sorted(extras)
+
+
 def _styx_wireguard_systemd_artifacts(interface: str) -> list[Path]:
     artifacts: list[Path] = []
     candidates = [
@@ -427,12 +466,16 @@ def _append_wireguard_steps(
     steps: list[UninstallStep],
     *,
     interface: str,
+    primary_interface: str,
     inventory: SystemInventory,
 ) -> None:
+    service_step = _wireguard_step_name("remove-styx-wireguard-service", interface, primary_interface)
+    down_step = _wireguard_step_name("wg-down", interface, primary_interface)
+    config_step = _wireguard_step_name("remove-wg-config", interface, primary_interface)
     if interface in PRESERVED_INTERFACES:
         steps.append(
             UninstallStep(
-                name="wg-down",
+                name=down_step,
                 category="wireguard",
                 action="down",
                 status="skipped",
@@ -445,7 +488,7 @@ def _append_wireguard_steps(
         unit_names = ", ".join(_candidate_styx_wireguard_units(interface))
         steps.append(
             UninstallStep(
-                name="remove-styx-wireguard-service",
+                name=service_step,
                 category="wireguard",
                 action="stop",
                 status="pending",
@@ -460,7 +503,7 @@ def _append_wireguard_steps(
     else:
         steps.append(
             UninstallStep(
-                name="remove-styx-wireguard-service",
+                name=service_step,
                 category="wireguard",
                 action="stop",
                 status="skipped",
@@ -471,7 +514,7 @@ def _append_wireguard_steps(
     if interface in inventory.interface_names or interface in inventory.wireguard_interfaces:
         steps.append(
             UninstallStep(
-                name="wg-down",
+                name=down_step,
                 category="wireguard",
                 action="down",
                 status="pending",
@@ -482,7 +525,7 @@ def _append_wireguard_steps(
     else:
         steps.append(
             UninstallStep(
-                name="wg-down",
+                name=down_step,
                 category="wireguard",
                 action="down",
                 status="skipped",
@@ -494,7 +537,7 @@ def _append_wireguard_steps(
     if _is_file(styx_conf):
         steps.append(
             UninstallStep(
-                name="remove-wg-config",
+                name=config_step,
                 category="wireguard",
                 action="remove",
                 status="pending",
@@ -505,7 +548,7 @@ def _append_wireguard_steps(
     else:
         steps.append(
             UninstallStep(
-                name="remove-wg-config",
+                name=config_step,
                 category="wireguard",
                 action="remove",
                 status="skipped",
@@ -602,7 +645,18 @@ def build_uninstall_plan(
 
     _append_k3s_uninstall_steps(steps, inventory)
     _append_leftover_artifact_steps(steps, inventory, interface=interface)
-    _append_wireguard_steps(steps, interface=interface, inventory=inventory)
+    _append_wireguard_steps(steps, interface=interface, primary_interface=interface, inventory=inventory)
+    for extra_interface in _styx_owned_extra_wireguard_interfaces(
+        config,
+        inventory,
+        primary_interface=interface,
+    ):
+        _append_wireguard_steps(
+            steps,
+            interface=extra_interface,
+            primary_interface=interface,
+            inventory=inventory,
+        )
     _append_gateway_steps(steps)
     _append_firewall_step(
         steps,
@@ -651,16 +705,19 @@ def _execute_uninstall_step(
             sudo_available=inventory.sudo_available,
             timeout=300.0,
         )
-    elif step.name == "remove-styx-wireguard-service":
+    elif _is_wireguard_step(step, "remove-styx-wireguard-service"):
+        interface = _wireguard_step_interface(step, plan.interface)
         ok, detail = _remove_styx_wireguard_service(interface, inventory)
-    elif step.name == "wg-down":
+    elif _is_wireguard_step(step, "wg-down"):
+        interface = _wireguard_step_interface(step, plan.interface)
         ok, detail = _run_mutating(
             ["wg-quick", "down", interface],
             use_sudo=True,
             sudo_available=inventory.sudo_available,
             timeout=30.0,
         )
-    elif step.name == "remove-wg-config":
+    elif _is_wireguard_step(step, "remove-wg-config"):
+        interface = _wireguard_step_interface(step, plan.interface)
         styx_conf = str(STYX_WG_DIR / f"{interface}.conf")
         ok, detail = _run_mutating(
             ["rm", "-f", styx_conf],
@@ -810,15 +867,18 @@ def _remote_uninstall_command(plan: UninstallPlan) -> str:
                 "if [ -x /usr/local/bin/k3s-uninstall.sh ]; then /usr/local/bin/k3s-uninstall.sh; "
                 "elif [ -x /usr/local/bin/k3s-agent-uninstall.sh ]; then /usr/local/bin/k3s-agent-uninstall.sh; fi"
             )
-        elif step.name == "remove-styx-wireguard-service":
-            if plan.interface not in PRESERVED_INTERFACES:
-                commands.append(build_wireguard_service_remove_shell(plan.interface))
-        elif step.name == "wg-down":
-            if plan.interface not in PRESERVED_INTERFACES:
-                commands.append(f"wg-quick down {plan.interface} || true")
-        elif step.name == "remove-wg-config":
-            if plan.interface not in PRESERVED_INTERFACES:
-                commands.append(f"rm -f /etc/wireguard/{plan.interface}.conf")
+        elif _is_wireguard_step(step, "remove-styx-wireguard-service"):
+            interface = _wireguard_step_interface(step, plan.interface)
+            if interface not in PRESERVED_INTERFACES:
+                commands.append(build_wireguard_service_remove_shell(interface))
+        elif _is_wireguard_step(step, "wg-down"):
+            interface = _wireguard_step_interface(step, plan.interface)
+            if interface not in PRESERVED_INTERFACES:
+                commands.append(f"wg-quick down {shlex.quote(interface)} || true")
+        elif _is_wireguard_step(step, "remove-wg-config"):
+            interface = _wireguard_step_interface(step, plan.interface)
+            if interface not in PRESERVED_INTERFACES:
+                commands.append(f"rm -f {shlex.quote(f'/etc/wireguard/{interface}.conf')}")
         elif step.name == "remove-gateway-ssh":
             commands.append("rm -f /etc/ssh/sshd_config.d/styx-gateway.conf")
             commands.append("systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true")
