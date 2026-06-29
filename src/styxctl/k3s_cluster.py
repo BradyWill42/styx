@@ -447,6 +447,10 @@ def _run_ssh_command(
         str(port),
         "-o",
         "ConnectTimeout=10",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "LogLevel=ERROR",
     ]
     if use_sshpass:
         command.extend(["-o", "PreferredAuthentications=password", "-o", "BatchMode=no"])
