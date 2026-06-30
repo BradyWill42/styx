@@ -32,6 +32,8 @@ nodes:
     hostname: pipegasus.duckdns.org   # no piatlas; colocated with pegasus, borrows its
   - name: thor
     hostname: pithor.duckdns.org
+  - name: zeus
+    hostname: pipegasus.duckdns.org
 
 # name (shared WAN IP). The LAN scan distinguishes atlas by its own lan_ip.
 
