@@ -1279,10 +1279,21 @@ def assess_install_health(
     else:
         wg0_preserved, wg0_issue = True, None
 
+    # Styx's own listeners inside the critical band are expected after a healthy install and must
+    # not count as conflicts: WireGuard (port/udp), gateway SSH (ssh/tcp, co-located on 47800),
+    # k3s API (k3s_api/tcp, co-located on 47801), and the pistyx egress (egress/udp) on the holder.
+    gateway = parse_gateway_ports(config)
+    egress_port = None
+    egress_cfg = config.get("egress")
+    if isinstance(egress_cfg, dict) and isinstance(egress_cfg.get("port"), int):
+        egress_port = egress_cfg["port"]
+    expected_listeners = {(port, "udp"), (gateway.ssh, "tcp"), (gateway.k3s_api, "tcp")}
+    if egress_port is not None:
+        expected_listeners.add((egress_port, "udp"))
     critical_conflicts = [
         conflict
         for conflict in inventory.ports.conflicts
-        if conflict.port in CRITICAL_PORTS and not (conflict.port == port and conflict.protocol == "udp")
+        if conflict.port in CRITICAL_PORTS and (conflict.port, conflict.protocol) not in expected_listeners
     ]
     critical_ports_clear = not critical_conflicts
 

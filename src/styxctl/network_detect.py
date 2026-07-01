@@ -120,8 +120,8 @@ def _socket_scan(subnet: ipaddress.IPv4Network, port: int, *, workers: int = 64)
     return hits
 
 
-def scan_lan_for_styx_peers(inventory: SystemInventory, port: int = 47810) -> list[str]:
-    """Return LAN IPs that have the Styx gateway port open.
+def scan_lan_for_styx_peers(inventory: SystemInventory, port: int = 47800) -> list[str]:
+    """Return LAN IPs that have the Styx gateway SSH port (47800/tcp) open.
 
     Uses nmap when available for speed; falls back to parallel socket scan.
     Excludes the local machine's own IP.

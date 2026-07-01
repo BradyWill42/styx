@@ -46,7 +46,7 @@ second site.
 
 ## 5. CI / verification
 
-- **`Styx runner integration`** (self-hosted, the primary gate): `discover` (online runners via `RUNNER_API_TOKEN` → gate: exactly 1 init-server + ≥1 agent online → generate `styx.yaml` from labels → per-machine matrix) → `uninstall` → `stage 1` (prereqs + gateway SSH on 47810) → `stage 2` (SSH connectivity) → `stage 3 prep` (`mesh up` from the init-server using live `/etc/styx/styx.yaml`) → `stage 3` (cross-site IP + DNS checks from every runner) → `summary`.
+- **`Styx runner integration`** (self-hosted, the primary gate): `discover` (online runners via `RUNNER_API_TOKEN` → gate: exactly 1 init-server + ≥1 agent online → generate `styx.yaml` from labels → per-machine matrix) → `uninstall` → `stage 1` (prereqs + gateway SSH on 47800) → `stage 2` (SSH connectivity) → `stage 3 prep` (`mesh up` from the init-server using live `/etc/styx/styx.yaml`) → `stage 3` (cross-site IP + DNS checks from every runner) → `summary`.
 - **`CI`** (GitHub-hosted): package sanity — `styxctl --help`, `deploy dns plan` render, `status/doctor --help`, wheel build.
 - **`Styx cluster E2E`** (manual, destructive): full install + `mesh up` + `deploy dns` + `status` + `doctor` against a live cluster. **The only workflow that exercises live k3s/pod deployment behavior** (per-push CI has no live k3s install).
 - **`MVP3 connectivity`** (manual, non-destructive): optional standalone version of the same live check; use it after the mesh and pod services are already up if you want node-local `127.0.0.1` resolver coverage too.
@@ -56,7 +56,7 @@ second site.
 
 | Secret | Purpose | Notes |
 |---|---|---|
-| `PIPASS` | sshpass password for SSH on 47810 (stage 2) | shared Pi login password |
+| `PIPASS` | sshpass password for SSH on 47800 (stage 2) | shared Pi login password |
 | `DUCKDNS_TOKEN` | DuckDNS record updates (`deploy dns`) | fine to be one account token |
 | `RUNNER_API_TOKEN` | discover job lists runners | **fine-grained PAT, `Administration: read`** — `GITHUB_TOKEN` can't list runners (403) |
 

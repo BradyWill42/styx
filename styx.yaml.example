@@ -5,7 +5,7 @@
 # peers (same WAN/public IP) are found by a LAN scan and reached over their lan_ip. In Styx, a
 # site is a place with a distinct public IP; nodes sharing one public IP are one site. Each site
 # LAN-elects its leader (port-forward face + DuckDNS publisher + styx uplink). Port 22 is admin SSH only —
-# styxctl uses 47810.
+# styxctl uses 47800 (gateway SSH/tcp, shares 47800 with the WireGuard backbone/udp).
 #
 # PREREQUISITE: each remote node runs a DuckDNS updater keeping its `hostname` current.
 # styxctl only RESOLVES these names, so it needs no DuckDNS token.

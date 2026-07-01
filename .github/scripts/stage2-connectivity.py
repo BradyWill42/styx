@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 2: SSH interconnectivity between runners on Styx gateway port 47810."""
+"""Stage 2: SSH interconnectivity between runners on Styx gateway port 47800/tcp."""
 
 from __future__ import annotations
 

@@ -10,8 +10,8 @@
 # Each runner must carry its own name as a label so runs-on can pin to it.
 #
 # Uninstall — tear down any previous Styx state.
-# Stage 1   — local prerequisites and gateway SSH (47810 only; port 22 untouched).
-# Stage 2   — interconnectivity between runners via Styx gateway port 47810.
+# Stage 1   — local prerequisites and gateway SSH (47800/tcp only; port 22 untouched).
+# Stage 2   — interconnectivity between runners via Styx gateway port 47800/tcp.
 
 name: Styx runner integration
 

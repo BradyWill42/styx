@@ -15,19 +15,29 @@ RESERVED_PORT_END = 47850
 RESERVED_PORT_RANGE = range(RESERVED_PORT_START, RESERVED_PORT_END + 1)
 ADMIN_SSH_PORT = 22
 
-PORT_PLAN: dict[int, dict[str, str]] = {
-    47800: {"protocol": "udp", "purpose": "Styx production WireGuard gateway"},
-    47801: {"protocol": "tcp", "purpose": "Styx gateway health API"},
-    47802: {"protocol": "udp", "purpose": "Styx director API / LAN leader election"},
-    47803: {"protocol": "tcp", "purpose": "Styx status dashboard/API"},
-    47804: {"protocol": "tcp", "purpose": "Styx node agent API"},
-    47805: {"protocol": "tcp", "purpose": "Styx Ansible controller API"},
-    47806: {"protocol": "tcp", "purpose": "Styx watchdog agent API"},
-    47807: {"protocol": "tcp", "purpose": "Styx local diagnostics API"},
-    47808: {"protocol": "tcp", "purpose": "Styx metrics exporter"},
-    47809: {"protocol": "any", "purpose": "reserved"},
-    47810: {"protocol": "tcp", "purpose": "SSH gateway listen"},
-    47811: {"protocol": "tcp", "purpose": "k3s API gateway listen"},
+# Each reserved port maps to a LIST of {protocol, purpose} entries: one port number can carry two
+# services when they use different transports, because the kernel binds each (protocol, port) tuple
+# separately. Styx uses this on 47800 (WireGuard/udp + gateway SSH/tcp) and 47801 (pistyx client
+# egress/udp + k3s API/tcp). Port 22 stays admin/runner SSH.
+PORT_PLAN: dict[int, list[dict[str, str]]] = {
+    47800: [
+        {"protocol": "udp", "purpose": "Styx backbone WireGuard mesh"},
+        {"protocol": "tcp", "purpose": "Styx gateway SSH"},
+    ],
+    47801: [
+        {"protocol": "udp", "purpose": "pistyx client WireGuard egress (StyxEgress)"},
+        {"protocol": "tcp", "purpose": "k3s API gateway listen"},
+    ],
+    47802: [{"protocol": "udp", "purpose": "Styx director API / LAN leader election"}],
+    47803: [{"protocol": "tcp", "purpose": "Styx status dashboard/API"}],
+    47804: [{"protocol": "tcp", "purpose": "Styx node agent API"}],
+    47805: [{"protocol": "tcp", "purpose": "Styx Ansible controller API"}],
+    47806: [{"protocol": "tcp", "purpose": "Styx watchdog agent API"}],
+    47807: [{"protocol": "tcp", "purpose": "Styx local diagnostics API"}],
+    47808: [{"protocol": "tcp", "purpose": "Styx metrics exporter"}],
+    47809: [{"protocol": "any", "purpose": "reserved"}],
+    47810: [{"protocol": "tcp", "purpose": "Styx gateway health API (reserved)"}],
+    47811: [{"protocol": "any", "purpose": "reserved (freed; formerly k3s API)"}],
 }
 
 PORT_BLOCKS: tuple[tuple[str, int, int], ...] = (
@@ -73,19 +83,49 @@ class PortScanResult:
 
 
 def port_purpose(port: int) -> str:
-    """Return the configured Styx purpose for a reserved port."""
+    """Return the Styx purpose(s) for a reserved port; co-located protocols are joined with ' + '."""
     if port in PORT_PLAN:
-        return PORT_PLAN[port]["purpose"]
+        return " + ".join(entry["purpose"] for entry in PORT_PLAN[port])
     for purpose, start, end in PORT_BLOCKS:
         if start <= port <= end:
             return purpose
     return "outside Styx reserved range"
 
 
-def planned_protocol(port: int) -> str:
+def port_purpose_for(port: int, protocol: str) -> str:
+    """Return the purpose for one (port, protocol); falls back to the aggregate purpose."""
     if port in PORT_PLAN:
-        return PORT_PLAN[port]["protocol"]
+        for entry in PORT_PLAN[port]:
+            if entry["protocol"] in (protocol, "any"):
+                return entry["purpose"]
+    return port_purpose(port)
+
+
+def planned_protocols(port: int) -> list[str]:
+    """Every protocol Styx plans to bind on a reserved port (e.g. ['udp', 'tcp'] on 47800)."""
+    if port in PORT_PLAN:
+        return [entry["protocol"] for entry in PORT_PLAN[port]]
+    return ["any"]
+
+
+def planned_protocol(port: int) -> str:
+    """Compact protocol label for a reserved port ('udp+tcp' when two transports share it)."""
+    if port in PORT_PLAN:
+        return "+".join(dict.fromkeys(planned_protocols(port)))
     return "any"
+
+
+def styx_planned_listeners() -> set[tuple[int, str]]:
+    """The (port, protocol) pairs Styx itself binds inside the reserved range.
+
+    Used to tell Styx's own expected listeners apart from foreign squatters when a scan finds a
+    reserved port occupied — e.g. on a re-install the gateway SSH is already on 47800/tcp.
+    """
+    pairs: set[tuple[int, str]] = set()
+    for port, entries in PORT_PLAN.items():
+        for entry in entries:
+            pairs.add((port, entry["protocol"]))
+    return pairs
 
 
 def extract_port(address: str) -> int | None:

@@ -69,7 +69,7 @@ flowchart TB
     subgraph mvp2["MVP2 - Install"]
         K3S["k3s cluster"]
         WG["WireGuard Styx interface"]
-        SSH["Gateway SSH on 47810"]
+        SSH["Gateway SSH on 47800"]
         LAN["LAN leader election"]
     end
 
@@ -128,9 +128,9 @@ Each node can use:
 - explicit `hostname` values, usually unique DuckDNS names such as `pipegasus.duckdns.org`, for cross-site discovery
 - `lan_ip` for co-located nodes behind one public IP
 - mesh `ipv4` / `ipv6` addresses assigned from the built-in Styx plan for k3s `--node-ip`
-- gateway ports `47810` (SSH) and `47811` (k3s API)
+- gateway ports `47800` (SSH) and `47801` (k3s API)
 
-**Port 22 stays admin/runner SSH.** `install apply local` adds Styx gateway SSH on `gateway.ssh_port` (`47810`) alongside port 22; it does not replace the normal admin path.
+**Port 22 stays admin/runner SSH.** `install apply local` adds Styx gateway SSH on `gateway.ssh_port` (`47800`) alongside port 22; it does not replace the normal admin path.
 
 ---
 
@@ -147,7 +147,7 @@ All development happens on [`main`](https://github.com/BradyWill42/styx/tree/mai
 Current bootstrap rule of thumb:
 
 - Remote peer discovery uses explicit node `hostname` values. `styxctl` only resolves DNS; it does not need a DuckDNS token for discovery.
-- Co-located peer discovery uses the shared public IP plus a LAN scan on gateway SSH port `47810`.
+- Co-located peer discovery uses the shared public IP plus a LAN scan on gateway SSH port `47800`.
 - Only the site leader/entrypoint needs inbound WAN port forwards for a shared-WAN site.
 - The DuckDNS token is only used later by `styxctl deploy dns apply` or `styxctl deploy all apply`, where it becomes a Kubernetes Secret.
 
@@ -393,7 +393,7 @@ styxctl install status lan
 
 ### Co-located nodes behind one WAN IP
 
-Homelab setups often have two or more gateway Pis on the same LAN behind one router. They share a single `public_ipv4` because the router can only forward each external port (`47810` SSH, `47811` k3s API) to one host. Leader election is automatic; set `lan_ip` values explicitly if you orchestrate from outside the LAN.
+Homelab setups often have two or more gateway Pis on the same LAN behind one router. They share a single `public_ipv4` because the router can only forward each external port (`47800` SSH, `47801` k3s API) to one host. Leader election is automatic; set `lan_ip` values explicitly if you orchestrate from outside the LAN.
 
 ```yaml
 cluster:
@@ -416,11 +416,11 @@ Election picks the site **entrypoint**. Only the entrypoint needs inbound port-f
 
 | From | To | Mechanism |
 |------|-----|-----------|
-| operator | site entrypoint | SSH to `public_ipv4:47810` |
-| operator on that LAN | LAN-internal node | SSH direct to `lan_ip:47810` |
+| operator | site entrypoint | SSH to `public_ipv4:47800` |
+| operator on that LAN | LAN-internal node | SSH direct to `lan_ip:47800` |
 | operator elsewhere | LAN-internal node | SSH `ProxyJump` through the entrypoint, then `lan_ip` |
-| node, same site | init-server | k3s join `https://<init lan_ip>:47811` |
-| node, different site | init-server | k3s join `https://<init public_ipv4>:47811` |
+| node, same site | init-server | k3s join `https://<init lan_ip>:47801` |
+| node, different site | init-server | k3s join `https://<init public_ipv4>:47801` |
 
 `styxctl` auto-fills the local node's public/LAN IPs and resolves remote `hostname` values (always on), and scans the LAN for colocated peers listening on gateway SSH. If you run orchestration from another site, set `lan_ip` explicitly for every colocated node.
 
@@ -430,11 +430,12 @@ Forward these Styx ports to the site entrypoint:
 
 | External (WAN) | Forward to node | Service |
 |---|---|---|
-| `47800/udp` | `47800/udp` | Styx WireGuard |
-| `47810/tcp` | `47810/tcp` | Styx gateway SSH |
-| `47811/tcp` | `47811/tcp` | k3s API |
+| `47800/udp` | `47800/udp` | Styx WireGuard backbone |
+| `47800/tcp` | `47800/tcp` | Styx gateway SSH |
+| `47801/udp` | `47801/udp` | pistyx client egress |
+| `47801/tcp` | `47801/tcp` | k3s API |
 
-Router forwards are 1:1: same port outside and inside. `styxctl` connects to `public_ipv4:47810` for cluster SSH and `https://public_ipv4:47811` for k3s joins. Port `22` remains for admin and GitHub runner access.
+Router forwards are 1:1: same port outside and inside. Two services share `47800` (WireGuard/udp + gateway SSH/tcp) and `47801` (pistyx egress/udp + k3s API/tcp); the kernel binds each transport separately. `styxctl` connects to `public_ipv4:47800` for cluster SSH and `https://public_ipv4:47801` for k3s joins. Port `22` remains for admin and GitHub runner access.
 
 ### What MVP2 installs
 
@@ -443,7 +444,7 @@ Router forwards are 1:1: same port outside and inside. `styxctl` connects to `pu
 | **Packages** | `iproute2`, WireGuard tools, `curl`, `ca-certificates` via supported `apt`, `dnf`, or `yum` hosts |
 | **k3s** | Server or agent role per `styx.yaml`; dual-stack pod/service CIDRs; gateway API port on servers |
 | **WireGuard** | `Styx` interface on UDP `47800` (never `wg0`) |
-| **Gateway SSH** | sshd drop-in for `gateway.ssh_port` (`47810`) while port `22` remains active |
+| **Gateway SSH** | sshd drop-in for `gateway.ssh_port` (`47800`) while port `22` remains active |
 | **Firewall** | Minimal allowance for Styx WireGuard, gateway SSH, and k3s API where supported |
 | **Preservation** | `wg0` config hash/mtime snapshotted before and verified after |
 
@@ -464,7 +465,7 @@ Always run `install plan` before `install apply`. Interactive commands (`install
 2. `server` nodes - join with token from init-server
 3. `agent` nodes - join as k3s agents
 
-Remote steps SSH as each node's Linux user (defaults to the node `name`). `styxctl` connects on `gateway.ssh_port` (`47810`) and joins k3s at `https://<init host>:47811`. You can set `cluster.join_token` when a non-init node must join without fetching the token from the init-server over SSH.
+Remote steps SSH as each node's Linux user (defaults to the node `name`). `styxctl` connects on `gateway.ssh_port` (`47800`) and joins k3s at `https://<init host>:47801`. You can set `cluster.join_token` when a non-init node must join without fetching the token from the init-server over SSH.
 
 ### Health checks
 
@@ -602,7 +603,7 @@ Built-in defaults:
 | Cluster mode | `dual-stack` |
 | LAN leader election | `lan-elected` on UDP `47802` |
 | WireGuard interface / port | `Styx` / `47800` |
-| Gateway SSH / k3s API ports | `47810` / `47811` |
+| Gateway SSH / k3s API ports | `47800` / `47801` |
 | IPv4 / IPv6 supernet | `10.0.0.0/14` / `fd00:cafe::/48` |
 | Styx backbone CIDR (v4 / v6) | `10.0.0.0/24` / `fd00:cafe:0::/64` |
 | Infra CIDR (v4 / v6) | `10.1.0.0/16` / `fd00:cafe:1::/56` |
@@ -631,7 +632,9 @@ Only ports `47800-47850` are managed by `styxctl`. Critical production ports `47
 | Port | Protocol | Purpose |
 |------|----------|---------|
 | 47800 | UDP | Styx backbone WireGuard mesh |
+| 47800 | TCP | Styx gateway SSH |
 | 47801 | UDP | pistyx client WireGuard egress |
+| 47801 | TCP | k3s API gateway listen |
 | 47802 | UDP | Styx director API / configured-node LAN leader election |
 | 47803 | TCP | Styx status dashboard/API |
 | 47804 | TCP | Styx node agent API |
@@ -640,8 +643,8 @@ Only ports `47800-47850` are managed by `styxctl`. Critical production ports `47
 | 47807 | TCP | Styx local diagnostics API |
 | 47808 | TCP | Styx metrics exporter |
 | 47809 | any | Reserved |
-| 47810 | TCP | SSH gateway listen |
-| 47811 | TCP | k3s API gateway listen |
+| 47810 | TCP | Styx gateway health API (reserved) |
+| 47811 | any | Reserved (freed; formerly k3s API) |
 | 47812-47819 | any | Site/gateway spare |
 | 47820-47829 | any | Client/profile testing |
 | 47830-47839 | any | Development/debug |
@@ -870,7 +873,7 @@ If a non-Styx process holds a critical port, stop it manually. MVP1 will not kil
 styxctl config validate
 ```
 
-Common fixes: ensure exactly one `init-server`, set explicit `hostname:` values for remote nodes, verify `47810`/`47811` port forwards, and keep `wireguard.interface` as `Styx` (not `wg0`).
+Common fixes: ensure exactly one `init-server`, set explicit `hostname:` values for remote nodes, verify `47800`/`47801` port forwards, and keep `wireguard.interface` as `Styx` (not `wg0`).
 
 ### Install blocked: sudo unavailable
 
@@ -892,7 +895,7 @@ styxctl install apply local
 
 ```bash
 # From the operator/init-server path, verify gateway SSH
-ssh -p 47810 <user>@<public-or-lan-host> true
+ssh -p 47800 <user>@<public-or-lan-host> true
 
 styxctl install status cluster
 styxctl install doctor cluster
@@ -916,7 +919,7 @@ styxctl status
 ```bash
 styxctl mesh plan
 styxctl install doctor cluster
-ssh -p 47810 <user>@<node> 'python3 -m styxctl.cli mesh pubkey-local'
+ssh -p 47800 <user>@<node> 'python3 -m styxctl.cli mesh pubkey-local'
 ```
 
 `mesh up` needs gateway SSH to every node and WireGuard tools on each node.
@@ -1018,8 +1021,8 @@ Pipeline:
 |-------|----------------|
 | **discover** | Online targetable runners, exactly one init-server label, generated `styx.yaml` |
 | **uninstall** | Best-effort cleanup of prior local Styx state |
-| **1 - prerequisites** | Identity, passwordless sudo, tools, sysprep, gateway SSH on `47810`, local `public_ipv4` |
-| **2 - connectivity** | Config validation and SSH from each online runner to peers on `47810`; LAN identity mapping for colocated peers |
+| **1 - prerequisites** | Identity, passwordless sudo, tools, sysprep, gateway SSH on `47800`, local `public_ipv4` |
+| **2 - connectivity** | Config validation and SSH from each online runner to peers on `47800`; LAN identity mapping for colocated peers |
 | **3 prep - mesh up** | Runs on the discovered init-server, uses live `/etc/styx/styx.yaml`, runs `mesh plan` and `mesh up` |
 | **3 - MVP3 connectivity** | Runs on every online runner; checks `Styx`/`StyxSite<N>` interfaces, cross-site `10.0.N.x` pings, and system DNS |
 | **summary** | Aggregates all stage JSON output |
@@ -1066,7 +1069,7 @@ Run it from GitHub Actions as **MVP3 connectivity** after `mesh up` and `deploy 
 
 | Secret | Purpose | Notes |
 |---|---|---|
-| `PIPASS` | sshpass password for SSH on `47810` in stage 2 | shared Pi login password |
+| `PIPASS` | sshpass password for SSH on `47800` in stage 2 | shared Pi login password |
 | `DUCKDNS_TOKEN` | DuckDNS record updates (`deploy dns apply`) | read into a Kubernetes Secret |
 | `RUNNER_API_TOKEN` | discover job lists runners | fine-grained PAT, `Administration: read`; `GITHUB_TOKEN` cannot list runners |
 | `PISTYX_CI_CLIENT_PRIVATE_KEY` | optional hosted-runner WireGuard smoke client key | its public key must be registered under `clients:` before `mesh up` |

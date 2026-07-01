@@ -59,7 +59,7 @@ from .uninstall import (
     render_cluster_uninstall_text,
     render_uninstall_text,
 )
-from .ports import PORT_BLOCKS, PORT_PLAN, check_reserved_ports, port_purpose
+from .ports import PORT_BLOCKS, PORT_PLAN, check_reserved_ports, port_purpose_for
 from .remediation import (
     apply_port_clear,
     apply_safe_sysprep,
@@ -269,7 +269,7 @@ def ports_check_local() -> None:
                 str(conflict.pid or "unknown"),
                 conflict.systemd_unit or "unknown",
                 "yes" if conflict.safe_to_stop else "no",
-                port_purpose(conflict.port),
+                port_purpose_for(conflict.port, conflict.protocol),
             )
     else:
         table.add_row("-", "47800-47850", "free", "-", "-", "-", "no conflicts found")
@@ -288,8 +288,8 @@ def ports_list_local() -> None:
     table.add_column("Purpose")
 
     for port in sorted(PORT_PLAN):
-        item = PORT_PLAN[port]
-        table.add_row(str(port), item["protocol"], item["purpose"])
+        for item in PORT_PLAN[port]:
+            table.add_row(str(port), item["protocol"], item["purpose"])
 
     for purpose, start, end in PORT_BLOCKS:
         table.add_row(f"{start}-{end}", "any", purpose)

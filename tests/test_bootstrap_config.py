@@ -23,7 +23,7 @@ def test_map_lan_ips_by_identity_matches_hostname_output_not_scan_order():
         nodes,
         local,
         ["192.168.1.235", "192.168.1.238"],
-        port=47810,
+        port=47800,
         runner=runner,
     )
 

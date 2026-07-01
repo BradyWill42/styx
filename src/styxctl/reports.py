@@ -14,8 +14,10 @@ from .ports import (
     RESERVED_PORT_END,
     RESERVED_PORT_START,
     conflicts_for_port,
-    planned_protocol,
+    planned_protocols,
     port_purpose,
+    port_purpose_for,
+    styx_planned_listeners,
 )
 
 
@@ -41,13 +43,17 @@ def evaluate_readiness(inventory: SystemInventory) -> tuple[str, list[str], list
     warnings: list[str] = []
     blocking: list[str] = []
 
+    # 47800/tcp (gateway SSH) and 47801/tcp (k3s API) now co-locate with WireGuard/pistyx inside the
+    # critical band. An occupant on a (port, protocol) Styx itself binds is EXPECTED on a re-run, so
+    # it only warns; a foreign squatter on a critical port still blocks the install.
+    styx_listeners = styx_planned_listeners()
     for conflict in inventory.ports.conflicts:
         message = (
             f"{conflict.port}/{conflict.protocol} occupied inside Styx reserved range"
             f" by {conflict.process_name or 'unknown process'}"
             f"{f' pid {conflict.pid}' if conflict.pid else ''}"
         )
-        if conflict.port in CRITICAL_PORTS:
+        if conflict.port in CRITICAL_PORTS and (conflict.port, conflict.protocol) not in styx_listeners:
             blocking.append(message)
         else:
             warnings.append(message)
@@ -148,22 +154,30 @@ def render_sysprep_text(report: dict[str, Any]) -> str:
     detected_lines.append(f"flannel-v6.1: {_present_absent('flannel-v6.1' in interface_names)}")
     detected_lines.append(f"firewall backend: {firewall_backend.get('preferred', 'unknown')}")
 
+    def _occupied_line(conflict: dict[str, Any]) -> str:
+        owner = conflict.get("process_name") or "unknown process"
+        pid = f" pid={conflict.get('pid')}" if conflict.get("pid") else ""
+        unit = f" unit={conflict.get('systemd_unit')}" if conflict.get("systemd_unit") else ""
+        safe = "yes" if conflict.get("safe_to_stop") else "no"
+        return f"{conflict.get('port')}/{conflict.get('protocol')}: occupied by {owner}{pid}{unit} safe_to_stop={safe}"
+
     port_lines: list[str] = [f"Range: {RESERVED_PORT_START}-{RESERVED_PORT_END}"]
     conflicts = ports.get("conflicts", [])
     for port in sorted(PORT_PLAN):
-        protocol = planned_protocol(port)
-        matching = [conflict for conflict in conflicts if conflict.get("port") == port]
-        if matching:
-            for conflict in matching:
-                owner = conflict.get("process_name") or "unknown process"
-                pid = f" pid={conflict.get('pid')}" if conflict.get("pid") else ""
-                unit = f" unit={conflict.get('systemd_unit')}" if conflict.get("systemd_unit") else ""
-                safe = "yes" if conflict.get("safe_to_stop") else "no"
-                port_lines.append(
-                    f"{port}/{conflict.get('protocol')}: occupied by {owner}{pid}{unit} safe_to_stop={safe}"
-                )
-        else:
-            port_lines.append(f"{port}/{protocol}: free ({port_purpose(port)})")
+        planned = planned_protocols(port)
+        port_conflicts = [conflict for conflict in conflicts if conflict.get("port") == port]
+        # One line per planned protocol so co-located services (e.g. 47800/udp WireGuard +
+        # 47800/tcp SSH) each report their own free/occupied state.
+        for protocol in planned:
+            matching = [conflict for conflict in port_conflicts if conflict.get("protocol") == protocol]
+            if matching:
+                port_lines.extend(_occupied_line(conflict) for conflict in matching)
+            else:
+                port_lines.append(f"{port}/{protocol}: free ({port_purpose_for(port, protocol)})")
+        # A conflict on a planned port using an UNplanned protocol still deserves a line.
+        for conflict in port_conflicts:
+            if conflict.get("protocol") not in planned:
+                port_lines.append(_occupied_line(conflict))
 
     extra_conflicts = [conflict for conflict in conflicts if conflict.get("port") not in PORT_PLAN]
     if extra_conflicts:

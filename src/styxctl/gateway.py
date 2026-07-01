@@ -7,8 +7,11 @@ from typing import Any
 
 from .ports import ADMIN_SSH_PORT, RESERVED_PORT_END, RESERVED_PORT_START
 
-DEFAULT_SSH_PORT = 47810
-DEFAULT_K3S_API_PORT = 47811
+# Gateway SSH shares 47800 with the WireGuard backbone: SSH is TCP, WireGuard is UDP, so the two
+# bind distinct (protocol, port) tuples and never clash. Likewise the k3s API shares 47801 (TCP)
+# with the pistyx StyxEgress (UDP). Port 22 remains admin/runner SSH.
+DEFAULT_SSH_PORT = 47800
+DEFAULT_K3S_API_PORT = 47801
 
 
 @dataclass(frozen=True, slots=True)

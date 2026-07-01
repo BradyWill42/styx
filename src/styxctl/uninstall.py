@@ -102,8 +102,8 @@ class UninstallPlan:
     hostname: str
     interface: str
     wireguard_port: int = 47800
-    gateway_ssh_port: int = 47810
-    gateway_k3s_port: int = 47811
+    gateway_ssh_port: int = 47800
+    gateway_k3s_port: int = 47801
     steps: list[UninstallStep] = field(default_factory=list)
     preserved: list[PreservedItem] = field(default_factory=list)
 

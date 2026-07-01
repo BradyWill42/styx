@@ -36,7 +36,7 @@ RunResult = tuple[bool, str]
 class SshConnection:
     target: str
     jump: str | None = None
-    port: int = 47810
+    port: int = 47800  # gateway SSH (tcp), co-located with the WireGuard backbone on 47800/udp
 
 
 def _operator_on_lan(inventory: SystemInventory | None, lan_ip: str | None) -> bool:
@@ -101,7 +101,7 @@ def _node_ssh_connection(
     local_node: ClusterNode | None = None,
     election_lan_ips: dict[str, str] | None = None,
     election_leader: str | None = None,
-    gateway_ssh_port: int = 47810,
+    gateway_ssh_port: int = 47800,
 ) -> SshConnection:
     user = node_ssh_user(node)
     entrypoint = site_entrypoint_for(
@@ -195,7 +195,7 @@ class ClusterNodePlan:
     status: str = "pending"
     detail: str | None = None
     local_execution: bool = False
-    ssh_port: int = 47810
+    ssh_port: int = 47800
     resolved_ipv4: str | None = None
 
     def to_dict(self) -> dict[str, object]:
@@ -434,7 +434,7 @@ def _run_ssh_command(
     target: str,
     remote_command: str,
     *,
-    port: int = 47810,
+    port: int = 47800,
     jump: str | None = None,
     timeout: float = 900.0,
 ) -> RunResult:
