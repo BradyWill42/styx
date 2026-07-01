@@ -72,10 +72,11 @@ def test_47801_hosts_egress_udp_and_k3s_tcp():
 
 
 def test_old_ports_freed_and_health_api_relocated():
-    # 47810/47811 are no longer the SSH/k3s ports; the stale health-API reservation moved off 47801/tcp.
-    assert "SSH" not in port_purpose(47810)          # 47810 is no longer "SSH gateway listen"
-    assert "k3s" not in port_purpose(47811).lower()  # 47811 no longer the k3s API
-    # 47801/tcp is now the k3s API, not the health API.
+    # 47810/47811 are no longer the live SSH/k3s ports; both are now reserved/freed.
+    assert "SSH gateway listen" not in port_purpose(47810)  # 47810 is no longer the gateway SSH port
+    assert "reserved" in port_purpose(47811).lower()        # 47811 is freed, not the active k3s API
+    # The live k3s API is on 47801/tcp, and it's not the old health-API reservation.
+    assert "k3s" in port_purpose_for(47801, "tcp").lower()
     assert "health" not in port_purpose_for(47801, "tcp").lower()
 
 
